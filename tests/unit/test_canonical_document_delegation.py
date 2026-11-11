@@ -46,6 +46,7 @@ class FakeConn:
                      "kind": "spec", "latest_revision_id": REV_ID, "approved_revision_id": approved,
                      "generation": generation}
         self.delegations, self.reviews, self.goal_links, self.owner, self.last = delegations, reviews, goal_links, owner, last
+        self.last_denial = None
         self.executed: list[tuple] = []
         self.calls = []
         self.in_tx = False
@@ -67,6 +68,8 @@ class FakeConn:
         return []
 
     async def fetchval(self, sql, *args):
+        if "delegated_approval_denied" in sql:
+            return self.last_denial
         if "FROM goals" in sql:
             return self.owner
         if "project_document_events" in sql:
@@ -121,11 +124,17 @@ def approve(conn, **over):
     return asyncio.run(cdt.approve_document_delegated(tenant_id=TENANT, session_id=SESSION, inp=inp, pool=Pool(conn)))
 
 
+def assert_only_denial_audit(conn):
+    """거절은 승인 행·head 를 건드리지 않고, 거절 감사 이벤트(goal_linked) 한 건만 남긴다."""
+    assert all("INSERT INTO project_document_events" in e[0] and "'goal_linked'" in e[0] for e in conn.executed)
+    assert len(conn.executed) <= 1
+
+
 def test_no_delegation_denied():
     conn = FakeConn()
     res = approve(conn)
     assert res["approved"] is False and res["code"] == "delegation_missing"
-    assert conn.executed == []
+    assert_only_denial_audit(conn)
 
 
 def test_delegation_and_both_pass_approves_with_audit():
@@ -244,8 +253,77 @@ def test_stale_generation_already_approved_not_latest():
 
 
 def test_not_in_review_blocked_by_core():
-    res = approve(FakeConn(delegations=[delegation()], last="draft"))
+    conn = FakeConn(delegations=[delegation()], last="draft")
+    res = approve(conn)
     assert res["approved"] is False and res["code"] == "revision_not_in_review"
+    assert res["reasons"] == ["revision_not_in_review"]
+    inserts = [e for e in conn.executed if "INSERT INTO project_document_events" in e[0]]
+    assert len(inserts) == 1
+    meta = json.loads(inserts[0][1][5])
+    assert meta["event"] == "delegated_approval_denied"
+    assert meta["code"] == "revision_not_in_review"
+    assert meta["reasons"] == ["revision_not_in_review"]
+
+
+def test_approval_step_other_exception_audited(monkeypatch):
+    """승인 단계에서 일반 예외(RuntimeError 등)가 나도 거절 감사 이벤트 1건과 비어 있지 않은 reasons 를 기록한다."""
+    async def boom(*a, **kw):
+        raise RuntimeError("db connection drop")
+    monkeypatch.setattr(docs, "approve_revision_in_tx", boom)
+    conn = FakeConn(delegations=[delegation()])
+    res = approve(conn)
+    assert res["approved"] is False and res["code"] == "RuntimeError"
+    assert res["reasons"] == ["db connection drop"]
+    inserts = [e for e in conn.executed if "INSERT INTO project_document_events" in e[0]]
+    assert len(inserts) == 1
+    meta = json.loads(inserts[0][1][5])
+    assert meta["event"] == "delegated_approval_denied"
+    assert meta["code"] == "RuntimeError"
+    assert meta["reasons"] == ["db connection drop"]
+
+
+def test_all_three_denial_paths_audited(monkeypatch):
+    """거절 경로마다 (평가 거절, 승인 단계 HTTPException, 그 밖의 예외) 감사 이벤트 1건과 비어 있지 않은 reasons 단언."""
+    # 1. 평가 거절: 위임 부재
+    conn_eval = FakeConn()
+    res_eval = approve(conn_eval)
+    assert res_eval["approved"] is False and res_eval["reasons"]
+    inserts_eval = [e for e in conn_eval.executed if "INSERT INTO project_document_events" in e[0]]
+    assert len(inserts_eval) == 1
+    meta_eval = json.loads(inserts_eval[0][1][5])
+    assert meta_eval["event"] == "delegated_approval_denied" and meta_eval["reasons"] == res_eval["reasons"]
+
+    # 2. 승인 단계 HTTPException: revision_not_in_review
+    conn_http = FakeConn(delegations=[delegation()], last="draft")
+    res_http = approve(conn_http)
+    assert res_http["approved"] is False and res_http["reasons"]
+    inserts_http = [e for e in conn_http.executed if "INSERT INTO project_document_events" in e[0]]
+    assert len(inserts_http) == 1
+    meta_http = json.loads(inserts_http[0][1][5])
+    assert meta_http["event"] == "delegated_approval_denied" and meta_http["reasons"] == res_http["reasons"]
+
+    # 3. 그 밖의 예외: RuntimeError
+    async def boom(*a, **kw):
+        raise RuntimeError("approval core explosion")
+    monkeypatch.setattr(docs, "approve_revision_in_tx", boom)
+    conn_exc = FakeConn(delegations=[delegation()])
+    res_exc = approve(conn_exc)
+    assert res_exc["approved"] is False and res_exc["reasons"]
+    inserts_exc = [e for e in conn_exc.executed if "INSERT INTO project_document_events" in e[0]]
+    assert len(inserts_exc) == 1
+    meta_exc = json.loads(inserts_exc[0][1][5])
+    assert meta_exc["event"] == "delegated_approval_denied" and meta_exc["reasons"] == res_exc["reasons"]
+
+
+def test_approval_step_audit_failure_still_returns_denial(monkeypatch):
+    """감사 기록 자체가 실패하면 원래 거절을 그대로 돌려주고 로그를 남긴다."""
+    async def boom_audit(*a, **kw):
+        raise RuntimeError("audit storage offline")
+    monkeypatch.setattr(cdt, "_record_delegated_denial", boom_audit)
+    conn = FakeConn(delegations=[delegation()], last="draft")
+    res = approve(conn)
+    assert res["approved"] is False and res["code"] == "revision_not_in_review"
+    assert res["reasons"] == ["revision_not_in_review"]
 
 
 def test_invalid_inputs():
@@ -310,7 +388,7 @@ def test_goal_b_owner_cannot_use_goal_a_delegation():
     conn = FakeConn(delegations=[delegation(goal_id=GOAL, grantee="other")],
                     goal_links=(GOAL, OTHER_GOAL), owner=True)
     assert approve(conn)["code"] == "not_delegated_session"
-    assert conn.executed == []
+    assert_only_denial_audit(conn)
 
 
 def test_approval_locks_delegation_before_core_update():
@@ -334,7 +412,7 @@ def test_delegation_rechecked_after_lock(change):
             return await super().fetchrow(sql, *args)
     conn = RacingConn(delegations=[delegation()])
     assert approve(conn)["code"] == "delegation_missing"
-    assert conn.executed == []
+    assert_only_denial_audit(conn)
 
 
 def test_revoke_locks_same_row_before_update():

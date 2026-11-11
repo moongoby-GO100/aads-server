@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from app.services import doc_cross_review as cross
 from app.services import doc_auto_approval as auto
+from app.services import migration_delegation_gate as gate
 
 DEFAULT_EXPIRES_DAYS = 30
 MAX_EXPIRES_DAYS = 365
@@ -23,7 +24,9 @@ def _norm(value: Any) -> str:
 
 
 def _denied(code: str, **extra: Any) -> dict[str, Any]:
-    return {"ok": False, "code": code, **extra}
+    """거절 응답. reasons 는 비어 있을 수 없다 — 사유가 없는 거절 경로를 만들지 않는다(감사 이벤트의 전제)."""
+    reasons = list(extra.pop("reasons", None) or [code])
+    return {"ok": False, "code": code, "reasons": reasons, **extra}
 
 
 async def create_delegation(conn: Any, tenant: str, project: str, grantee: str, granted_by: str,
@@ -89,8 +92,13 @@ def _session_matches(row: Any, session_id: str, session_role: str) -> bool:
 
 async def evaluate_delegated_approval(conn: Any, tenant: str, project: str, head: Any, revision_id: Any,
                                       expected_generation: int, session_id: str,
-                                      session_role: str = "", *, lock_delegation: bool = False) -> dict[str, Any]:
-    """조회는 읽기 전용. 실행 시 head 잠금 트랜잭션에서 lock_delegation=True 로 호출한다."""
+                                      session_role: str = "", *, lock_delegation: bool = False,
+                                      migration_reader: Any = None) -> dict[str, Any]:
+    """조회는 읽기 전용. 실행 시 head 잠금 트랜잭션에서 lock_delegation=True 로 호출한다.
+
+    migration-apply-* 문서는 교차검수 통과에 더해 migration_delegation_gate 조건(sha·추가만·rollback·lock_timeout)을
+    모두 만족할 때만 위임으로 승인된다. 어긋나면 migration_requires_ceo + reasons 로 대표 승인에 남긴다.
+    """
     if str(head["approved_revision_id"]) == str(revision_id):
         return _denied("already_approved")
     if str(head["latest_revision_id"]) != str(revision_id):
@@ -131,5 +139,15 @@ async def evaluate_delegated_approval(conn: Any, tenant: str, project: str, head
     problem = cross_review_problem(rows)
     if problem:
         return _denied(problem)
-    return {"ok": True, "delegation": {"delegation_id": str(chosen["id"]), "granted_by": chosen["granted_by"],
-                                       "grantee": chosen["grantee"]}}
+    out: dict[str, Any] = {"ok": True, "delegation": {
+        "delegation_id": str(chosen["id"]), "granted_by": chosen["granted_by"], "grantee": chosen["grantee"]}}
+    if gate.is_migration_document(head):
+        revision = await conn.fetchrow(
+            "SELECT content FROM project_document_revisions WHERE head_id=$1 AND id=$2", head["id"], revision_id)
+        check = await gate.migration_delegation_problems(
+            str((revision or {}).get("content") or ""), migration_reader)
+        if not check["ok"]:
+            return _denied("migration_requires_ceo", reasons=check["reasons"])
+        out["migration"] = {"files": check["files"], "checks": ["cross_review", "sha_origin_main",
+                                                               "add_only", "rollback", "txn_lock_timeout"]}
+    return out

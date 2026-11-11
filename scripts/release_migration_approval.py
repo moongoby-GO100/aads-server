@@ -115,6 +115,11 @@ def lookup(release_sha, root=None):
       'documents', (SELECT json_agg(d) FROM (
         SELECT h.document_key, h.approved_revision_id, h.latest_revision_id, r.id AS revision_id,
           r.content, r.content_hash, e.action, e.actor_id,
+          to_jsonb(e)->'metadata' AS metadata,
+          EXISTS(SELECT 1 FROM tenant_memberships m JOIN saas_users u ON u.id=m.user_id
+            WHERE m.tenant_id=t.id AND m.user_id::text=to_jsonb(e)->'metadata'->>'granted_by' AND m.role='owner'
+            AND m.status='active' AND m.deleted_at IS NULL
+            AND u.status='active' AND u.deleted_at IS NULL) AS granter_owner,
           EXISTS(SELECT 1 FROM tenant_memberships m JOIN saas_users u ON u.id=m.user_id
             WHERE m.tenant_id=t.id AND m.user_id=e.actor_id AND m.role='owner'
             AND m.status='active' AND m.deleted_at IS NULL
@@ -219,13 +224,29 @@ def verify(root, release_sha, supplied, state, now=None):
     except (KeyError, TypeError, ValueError) as exc:
         raise Rejected('expired') from exc
     actor = d.get('actor_id', '')
+    human_re = r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}'
     # The sole approved-event writer authenticates a human session before INSERT.
     # Require its real-user UUID, then the live tenant owner/user join above.
-    if not isinstance(actor, str) or not re.fullmatch(
-            r'[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}', actor):
-        raise Rejected('approver_not_human')
-    if d.get('owner') is not True:
-        raise Rejected('approver_not_owner')
+    if isinstance(actor, str) and re.fullmatch(human_re, actor):
+        if d.get('owner') is not True:
+            raise Rejected('approver_not_owner')
+    else:
+        # 위임 승인: actor 는 chat:<session> 이지만, 사람 owner 가 부여한 위임(delegation_id)과 마이그레이션
+        # 게이트 통과 기록(migration_gate)이 이벤트 metadata 에 있고 위임 부여자가 현재 owner 일 때만 인정한다.
+        meta = d.get('metadata')
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                meta = None
+        delegated = (isinstance(actor, str) and actor.startswith('chat:') and isinstance(meta, dict)
+                     and meta.get('delegated') is True and bool(meta.get('delegation_id'))
+                     and isinstance(meta.get('migration_gate'), dict)
+                     and isinstance(meta.get('granted_by'), str) and re.fullmatch(human_re, meta['granted_by']))
+        if not delegated:
+            raise Rejected('approver_not_human')
+        if d.get('granter_owner') is not True:
+            raise Rejected('approver_not_owner')
     pending = inventory(root, state['ledger'])
     if valid_manifest(supplied) != pending:
         raise Rejected('manifest_mismatch')

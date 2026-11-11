@@ -3879,7 +3879,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     "canonical_document_review": {
         "name": "canonical_document_review",
         "description": (
-            "정본 문서 최신 판본을 초안→검토로 넘깁니다. 승인은 CEO 만 합니다. "
+            "정본 문서 최신 판본을 초안→검토로 넘깁니다. 승인은 CEO 만 합니다(위임이 부여된 세션은 canonical_document_approve). "
             "PM 역할 세션과 CEO 통합지시 세션에서만 쓸 수 있고, reason(10자 이상)이 필요합니다. "
             "이미 검토 상태면 그대로 성공(멱등)이며 승인·보관된 판본은 거절합니다."
         ),

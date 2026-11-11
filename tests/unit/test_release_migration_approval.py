@@ -445,3 +445,34 @@ def test_invalid_notes_rejected(approved, monkeypatch, capsys, tmp_path, kind):
     rc, out = run_draft(approved, monkeypatch, capsys, '--notes-file', str(path))
     assert rc == 1
     assert out.strip() == 'notes_file_invalid'
+
+
+DELEGATED_META = {'delegated': True, 'delegation_id': 'd1', 'granted_by': '6b4da42c-1234-4567-890a-123456789abc',
+                  'migration_gate': {'files': [], 'checks': ['cross_review']}}
+
+
+@pytest.fixture
+def delegated(approved):
+    root, state, data, encode = approved
+    state['document'].update(actor_id='chat:sess-1', owner=False, granter_owner=True, metadata=dict(DELEGATED_META))
+    return root, state
+
+
+def test_delegated_approval_accepted_at_apply_time(delegated):
+    root, state = delegated
+    assert a.verify(root, SHA, a.inventory(root, {}), state).startswith('APPROVED revision_id=rev approver=chat:sess-1')
+
+
+@pytest.mark.parametrize('mutate_meta,expected', [
+    (lambda d: d['metadata'].pop('migration_gate'), 'approver_not_human'),
+    (lambda d: d['metadata'].pop('delegation_id'), 'approver_not_human'),
+    (lambda d: d['metadata'].update(delegated=False), 'approver_not_human'),
+    (lambda d: d['metadata'].update(granted_by='chat:other'), 'approver_not_human'),
+    (lambda d: d.update(metadata=None), 'approver_not_human'),
+    (lambda d: d.update(granter_owner=False), 'approver_not_owner'),
+])
+def test_delegated_approval_requires_human_owner_grant(delegated, mutate_meta, expected):
+    root, state = delegated
+    mutate_meta(state['document'])
+    with pytest.raises(a.Rejected, match=expected):
+        a.verify(root, SHA, a.inventory(root, {}), state)

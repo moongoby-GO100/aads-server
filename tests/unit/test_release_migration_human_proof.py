@@ -45,24 +45,16 @@ def test_only_human_guarded_api_can_insert_approval():
                     ast.parse('"created" if head["generation"] == 0 else "revised"', mode='eval').body,
                     include_attributes=False)
             elif action[2] == 'approved':
-                assert function.name == 'approve_document'
-                # Guard must be an unconditional statement in the same transaction,
-                # before all writes; a guard hidden in an if branch cannot qualify.
-                transaction = next(n for n in function.body if isinstance(n, ast.AsyncWith))
-                guard = transaction.body[0]
-                assert isinstance(guard, ast.Expr) and isinstance(guard.value, ast.Call)
-                assert isinstance(guard.value.func, ast.Name)
-                assert guard.value.func.id == '_require_human_approver'
-                assert ast.unparse(guard.value.args[0]) == 'context'
-                assert guard.lineno < call.lineno
-                assert ast.unparse(call.args[-1]) == 'actor'
+                # 승인 INSERT 는 공용 핵심 한 곳. 호출자는 아래 test_approval_core_callers_are_pinned 가 고정한다.
+                assert function.name == 'approve_revision_in_tx'
             else:
                 assert action[2] in {'archived', 'review', 'goal_linked', 'legacy_linked', 'legacy_unlinked'}
+    # approve_revision_in_tx 는 일반/위임 감사(metadata) INSERT 두 개, _record_delegated_denial 은 거절 감사(승인 아님).
     assert sorted(writers) == sorted(
-        ('app/api/canonical_documents.py', name) for name in
-        ['create_revision_in_tx', 'approve_document', '_archive_approved', 'review_revision_in_tx',
-         'link_goal', 'link_legacy_goal_document', 'unlink_legacy_goal_document'])
-
+        [('app/api/canonical_documents.py', name) for name in
+         ['create_revision_in_tx', 'approve_revision_in_tx', 'approve_revision_in_tx', '_archive_approved',
+          'review_revision_in_tx', 'link_goal', 'link_legacy_goal_document', 'unlink_legacy_goal_document']]
+        + [('app/services/canonical_document_tools.py', '_record_delegated_denial')])
 
 
 def test_lookup_matches_existing_schema_and_live_owner(monkeypatch):
@@ -70,7 +62,9 @@ def test_lookup_matches_existing_schema_and_live_owner(monkeypatch):
 
     def capture(cmd, **kwargs):
         sql = cmd[-1]
-        assert 'metadata' not in sql and 'auth_type' not in sql
+        assert 'e.metadata' not in sql and 'auth_type' not in sql
+        # metadata 열은 위임 마이그레이션 적용 전에는 없다 — 열 참조 대신 to_jsonb(e) 로 읽어야 조회가 깨지지 않는다.
+        assert "to_jsonb(e)->'metadata'" in sql
         for clause in ["m.tenant_id=t.id", "m.user_id=e.actor_id", "m.role='owner'",
                        "m.status='active'", 'm.deleted_at IS NULL',
                        "u.status='active'", 'u.deleted_at IS NULL',
@@ -138,3 +132,29 @@ def test_isolated_postgres_human_proof(tmp_path, monkeypatch):
             cur.execute(queries[0])
             assert cur.fetchone()[0]['document']['owner'] is False
         conn.rollback()
+
+
+def test_approval_core_callers_are_pinned():
+    """approve_revision_in_tx 를 부르는 곳은 사람 승인 API, 자동승인, 위임 승인 셋뿐이다. 사람 API 는 사람 가드 뒤에서만 부른다."""
+    callers = []
+    for path in (ROOT / 'app').rglob('*.py'):
+        tree = ast.parse(path.read_text())
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and ast.unparse(node.func).endswith('approve_revision_in_tx') \
+                        and fn.name != 'approve_revision_in_tx':
+                    callers.append((path.relative_to(ROOT).as_posix(), fn.name))
+                    if fn.name == 'approve_document':
+                        transaction = next(n for n in fn.body if isinstance(n, ast.AsyncWith))
+                        guard = transaction.body[0]
+                        assert isinstance(guard, ast.Expr) and isinstance(guard.value, ast.Call)
+                        assert guard.value.func.id == '_require_human_approver'
+                        assert guard.lineno < node.lineno
+                        assert ast.unparse(node.args[-1]) == 'actor'
+    assert sorted(set(callers)) == [
+        ('app/api/canonical_documents.py', 'approve_document'),
+        ('app/services/canonical_document_tools.py', 'approve_document_delegated'),
+        ('app/services/doc_auto_approval.py', 'maybe_auto_approve'),
+    ]

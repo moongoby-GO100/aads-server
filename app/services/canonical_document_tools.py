@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -281,11 +282,48 @@ async def review_document(
         "idempotent": result["idempotent"],
         "approved": False,
         "reason": reason,
-        "note": "검토 상태로 넘겼습니다. 승인은 CEO 가 기존 승인 경로로만 합니다.",
+        "note": "검토 상태로 넘겼습니다. 승인은 CEO 가 기존 승인 경로로 하며, 사람이 위임을 부여한 세션만 canonical_document_approve 로 승인할 수 있습니다.",
     }
 
 
 APPROVE_REASON_MIN = 10
+
+
+# 거절 감사 이벤트의 action. 이 테이블의 action CHECK 는 닫힌 목록이고, 새 값을 넣으려면 마이그레이션이 필요한데
+# 새 마이그레이션은 승인 대기 중인 manifest 해시를 바꿔 대기 문서를 무효로 만든다. 그래서 문서 상태(review/approved/
+# archived)를 바꾸지 않는 기존 값을 쓰고, 의미는 metadata.event 로 구분한다.
+DENIED_EVENT_ACTION = "goal_linked"  # 아래 SQL 리터럴과 같아야 한다(승인 쓰기 경로 고정 테스트가 리터럴만 검사)
+
+
+async def _record_delegated_denial(conn: Any, tenant_id: str, project: str, head: Any, revision_id: Any,
+                                   actor: str, reasons: list, reason: str, code: str = "migration_requires_ceo") -> None:
+    """위임 승인이 거절된 사실(마이그레이션 게이트·교차검수 등)을 이벤트 metadata 에 남긴다. 승인 행·head 는 건드리지 않는다.
+
+    같은 사유가 이미 마지막 거절 기록이면 중복해서 쌓지 않는다. 감사 기록 실패가 거절 응답을 막지 않도록
+    savepoint 로 격리한다(위임 마이그레이션 미적용 환경 등).
+    """
+    meta = {"event": "delegated_approval_denied", "code": code, "reasons": list(reasons),
+            "session_id": actor, "reason": reason}
+    payload = json.dumps(meta, ensure_ascii=False, default=str)
+    try:
+        async with conn.transaction():
+            last = await conn.fetchval(
+                "SELECT metadata::text FROM project_document_events WHERE head_id=$1 AND revision_id=$2 "
+                "AND action='goal_linked' AND metadata->>'event'='delegated_approval_denied' ORDER BY id DESC LIMIT 1",
+                head["id"], revision_id)
+            try:
+                previous = json.loads(last).get("reasons") if last else None
+            except (ValueError, TypeError, AttributeError):
+                previous = None
+            if previous == list(reasons):
+                return
+            await conn.execute(
+                "INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id,metadata) "
+                "VALUES($1::uuid,$2,$3,$4,'goal_linked',$5,$6::jsonb)",
+                tenant_id, project, head["id"], revision_id, actor, payload)
+    except Exception:
+        logger.warning("canonical_document_denial_event_failed key=%s", head["document_key"], exc_info=True)
+
 
 
 async def approve_document_delegated(
@@ -322,23 +360,70 @@ async def approve_document_delegated(
             from app.services.canonical_hierarchy_assignment import _session_scope
             session = await _session_scope(conn, tenant_id, session_id)
             if not session:
-                return {"approved": False, "code": "session_required", "message": "채팅 세션을 확인할 수 없습니다"}
-            async with conn.transaction():
-                head = await docs._head(conn, tenant_id, project, key, lock=True)
-                if not head:
-                    return {"approved": False, "code": "document_not_found", "message": "등록된 정본 문서가 없습니다"}
-                verdict = await deleg.evaluate_delegated_approval(
-                    conn, tenant_id, project, head, revision_id, generation, session_id, session["role_key"], lock_delegation=True)
-                if not verdict["ok"]:
-                    return {"approved": False, "code": verdict["code"], "project": project, "document_key": key}
-                info = verdict["delegation"]
-                result = await docs.approve_revision_in_tx(
-                    conn, tenant_id, project, head, revision_id, actor,
-                    metadata={"delegated": True, "delegation_id": info["delegation_id"],
-                              "granted_by": info["granted_by"], "grantee": info["grantee"], "reason": reason})
+                return {"approved": False, "code": "session_required", "message": "채팅 세션을 확인할 수 없습니다", "reasons": ["session_required"]}
+            head = None
+            try:
+                async with conn.transaction():
+                    head = await docs._head(conn, tenant_id, project, key, lock=True)
+                    if not head:
+                        return {"approved": False, "code": "document_not_found", "message": "등록된 정본 문서가 없습니다", "reasons": ["document_not_found"]}
+                    verdict = await deleg.evaluate_delegated_approval(
+                        conn, tenant_id, project, head, revision_id, generation, session_id, session["role_key"], lock_delegation=True)
+                    if not verdict["ok"]:
+                        denied = {"approved": False, "code": verdict["code"], "project": project, "document_key": key, "reasons": verdict["reasons"]}
+                        logger.warning("canonical_document_delegated_denied key=%s code=%s reasons=%s",
+                                       key, verdict["code"], verdict["reasons"])
+                        try:
+                            await _record_delegated_denial(conn, tenant_id, project, head, revision_id, actor,
+                                                           verdict["reasons"], reason, verdict["code"])
+                        except Exception:
+                            logger.warning("canonical_document_denial_record_failed key=%s", key, exc_info=True)
+                        return denied
+                    info = verdict["delegation"]
+                    result = await docs.approve_revision_in_tx(
+                        conn, tenant_id, project, head, revision_id, actor,
+                        metadata={"delegated": True, "delegation_id": info["delegation_id"],
+                                  "granted_by": info["granted_by"], "grantee": info["grantee"], "reason": reason,
+                                  **({"migration_gate": verdict["migration"]} if verdict.get("migration") else {})})
+            except HTTPException as exc:
+                code = exc.detail.get("code") if isinstance(exc.detail, dict) else str(exc.detail)
+                reasons = list(exc.detail.get("reasons") or [code]) if isinstance(exc.detail, dict) else [str(exc.detail)]
+                if not reasons:
+                    reasons = [code]
+                denied = {"approved": False, "code": code, "status": exc.status_code, "project": project, "document_key": key, "reasons": reasons}
+                logger.warning("canonical_document_delegated_http_exception key=%s code=%s reasons=%s",
+                               key, code, reasons)
+                if head:
+                    try:
+                        await _record_delegated_denial(conn, tenant_id, project, head, revision_id, actor,
+                                                       reasons, reason, code)
+                    except Exception:
+                        logger.warning("canonical_document_denial_record_failed key=%s", key, exc_info=True)
+                return denied
+            except Exception as exc:
+                code = type(exc).__name__
+                detail = str(exc) or code
+                reasons = [detail]
+                denied = {"approved": False, "code": code, "project": project, "document_key": key, "reasons": reasons, "error": str(exc)}
+                logger.warning("canonical_document_delegated_exception key=%s code=%s reasons=%s",
+                               key, code, reasons, exc_info=True)
+                if head:
+                    try:
+                        await _record_delegated_denial(conn, tenant_id, project, head, revision_id, actor,
+                                                       reasons, reason, code)
+                    except Exception:
+                        logger.warning("canonical_document_denial_record_failed key=%s", key, exc_info=True)
+                return denied
     except HTTPException as exc:
         code = exc.detail.get("code") if isinstance(exc.detail, dict) else str(exc.detail)
-        return {"approved": False, "code": code, "status": exc.status_code, "project": project, "document_key": key}
+        reasons = list(exc.detail.get("reasons") or [code]) if isinstance(exc.detail, dict) else [str(exc.detail)]
+        if not reasons:
+            reasons = [code]
+        return {"approved": False, "code": code, "status": exc.status_code, "project": project, "document_key": key, "reasons": reasons}
+    except Exception as exc:
+        code = type(exc).__name__
+        detail = str(exc) or code
+        return {"approved": False, "code": code, "project": project, "document_key": key, "reasons": [detail], "error": str(exc)}
     logger.info("canonical_document_approve project=%s key=%s revision=%s actor=%s delegation=%s",
                 project, key, revision_id, actor, info["delegation_id"])
     return {"approved": True, "project": project, "document_key": key, "revision_id": str(revision_id),
