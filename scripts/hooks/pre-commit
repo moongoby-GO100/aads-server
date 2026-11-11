@@ -300,6 +300,22 @@ if [ -n "$PY_FILES" ]; then
   fi
 fi
 
+# ── 마이그레이션 내부 트랜잭션·잠금 제한 검사 (R-ERRBOOK) ──────────────
+# 2026-11-06, 2026-11-11 연달아 마이그레이션 파일 내부 BEGIN/COMMIT·lock_timeout
+# 누락으로 배포 자동 검증(exit=7)에서 반려됐다. 커밋 단계에서 차단한다.
+if [ -f "scripts/check_migration_txn.py" ]; then
+  STAGED_MIGRATIONS=$(git diff --cached --name-only --diff-filter=AM | grep -E '^migrations/[^/]+\.sql$' || true)
+  if [ -n "$STAGED_MIGRATIONS" ]; then
+    echo "[pre-commit] 마이그레이션 내부 트랜잭션·잠금 제한 검사..."
+    python3 scripts/check_migration_txn.py $STAGED_MIGRATIONS
+    MIG_RC=$?
+    if [ $MIG_RC -ne 0 ]; then
+      echo -e "${RED}커밋 차단: 마이그레이션 내부 BEGIN/COMMIT 감지${NC}"
+      exit 1
+    fi
+  fi
+fi
+
 # ─── Step 3: 단위 테스트 — 스테이징 변경에 대응하는 묶음만 실행 ───────────
 # 예전에는 tests/unit/test_tools_and_pipeline.py 하나를, 도구 관련 .py 가 바뀔 때만
 # 돌렸다. 배포·러너 코드만 고친 커밋은 테스트를 한 건도 돌리지 않고 통과했고,
