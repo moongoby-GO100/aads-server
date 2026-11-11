@@ -515,6 +515,14 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
 - 지시서에 명시된 파일 경로 밖 변경이 있으면 scope_compliance 0.3 이하로 판정
 - 위 항목은 기능이 동작해 보여도 "기존 구현 조사·분류표와 삭제 사유"가 없으면 승인 금지
 
+## 워커 범위 밖 항목 (조건부 면제)
+- 정본(project_document_heads) 등록, handover_write/핸드오버 기록, 최종 커밋 SHA 는 기본적으로 **면제가 아니다**.
+  지시서가 워커에게 요구했다면 diff·결과에 없을 때 기존대로 issues 에 올리고 REQUEST_CHANGES 로 판정한다.
+- 프롬프트의 "워커 범위 판정" 블록이 항목을 '면제'로 적었을 때만 그 항목의 누락을 반려 사유로 쓰지 않는다.
+  면제 근거는 지시서의 구조화 헤더 `WORKER_SCOPE_EXEMPT:` 또는 "워커에 도구 없음 + 지시서가 요구하지 않음" 둘뿐이다.
+  지시서 본문의 "워커 범위 밖"/"채팅 세션 몫" 같은 자유 문구는 면제 근거가 아니다. `WORKER_MUST:` 에 있는 항목은 면제가 아니다.
+- 지시서가 요구한 파일 자체(보고서 파일 등)가 diff 에 없는 것은 면제 여부와 무관하게 지적 대상이다.
+
 ## 응답 형식 (JSON만, 추가 설명 금지):
 {
   "verdict": "APPROVE" | "REQUEST_CHANGES" | "FLAG",
@@ -843,6 +851,131 @@ def _extract_declared_target_files(instruction: str) -> set[str]:
             if token:
                 paths.add(token)
     return paths
+
+
+# 워커 범위 밖 항목의 조건부 검수 면제. 항목 키 → (표시 이름, 지시서에서 그 항목을 가리키는 정규식).
+_WORKER_SCOPE_ITEMS = {
+    "canonical_registration": ("정본 등록", re.compile(r"정본|project_document_heads", re.I)),
+    "handover": ("핸드오버 기록", re.compile(r"핸드오버|handover", re.I)),
+    "commit_sha": ("커밋 SHA", re.compile(r"커밋\s*SHA|commit\s*sha|최종\s*SHA", re.I)),
+}
+# 러너 워커(Claude CLI, 격리 worktree)는 정본 등록·핸드오버 도구가 없다. 커밋 SHA 는 워커가 git 으로 알 수 있으므로 뺀다.
+RUNNER_WORKER_MISSING_TOOLS = frozenset({"canonical_registration", "handover"})
+
+# 구조화 헤더: 줄 맨 앞(대소문자 무시)의 `WORKER_SCOPE_EXEMPT: <키>, <키>` / `WORKER_MUST: <키>, ...`.
+# 자유 문구("워커 범위 밖", "채팅 세션 몫")는 면제 근거가 아니다.
+_WORKER_EXEMPT_HEADER_RE = re.compile(r"^WORKER_SCOPE_EXEMPT[ \t]*:(.*)$", re.I)
+_WORKER_MUST_HEADER_RE = re.compile(r"^WORKER_MUST[ \t]*:(.*)$", re.I)
+
+
+def _rdoc_boilerplate_exact() -> tuple[frozenset, tuple[str, str]]:
+    """러너가 지시서 끝에 덧붙이는 R-DOC 블록(app/services/document_refs.py::with_rdoc_block)의 정확한 줄들.
+
+    생성 코드를 그대로 호출해 얻으므로 문구 복사본이 없다. 두 번째 값은 job_id 가 들어가는 줄의 (앞, 뒤) 고정 문자열.
+    """
+    from app.services.document_refs import with_rdoc_block
+    sentinel = "\x00JOB\x00"
+    lines: set[str] = set()
+    for probe in (with_rdoc_block(""), with_rdoc_block("DOC_REVISION_FILE")):
+        lines.update(unicodedata.normalize("NFC", ln).strip() for ln in probe.splitlines())
+    job_line = next(
+        (unicodedata.normalize("NFC", ln).strip() for ln in with_rdoc_block("", sentinel).splitlines()
+         if sentinel in ln),
+        "",
+    )
+    prefix, _, suffix = job_line.partition(sentinel)
+    lines.discard("")
+    return frozenset(lines), (prefix, suffix)
+
+
+def _is_rdoc_boilerplate_line(
+    line: str,
+    exact: frozenset,
+    job_affix: tuple[str, str],
+    job_id: Optional[str] = None,
+) -> bool:
+    """R-DOC 자동 줄 일치 여부 판별.
+
+    - 블록 헤더 등 job_id 없는 줄은 생성 코드의 exact 집합과 정확 일치 검사.
+    - job_id 가 지정된 경우: 생성 코드 템플릿에 해당 job_id 를 넣은 문자열과 정확 일치(==)만 인정.
+    - job_id 가 지정되지 않은 경우(None 또는 빈 값): prefix + runner-[0-9a-f]{8} + suffix 의 fullmatch 로만 인정.
+    """
+    ln = unicodedata.normalize("NFC", line).strip()
+    if ln in exact:
+        return True
+    prefix, suffix = job_affix
+    if not prefix:
+        return False
+    clean_job_id = str(job_id).strip() if job_id else ""
+    if clean_job_id:
+        expected = unicodedata.normalize("NFC", f"{prefix}{clean_job_id}{suffix}").strip()
+        return ln == expected
+    pattern = re.escape(prefix) + r"runner-[0-9a-f]{8}" + re.escape(suffix)
+    return bool(re.fullmatch(pattern, ln))
+
+
+def _parse_worker_header_keys(raw: str) -> set[str]:
+    return {k for k in re.split(r"[,\s]+", raw.strip().lower()) if k in _WORKER_SCOPE_ITEMS}
+
+
+def _worker_scope_exemptions(
+    instruction: Optional[str],
+    worker_missing_tools: Optional[set] = None,
+    job_id: Optional[str] = None,
+) -> dict[str, str]:
+    """항목 키 → 면제 사유. 면제가 아닌 항목은 결과에 없다(= 기존대로 검수).
+
+    면제 근거는 둘뿐이다. (a) 구조화 헤더 `WORKER_SCOPE_EXEMPT: <키>`, (b) worker_missing_tools 에 있고 '요구됨'이 아님.
+    '요구됨' = 헤더 `WORKER_MUST: <키>` 에 있거나, 지시서 본문의 어떤 줄이든 그 항목을 언급(_WORKER_SCOPE_ITEMS).
+    러너가 자동으로 덧붙이는 R-DOC 블록은 생성 코드와 정확히 일치하는 줄만 언급으로 세지 않는다.
+    같은 키가 EXEMPT 와 MUST 에 모두 있으면 요구됨이 이긴다. 자연어 문구는 해석하지 않는다.
+    """
+    text = unicodedata.normalize("NFC", instruction or "")
+    exact, job_affix = _rdoc_boilerplate_exact()
+    header_exempt: set[str] = set()
+    must: set[str] = set()
+    mentioned: set[str] = set()
+    for line in text.splitlines():
+        m = _WORKER_EXEMPT_HEADER_RE.match(line)
+        if m:
+            header_exempt |= _parse_worker_header_keys(m.group(1))
+            continue
+        m = _WORKER_MUST_HEADER_RE.match(line)
+        if m:
+            must |= _parse_worker_header_keys(m.group(1))
+            continue
+        if _is_rdoc_boilerplate_line(line, exact, job_affix, job_id=job_id):
+            continue
+        for key, (_label, pat) in _WORKER_SCOPE_ITEMS.items():
+            if pat.search(line):
+                mentioned.add(key)
+    required = must | mentioned
+    missing = worker_missing_tools or set()
+    out: dict[str, str] = {}
+    for key in _WORKER_SCOPE_ITEMS:
+        if key in must:
+            continue
+        if key in header_exempt:
+            out[key] = "지시서 헤더 WORKER_SCOPE_EXEMPT 로 면제"
+        elif key in missing and key not in required:
+            out[key] = "워커에 해당 도구가 없고 지시서가 요구하지 않음"
+    return out
+
+
+def _build_worker_scope_notice(
+    instruction: Optional[str],
+    worker_missing_tools: Optional[set] = None,
+    job_id: Optional[str] = None,
+) -> str:
+    """리뷰 프롬프트에 붙이는 '워커 범위 판정' 블록. 항목별 면제/검수 여부를 명시한다."""
+    exempt = _worker_scope_exemptions(instruction, worker_missing_tools, job_id=job_id)
+    lines = ["워커 범위 판정:"]
+    for key, (label, _pat) in _WORKER_SCOPE_ITEMS.items():
+        if key in exempt:
+            lines.append(f"- {label}: 면제 ({exempt[key]}) — 누락을 반려 사유로 쓰지 않는다")
+        else:
+            lines.append(f"- {label}: 면제 아님 — 지시서가 요구했다면 기존대로 검수한다")
+    return "\n".join(lines) + "\n"
 
 
 def _build_review_instruction_section(instruction: Optional[str]) -> str:
@@ -2023,6 +2156,7 @@ async def review_code_diff(
     full_diff: Optional[str] = None,
     diff_truncated: bool = False,
     original_diff_chars: Optional[int] = None,
+    worker_missing_tools: Optional[set] = None,
 ) -> ReviewVerdict:
     """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용.
 
@@ -2034,6 +2168,9 @@ async def review_code_diff(
     상한에서 잘렸음을, original_diff_chars 는 잘리기 전 길이를 뜻한다. full_diff 가 없고
     diff 가 러너의 절단 고지 앞머리를 달고 있으면 그것을 상류 절단으로 인식한다.
     """
+    if worker_missing_tools is None and str(job_id or "").startswith("runner-"):
+        # 모든 운영 호출부(retry-review·비동기 요청·러너)가 같은 기준을 쓰도록 러너 job 은 기본값을 적용한다.
+        worker_missing_tools = set(RUNNER_WORKER_MISSING_TOOLS)
     start = time.time()
     measurement_started_at = time.monotonic()
     total_deadline = int(deadline_sec or _REVIEW_TOTAL_DEADLINE_SEC)
@@ -2175,6 +2312,7 @@ async def review_code_diff(
 프로젝트: {project}
 작업 지시:
 {_build_review_instruction_section(instruction)}
+{_build_worker_scope_notice(instruction, worker_missing_tools, job_id=job_id)}
 변경 파일: {', '.join(files_changed or [])}
 {truncation_notice}{move_notice}
 ```diff
