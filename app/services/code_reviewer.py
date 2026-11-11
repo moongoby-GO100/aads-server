@@ -1641,6 +1641,147 @@ def _strip_patch_file_sections(diff: str) -> tuple[str, list[str], int]:
     return "".join(kept), ignored_paths, ignored_lines
 
 
+# 정확한 되돌리기(REVERT_OF) 예외. 지시서 표식만으로는 면제하지 않는다 — 저장소가 있는 러너가
+# `git show <sha> | git patch-id --stable` 와 이번 작업 diff 의 역패치 patch-id 가 정확히 일치함을
+# 확인해 요청에 `revert_of_verified` 를 실을 때만, 그 sha 가 건드린 파일 구간의 보존 하드게이트
+# (순삭제 비율·삭제 심볼)를 면제한다. 임계치·범위 게이트·LLM 검수는 그대로다.
+_REVERT_OF_RE = re.compile(r"^[ \t>*-]*REVERT_OF:[ \t]*`?([0-9a-fA-F]{7,40})`?[ \t]*$", re.MULTILINE)
+
+
+def _extract_revert_of_sha(instruction: str) -> Optional[str]:
+    match = _REVERT_OF_RE.search(instruction or "")
+    return match.group(1).lower() if match else None
+
+
+def _valid_revert_of_verified(instruction: str, revert_of_verified: Optional[dict]) -> Optional[dict]:
+    """지시서 sha 와 러너 검증 sha 가 접두 일치하고 patch_id·files 가 있을 때만 정규화해 돌려준다."""
+    if not isinstance(revert_of_verified, dict):
+        return None
+    doc_sha = _extract_revert_of_sha(instruction)
+    full_sha = str(revert_of_verified.get("sha") or "").strip().lower()
+    patch_id = str(revert_of_verified.get("patch_id") or "").strip()
+    files = revert_of_verified.get("files")
+    if not doc_sha or not re.fullmatch(r"[0-9a-f]{7,40}", full_sha) or not patch_id:
+        return None
+    if not full_sha.startswith(doc_sha):
+        return None
+    if not isinstance(files, list):
+        return None
+    clean_files = [str(f) for f in files if str(f).strip()]
+    if not clean_files:
+        return None
+    return {"sha": full_sha, "patch_id": patch_id, "files": clean_files}
+
+
+_GIT_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _git_unquote(token: str) -> Optional[str]:
+    """git 의 C 스타일 인용 경로(`"..."`, 8진수 이스케이프)를 풀어 str 로 돌려준다. 형식이 틀리면 None."""
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return None
+    body = token[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out += ch.encode("utf-8")
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):
+            return None
+        if body[i] in "01234567":
+            digits = body[i:i + 3]
+            if not re.fullmatch(r"[0-7]{3}", digits):
+                return None
+            out.append(int(digits, 8) & 0xFF)
+            i += 3
+        elif body[i] in _GIT_ESCAPES:
+            out.append(_GIT_ESCAPES[body[i]])
+            i += 1
+        else:
+            return None
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _split_quoted_pair(rest: str) -> Optional[tuple[str, str]]:
+    """`"a/..." "b/..."` 혹은 한쪽만 인용된 `diff --git` 인자를 (a경로, b경로) 로 나눈다."""
+    tokens: list[str] = []
+    i = 0
+    while i < len(rest):
+        if rest[i] == '"':
+            j = i + 1
+            while j < len(rest) and not (rest[j] == '"' and rest[j - 1] != "\\"):
+                j += 1
+            if j >= len(rest):
+                return None
+            tokens.append(rest[i:j + 1])
+            i = j + 1
+        elif rest[i] == " ":
+            i += 1
+        else:
+            j = rest.find(" ", i)
+            j = len(rest) if j < 0 else j
+            tokens.append(rest[i:j])
+            i = j
+    if len(tokens) != 2:
+        return None
+    paths = []
+    for tok, prefix in zip(tokens, ("a/", "b/")):
+        raw = _git_unquote(tok) if tok.startswith('"') else tok
+        if raw is None or not raw.startswith(prefix):
+            return None
+        paths.append(raw[len(prefix):])
+    return paths[0], paths[1]
+
+
+def _diff_header_paths(header_line: str) -> Optional[tuple[str, str]]:
+    """`diff --git` 헤더 한 줄에서 (a경로, b경로). 공백·인용(비ASCII 포함) 경로를 처리한다.
+
+    인용 없는 공백 경로는 a 와 b 가 같은 경우(`a/X b/X`)에만 길이로 확정한다. 모호하면 None.
+    """
+    prefix = "diff --git "
+    line = header_line.rstrip("\r\n")
+    if not line.startswith(prefix):
+        return None
+    rest = line[len(prefix):]
+    if '"' in rest:
+        return _split_quoted_pair(rest)
+    if not rest.startswith("a/"):
+        return None
+    body = rest[2:]
+    if (len(body) - 3) % 2 == 0 and len(body) >= 5:
+        n = (len(body) - 3) // 2
+        left, mid, right = body[:n], body[n:n + 3], body[n + 3:]
+        if mid == " b/" and left == right:
+            return left, right
+    m = re.fullmatch(r"(\S+) b/(\S+)", body)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _strip_exact_revert_sections(diff: str, files: list[str]) -> tuple[str, list[str], int]:
+    """(역패치 파일 구간을 뺀 diff, 제외한 경로, 제외한 +/- 줄 수). a/b 경로가 모두 files 안일 때만 뺀다."""
+    # NFC/NFD 는 리눅스·git 에서 서로 다른 파일이다 — 정규화하지 않고 바이트 그대로 비교한다.
+    wanted = set(files)
+    kept: list[str] = []
+    ignored_paths: list[str] = []
+    ignored_lines = 0
+    for section in _DIFF_SECTION_SPLIT_RE.split(diff or ""):
+        paths = _diff_header_paths(section.split("\n", 1)[0])
+        if paths and all(path in wanted for path in paths):
+            ignored_paths.append(paths[1])
+            added, removed = _diff_line_counts(section)
+            ignored_lines += added + removed
+            continue
+        kept.append(section)
+    return "".join(kept), ignored_paths, ignored_lines
+
+
 # 러너가 작업마다 통째로 새로 쓰는 저장소 루트 결과 산출물. 기존 구현이 아니므로 +/- 비율에서 뺀다.
 # 정확히 루트 `RESULT.md` 한 경로만이다(하위 경로·다른 .md 는 그대로 센다).
 _RUNNER_RESULT_PATH = "RESULT.md"
@@ -1895,7 +2036,10 @@ def _precheck_preservation_gate(
     *,
     diff_truncated: bool = False,
     extra_changed_files: Optional[list] = None,
+    revert_of_verified: Optional[dict] = None,
 ) -> Optional[ReviewVerdict]:
+    # revert_of_verified: 러너가 검증한 정확한 되돌리기. 지시서 REVERT_OF sha 와 접두 일치할 때만
+    # 해당 파일 구간을 비율·삭제 심볼 판정에서 뺀다(범위 게이트는 원본 diff 그대로).
     # diff_truncated: 넘어온 diff 가 상류에서 잘렸다. 끝까지 보이는 파일 구간의 삭제만
     # "삭제 확정" 으로 하드 FLAG 하고, 잘렸을 수 있는 구간의 삭제 심볼은 판정 불가로 분리해
     # exemption_out 에 남긴다(LLM/사람 검수 대상). 잘리지 않았으면 종전과 동일하다.
@@ -1903,6 +2047,20 @@ def _precheck_preservation_gate(
     # 아래 비율·심볼 판정은 패치 파일 구간을 뺀 diff 로 한다. 범위 게이트는 원본 diff 기준이다.
     # 변경이 패치 파일뿐이면 additions/deletions 가 0 이라 두 게이트 모두 이슈를 내지 않는다.
     preservation_diff, ignored_patch_paths, ignored_patch_lines = _strip_patch_file_sections(diff)
+    exact_revert = _valid_revert_of_verified(instruction, revert_of_verified)
+    exact_revert_notes: dict[str, object] = {}
+    if exact_revert:
+        preservation_diff, revert_paths, revert_lines = _strip_exact_revert_sections(
+            preservation_diff, exact_revert["files"]
+        )
+        if revert_paths:
+            exact_revert_notes = {
+                "preservation_exempt_reason": "exact_revert",
+                "preservation_exempt_sha": exact_revert["sha"],
+                "preservation_exempt_patch_id": exact_revert["patch_id"],
+                "preservation_exempt_files": revert_paths[:20],
+                "preservation_exempt_lines": revert_lines,
+            }
     # 루트 RESULT.md 는 +/- 비율에서만 뺀다. 삭제 심볼·범위 판정은 종전 입력을 그대로 쓴다.
     ratio_diff, ignored_result_md_lines = _strip_runner_result_sections(preservation_diff)
     additions, deletions = _diff_line_counts(ratio_diff)
@@ -1912,6 +2070,10 @@ def _precheck_preservation_gate(
         "additions": additions,
         "deletions": deletions,
     }
+    if exact_revert_notes:
+        feedback.update(exact_revert_notes)
+        if exemption_out is not None:
+            exemption_out.update(exact_revert_notes)
     if ignored_patch_paths:
         ignored_notes: dict[str, object] = {
             "preservation_ignored_patch_files": ignored_patch_paths[:20],
@@ -2157,8 +2319,12 @@ async def review_code_diff(
     diff_truncated: bool = False,
     original_diff_chars: Optional[int] = None,
     worker_missing_tools: Optional[set] = None,
+    revert_of_verified: Optional[dict] = None,
 ) -> ReviewVerdict:
     """코드 diff를 독립 AI로 리뷰. Claude Haiku 사용.
+
+    revert_of_verified: 러너가 patch-id 로 검증한 정확한 되돌리기({sha, patch_id, files}).
+    지시서 REVERT_OF sha 와 접두 일치할 때만 보존 하드게이트를 해당 파일 구간에 한해 면제한다.
 
     deadline_sec 을 주면 전체 검수 마감을 그 값으로 바꾼다. 프록시에 묶이지 않는
     비동기 요청 경로가 더 긴 마감을 쓰기 위한 것이다(_REVIEW_ASYNC_DEADLINE_SEC).
@@ -2255,6 +2421,7 @@ async def review_code_diff(
         project,
         diff_truncated=gate_truncated,
         extra_changed_files=extra_scope_files,
+        revert_of_verified=revert_of_verified,
     )
     _PRESERVATION_EXEMPTIONS.set((job_id, preservation_exemption) if preservation_exemption else None)
     if preservation_precheck is not None:
@@ -2307,6 +2474,16 @@ async def review_code_diff(
         + json.dumps(moved_symbols, ensure_ascii=False)
         + "\n같은 diff 내 선언 이동과 원 파일 재노출만 확인했다. 동작 동일성은 리뷰하라.\n"
     ) if moved_symbols else ""
+    revert_notice = ""
+    if preservation_exemption.get("preservation_exempt_reason") == "exact_revert":
+        revert_notice = (
+            "\n[정확한 되돌리기 면제] 러너가 patch-id 로 검증한 지시된 revert 다"
+            f" (sha={preservation_exemption.get('preservation_exempt_sha')},"
+            f" 파일={json.dumps(preservation_exemption.get('preservation_exempt_files') or [], ensure_ascii=False)}).\n"
+            "- 위 파일 구간의 삭제(함수·클래스·라우터 포함)는 지시된 되돌리기이므로 보존 하드 게이트·"
+            "preservation 감점·FLAG 의 근거로 쓰지 마라.\n"
+            "- 그 밖의 파일 구간과 정확성·보안·범위 검토는 종전 기준 그대로 적용하라.\n"
+        )
     prompt = f"""다음 코드 변경사항을 리뷰하세요.
 
 프로젝트: {project}
@@ -2314,7 +2491,7 @@ async def review_code_diff(
 {_build_review_instruction_section(instruction)}
 {_build_worker_scope_notice(instruction, worker_missing_tools, job_id=job_id)}
 변경 파일: {', '.join(files_changed or [])}
-{truncation_notice}{move_notice}
+{truncation_notice}{move_notice}{revert_notice}
 ```diff
 {truncated_diff}
 ```

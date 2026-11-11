@@ -3618,6 +3618,43 @@ $(review_diff_stat_section "$repo" "미커밋 변경 — git diff HEAD --stat" H
     return 0
 }
 
+# 정확한 되돌리기(REVERT_OF) 검증 — 지시서 `REVERT_OF: <sha 7~40자>` 줄이 있을 때만 후보가 된다.
+# `git show <sha>` 의 patch-id 와, 이번 작업 diff(base→HEAD) 를 뒤집은 patch-id 를 sha 커밋이 건드린
+# 파일 집합으로 한정해 비교한다. 정확히 같을 때만 stdout 에 {"sha","patch_id","files"} JSON 한 줄을 낸다.
+# 표식이 없거나 sha 를 못 찾거나 한 줄이라도 다르면 빈 출력(= 리뷰어는 종전 하드게이트 그대로).
+# 파일 집합 밖의 변경(결과 문서 등)은 비교하지 않고 리뷰어의 종전 게이트가 판정한다.
+# 사용: revert_of_verified_json <repo> <base_sha> <instruction>
+# (JOB_DIFF_EXCLUDE_SPECS 배열을 쓴다 — 러너 본문에서는 이미 정의돼 있다)
+revert_of_verified_json() {
+    local repo="$1" base_sha="$2" instruction="$3"
+    [[ -n "$repo" && -n "$base_sha" ]] || return 0
+    local doc_sha=""
+    doc_sha=$(printf '%s\n' "$instruction" \
+        | sed -nE 's/^[[:space:]>*-]*REVERT_OF:[[:space:]]*`?([0-9a-fA-F]{7,40})`?[[:space:]]*$/\1/p' | head -n1) || doc_sha=""
+    [[ -n "$doc_sha" ]] || return 0
+    local full_sha=""
+    full_sha=$(git -C "$repo" rev-parse --verify -q "${doc_sha}^{commit}" 2>/dev/null) || return 0
+    [[ "$full_sha" =~ ^[0-9a-f]{40}$ ]] || return 0
+    # 러너가 원래 diff 에서 빼는 산출물(JOB_DIFF_EXCLUDE_SPECS: .runner_full_diff.patch, RESULT-*.md)은
+    # 원본 커밋 쪽에서도 뺀다. 안 빼면 러너가 복원·재작성한 산출물 때문에 정확한 revert 가 불일치한다.
+    local -a _excl=("${JOB_DIFF_EXCLUDE_SPECS[@]}")
+    local files=()
+    mapfile -d '' -t files < <(git -C "$repo" show --format= --name-only -z "$full_sha" -- . "${_excl[@]}" 2>/dev/null)
+    [[ ${#files[@]} -gt 0 ]] || return 0
+    local sha_pid="" rev_pid=""
+    sha_pid=$(git -C "$repo" show "$full_sha" -- . "${_excl[@]}" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || sha_pid=""
+    [[ -n "$sha_pid" ]] || return 0
+    rev_pid=$(git -C "$repo" --literal-pathspecs diff HEAD "$base_sha" -- "${files[@]}" 2>/dev/null | git -C "$repo" patch-id --stable 2>/dev/null | awk 'NR==1{print $1}') || rev_pid=""
+    [[ -n "$rev_pid" && "$rev_pid" == "$sha_pid" ]] || return 0
+    # jq 없이 만든다(검증 함수는 최소 의존: git/awk/sed 만). 경로의 \ " 탭만 이스케이프한다.
+    local f esc json_files=""
+    for f in "${files[@]}"; do
+        esc=${f//\\/\\\\}; esc=${esc//\"/\\\"}; esc=${esc//$'\t'/\\t}
+        json_files+="${json_files:+,}\"${esc}\""
+    done
+    printf '{"sha":"%s","patch_id":"%s","files":[%s]}\n' "$full_sha" "$sha_pid" "$json_files"
+}
+
 # git_diff 텍스트에서 변경 파일 목록(쉼표 구분)을 뽑는다. diff 헤더 외에
 # 본문이 생략된 파일(# [stat-only])과 상한으로 잘린 파일(# [TRUNCATED] 목록)도 넣는다.
 job_diff_changed_files() {
@@ -7929,6 +7966,28 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                 --arg inst "$instruction" \
                 --arg files "$changed_files" \
                 '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+            # 정확한 되돌리기(REVERT_OF) — 러너가 patch-id 로 검증했을 때만 플래그를 싣는다.
+            local revert_verified=""
+            revert_verified=$(revert_of_verified_json "$worktree_dir" "$pre_exec_sha" "$instruction" 2>/dev/null) || revert_verified=""
+            if [[ -n "$revert_verified" ]]; then
+                # 이 검증 결과를 이번 요청(project·diff·instruction)에 묶는다. 리뷰어가 현재 요청에서 같은
+                # 해시를 다시 계산해 맞을 때만 면제하므로, 같은 sha·patch_id 를 다른 diff 에 재사용할 수 없다.
+                local _diff_h="" _inst_h=""
+                _diff_h=$(printf '%s' "$review_diff" | sha256sum | awk '{print $1}')
+                _inst_h=$(printf '%s' "$instruction" | sha256sum | awk '{print $1}')
+                revert_verified=$(printf '%s' "$revert_verified" | jq -c --arg p "$project" --arg d "$_diff_h" --arg i "$_inst_h" \
+                    '. + {project: $p, diff_sha256: $d, instruction_sha256: $i}') || revert_verified=""
+            fi
+            if [[ -n "$revert_verified" ]]; then
+                # 신뢰 근거: 인증 면제 API 의 요청 본문은 믿지 않으므로 검증 결과를 DB 에 기록하고
+                # 리뷰어가 sha·patch_id 가 같을 때만 면제한다(files 도 이 기록의 값을 쓴다).
+                local _sq="'" _sq2="''"
+                db_update "UPDATE pipeline_jobs SET revert_of_verified='${revert_verified//$_sq/$_sq2}'::jsonb
+                           WHERE job_id='${job_id}';"
+                review_body=$(printf '%s' "$review_body" | jq -c --argjson rv "$revert_verified" '. + {revert_of_verified: $rv}') \
+                    || review_body=$(jq -n --arg rid "$review_request_id" --arg jid "$job_id" --arg proj "$project" --arg diff "$review_diff" --arg inst "$instruction" --arg files "$changed_files" '{request_id: $rid, job_id: $jid, project: $proj, diff: $diff, instruction: $inst, files_changed: ($files | split(","))}')
+                log "  REVERT_OF_VERIFIED job=$job_id sha=$(printf '%s' "$revert_verified" | jq -r '.sha[0:12]' 2>/dev/null) — 리뷰 요청에 revert_of_verified 동봉"
+            fi
             while [[ $review_attempt -lt $review_max_attempts ]]; do
                 review_attempt=$((review_attempt + 1))
                 review_response=$(curl -4 -s --http1.1 -w "\n%{http_code}" -X POST "${AADS_API_URL}/api/v1/review/code-diff/requests" \

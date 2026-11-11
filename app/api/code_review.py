@@ -28,6 +28,10 @@ class CodeReviewRequest(BaseModel):
     diff: str = Field(..., description="git diff 내용")
     instruction: str = Field("", description="원본 작업 지시")
     files_changed: list[str] = Field(default_factory=list, description="변경된 파일 목록")
+    revert_of_verified: dict | None = Field(
+        None,
+        description="러너가 patch-id 로 검증한 정확한 되돌리기 {sha, patch_id, files}. 없으면 종전 게이트 그대로",
+    )
 
 
 class CodeReviewResponse(BaseModel):
@@ -77,6 +81,8 @@ def _payload_sha256(req: CodeReviewRequest) -> str:
         "instruction": req.instruction,
         "files_changed": req.files_changed,
     }
+    if req.revert_of_verified:  # 없으면 종전 해시와 같다(재시도 멱등성 유지)
+        payload["revert_of_verified"] = req.revert_of_verified
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -104,7 +110,8 @@ async def _execute_review_request(request_id: UUID) -> None:
                     error_detail=NULL
                 WHERE request_id=$1 AND status='queued'
                 RETURNING job_id, project, diff, instruction, files_changed,
-                          created_at, started_at, attempts
+                          created_at, started_at, attempts,
+                          to_jsonb(code_review_requests)->'revert_of_verified' AS revert_of_verified
                 """,
                 request_id,
             )
@@ -133,6 +140,11 @@ async def _execute_review_request(request_id: UUID) -> None:
             # 준다. 재검수 스위퍼가 동기 경로와 똑같은 상한에 걸리면 복구가 안 된다.
             from app.services.code_reviewer import _REVIEW_ASYNC_DEADLINE_SEC
 
+            revert_of_verified = row["revert_of_verified"]
+            if isinstance(revert_of_verified, str):
+                revert_of_verified = json.loads(revert_of_verified)
+            if not isinstance(revert_of_verified, dict):
+                revert_of_verified = None
             hard_limit, _ = _review_deadlines()
             result = await asyncio.wait_for(
                 do_review(
@@ -142,6 +154,13 @@ async def _execute_review_request(request_id: UUID) -> None:
                     instruction=row["instruction"] or "",
                     files_changed=list(files_changed or []),
                     deadline_sec=_REVIEW_ASYNC_DEADLINE_SEC,
+                    revert_of_verified=await _attest_revert_of_verified(
+                        row["job_id"],
+                        revert_of_verified,
+                        project=row["project"],
+                        diff=row["diff"],
+                        instruction=row["instruction"] or "",
+                    ),
                 ),
                 timeout=hard_limit,
             )
@@ -230,6 +249,62 @@ async def _resume_stored_request(request_id: UUID) -> str:
     return request_status
 
 
+async def _attest_revert_of_verified(
+    job_id: str,
+    claimed: dict | None,
+    project: str = "",
+    diff: str = "",
+    instruction: str = "",
+) -> dict | None:
+    """클라이언트가 보낸 revert_of_verified 를 러너의 DB 기록과 대조해 신뢰할 수 있을 때만 돌려준다.
+
+    /api/v1/review 는 JWT 면제 경로라 요청 본문은 믿을 수 없다. 러너는 patch-id 검증에 성공하면
+    pipeline_jobs.revert_of_verified 에 {sha, patch_id, files} 를 직접 기록한다(DB 쓰기 권한은 러너만).
+    요청의 sha·patch_id 가 그 기록과 같고, 기록에 묶인 project·diff·instruction 해시가 현재 요청과 같을 때만
+    기록의 값(files 포함)을 쓴다. 요청이 준 files 는 쓰지 않는다. 해시 결합이 없으면 같은 job_id·sha·patch_id 를
+    다른 diff 에 재사용해 면제를 얻을 수 있으므로, 결합 필드가 없는 기록은 신뢰하지 않는다.
+    기록이 없거나 다르면 None — 보존 하드게이트는 종전 그대로다(fail closed).
+    """
+    if not isinstance(claimed, dict) or not job_id:
+        return None
+    try:
+        from app.core.db_pool import get_pool
+
+        async with get_pool().acquire() as conn:
+            recorded = await conn.fetchval(
+                "SELECT revert_of_verified FROM pipeline_jobs WHERE job_id=$1", job_id
+            )
+    except Exception:
+        logger.warning("revert_of_verified_attest_lookup_failed job=%s", job_id, exc_info=True)
+        return None
+    if isinstance(recorded, str):
+        try:
+            recorded = json.loads(recorded)
+        except ValueError:
+            return None
+    if not isinstance(recorded, dict):
+        return None
+    if (
+        str(recorded.get("sha") or "").lower() != str(claimed.get("sha") or "").lower()
+        or str(recorded.get("patch_id") or "") != str(claimed.get("patch_id") or "")
+        or not recorded.get("patch_id")
+    ):
+        logger.warning("revert_of_verified_attest_mismatch job=%s", job_id)
+        return None
+    bound = (
+        (str(recorded.get("project") or ""), project or ""),
+        (str(recorded.get("diff_sha256") or "").lower(), hashlib.sha256((diff or "").encode("utf-8")).hexdigest()),
+        (
+            str(recorded.get("instruction_sha256") or "").lower(),
+            hashlib.sha256((instruction or "").encode("utf-8")).hexdigest(),
+        ),
+    )
+    if not recorded.get("diff_sha256") or not recorded.get("instruction_sha256") or any(a != b for a, b in bound):
+        logger.warning("revert_of_verified_attest_request_mismatch job=%s", job_id)
+        return None
+    return recorded
+
+
 @router.post("/code-diff", response_model=CodeReviewResponse)
 async def review_code_diff(req: CodeReviewRequest):
     """코드 diff를 AI Reviewer로 리뷰."""
@@ -241,6 +316,13 @@ async def review_code_diff(req: CodeReviewRequest):
             diff=req.diff,
             instruction=req.instruction,
             files_changed=req.files_changed,
+            revert_of_verified=await _attest_revert_of_verified(
+                req.job_id,
+                req.revert_of_verified,
+                project=req.project,
+                diff=req.diff,
+                instruction=req.instruction,
+            ),
         )
         return CodeReviewResponse(
             verdict=result.verdict,
@@ -270,22 +352,42 @@ async def create_code_review_request(req: AsyncCodeReviewRequest):
     payload_hash = _payload_sha256(req)
     pool = get_pool()
     async with pool.acquire() as conn:
-        inserted = await conn.fetchval(
-            """
-            INSERT INTO code_review_requests
-                (request_id, job_id, project, diff, instruction, files_changed, payload_sha256)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-            ON CONFLICT (request_id) DO NOTHING
-            RETURNING request_id
-            """,
-            request_id,
-            req.job_id,
-            req.project,
-            req.diff,
-            req.instruction,
-            json.dumps(req.files_changed, ensure_ascii=False),
-            payload_hash,
-        )
+        if req.revert_of_verified:
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO code_review_requests
+                    (request_id, job_id, project, diff, instruction, files_changed, payload_sha256,
+                     revert_of_verified)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb)
+                ON CONFLICT (request_id) DO NOTHING
+                RETURNING request_id
+                """,
+                request_id,
+                req.job_id,
+                req.project,
+                req.diff,
+                req.instruction,
+                json.dumps(req.files_changed, ensure_ascii=False),
+                payload_hash,
+                json.dumps(req.revert_of_verified, ensure_ascii=False),
+            )
+        else:
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO code_review_requests
+                    (request_id, job_id, project, diff, instruction, files_changed, payload_sha256)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                ON CONFLICT (request_id) DO NOTHING
+                RETURNING request_id
+                """,
+                request_id,
+                req.job_id,
+                req.project,
+                req.diff,
+                req.instruction,
+                json.dumps(req.files_changed, ensure_ascii=False),
+                payload_hash,
+            )
         row = await conn.fetchrow(
             "SELECT status, payload_sha256 FROM code_review_requests WHERE request_id=$1",
             request_id,
