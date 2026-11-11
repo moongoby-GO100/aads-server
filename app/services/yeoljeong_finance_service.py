@@ -53,6 +53,8 @@ from app.services.yeoljeong_payroll_pdf import (
     SETTLEMENT_PAY_CODE,
     SETTLEMENT_RECOVER_CODE,
     SETTLEMENT_SOURCE,
+    hourly_calc as _hourly_calc,
+    hourly_note as _hourly_note,
 )
 
 KST = timezone(timedelta(hours=9))
@@ -11871,9 +11873,9 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         "memo": str((draft or {}).get("memo") or ""),
         "pay_items": [{
             "code": "base", "label": "기본급", "amount": gross,
-            "calc_note": f"시급 {rate:,}원 × 승인 근로 {minutes}분(분 단위 환산, 원 미만 반올림)" if wage_type == "hourly"
+            "calc_note": _hourly_note(rate, minutes) if wage_type == "hourly"
             else f"일급 {rate:,}원 × 근로 {days}일",
-            **({"calc": {"rate": rate, "qty": minutes, "unit": "minute"}} if wage_type == "hourly" else {}),
+            **({"calc": _hourly_calc(rate, minutes)} if wage_type == "hourly" else {}),
         }],
         "work_summary": {"work_days": days, "work_minutes": minutes},
     }
@@ -11888,9 +11890,9 @@ def payroll_draft_from_attendance(payload: dict[str, Any], user: dict[str, Any])
         request["insurance_deduction"] = 0
         request["pay_items"] = [{
             "code": "other", "label": FREELANCER_PAY_ITEM_LABELS[wage_type], "amount": gross,
-            "calc_note": (f"용역비(시급 {rate:,}원 × 승인 {minutes}분) — 분 단위 환산, 원 미만 반올림" if wage_type == "hourly"
+            "calc_note": (_hourly_note(rate, minutes, True) if wage_type == "hourly"
                           else f"용역비(일급 {rate:,}원 × 승인 {days}일)"),
-            **({"calc": {"rate": rate, "qty": minutes, "unit": "minute"}} if wage_type == "hourly" else {}),
+            **({"calc": _hourly_calc(rate, minutes)} if wage_type == "hourly" else {}),
         }]
         # 기존 초안의 기타 공제(code=other)는 금액·항목 모두 유지해야 항목 합계와 other_deduction 이 일치한다.
         other_items = [dict(item) for item in ((draft or {}).get("deduction_items") or [])

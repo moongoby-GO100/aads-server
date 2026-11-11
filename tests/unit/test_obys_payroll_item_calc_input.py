@@ -92,7 +92,7 @@ AUTO = "시급 12,500원 × 승인 근로 420분(분 단위 환산, 원 미만 �
 
 def test_server_generated_note_is_regenerated_when_calc_changes():
     item = _pay(_base(amount=100000, calc_note=AUTO, calc={"rate": 12500, "qty": 480, "unit": "minute"}))
-    assert item["calc_note"] == "시급 12,500원 × 480분"
+    assert item["calc_note"] == "시급 12,500원 × 8시간"
 
 
 def test_server_generated_note_kept_when_calc_unchanged():
@@ -102,7 +102,7 @@ def test_server_generated_note_kept_when_calc_unchanged():
 
 def test_freelancer_auto_note_regenerated_and_admin_note_kept_on_change():
     auto = "용역비(시급 12,500원 × 승인 420분) — 분 단위 환산, 원 미만 반올림"
-    assert _pay(_base(amount=100000, calc_note=auto, calc={"rate": 12500, "qty": 480, "unit": "minute"}))["calc_note"] == "시급 12,500원 × 480분"
+    assert _pay(_base(amount=100000, calc_note=auto, calc={"rate": 12500, "qty": 480, "unit": "minute"}))["calc_note"] == "시급 12,500원 × 8시간"
     kept = _pay(_base(amount=100000, calc_note="사장님 확인분", calc={"rate": 12500, "qty": 480, "unit": "minute"}))
     assert kept["calc_note"] == "사장님 확인분"
 
@@ -150,12 +150,12 @@ const type=(k,value)=>{host.querySelector('[data-payroll-items]').oninput({targe
   for(const k of ['calc_rate','calc_qty','calc_unit'])assert.ok(html.includes(`data-k="${k}"`),k);
   assert.ok(html.includes('class="payroll-item-table"')&&html.includes('@media (max-width:480px)'));
   assert.ok(/pi-code[^}]*flex/.test(html)&&/pi-del[^}]*order:3/.test(html));
-  assert.ok(html.includes('value="12500"')&&html.includes('value="420"'));
-  // 420분→480분: 금액·계산방법 동시 갱신(서버 자동 문구 포함)
-  type('calc_qty','480');
+  assert.ok(html.includes('value="12500"')&&html.includes('value="7"'));
+  // 420분은 7시간으로 로드 → 8시간: 금액·계산방법 동시 갱신(서버 자동 문구 포함)
+  type('calc_qty','8');
   const at='[data-item="pay"][data-i="0"]';
   assert.equal(element(`${at}[data-k="amount"]`).value,'100000');
-  assert.equal(element(`${at}[data-k="calc_note"]`).value,'시급 12,500원 × 480분');
+  assert.equal(element(`${at}[data-k="calc_note"]`).value,'시급 12,500원 × 8시간');
   // 금액 직접 수정 → 계산값과 다름 표시, 저장 허용
   host.querySelector('[data-payroll-items]').oninput({target:{dataset:{item:'pay',i:'0',k:'amount'},value:'99000'}});
   assert.match(element('[data-calc-flag="0"]').textContent,/계산값 100,000원과 다름/);
@@ -272,7 +272,7 @@ def test_server_keeps_admin_appended_note_but_replaces_exact_auto_note():
     for auto in (AUTO, AUTO_FREE):
         kept = _pay(_base(amount=100000, calc_note=auto + APPENDED, calc=changed))
         assert kept["calc_note"] == auto + APPENDED
-        assert _pay(_base(amount=100000, calc_note=auto, calc=changed))["calc_note"] == "시급 12,500원 × 480분"
+        assert _pay(_base(amount=100000, calc_note=auto, calc=changed))["calc_note"] == "시급 12,500원 × 8시간"
     assert not pdf._auto_note_is_stale(AUTO + APPENDED, changed | {"qty": 480})
     assert pdf._auto_note_is_stale(AUTO, changed)
 
@@ -302,7 +302,7 @@ const api=async(path)=>{
 };
 (async()=>{
   await window.ObysPayrollAdmin.mount(host,{api,businessId:'b1',month:'2026-11',canManage:true});
-  host.querySelector('[data-payroll-items]').oninput({target:{dataset:{item:'pay',i:'0',k:'calc_qty'},value:'480'}});
+  host.querySelector('[data-payroll-items]').oninput({target:{dataset:{item:'pay',i:'0',k:'calc_qty'},value:'8'}});
   assert.equal(element('[data-item="pay"][data-i="0"][data-k="calc_note"]').value,expected);
   console.log('OK');
 })().catch(e=>{console.error(e);process.exit(1)});
@@ -314,7 +314,7 @@ def test_screen_keeps_admin_appended_note_and_replaces_exact_auto_note(auto):
     node = shutil.which("node")
     if not node:
         pytest.skip("node 미설치")
-    for initial, expected in ((auto, "시급 12,500원 × 480분"), (auto + APPENDED, auto + APPENDED)):
+    for initial, expected in ((auto, "시급 12,500원 × 8시간"), (auto + APPENDED, auto + APPENDED)):
         out = subprocess.run([node, "-e", NOTE_SCRIPT, str(MODULE), initial, expected], capture_output=True, text=True, timeout=30)
         assert out.returncode == 0, out.stdout + out.stderr
 

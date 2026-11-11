@@ -145,26 +145,59 @@ def calc_amount(calc: dict[str, Any]) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _hours_qty(minutes: int | Decimal) -> int | float:
+    """분(3의 배수) → 시간 수량. 정수면 int, 아니면 소수 최대 2자리 float."""
+    hours = (Decimal(minutes) / Decimal(60)).quantize(Decimal("0.01"))
+    return int(hours) if hours == hours.to_integral_value() else float(hours)
+
+
+def _hours_text(minutes: int) -> str:
+    return format(Decimal(str(_hours_qty(minutes))).normalize(), "f")
+
+
+def hourly_calc(rate: int, minutes: int) -> dict[str, Any]:
+    """시급 직원 calc. 분이 3의 배수면 시간 단위(금액 동일), 아니면 분 단위 유지."""
+    if minutes > 0 and minutes % 3 == 0:
+        return {"rate": rate, "qty": _hours_qty(minutes), "unit": "hour"}
+    return {"rate": rate, "qty": minutes, "unit": "minute"}
+
+
+def hourly_note(rate: int, minutes: int, freelancer: bool = False) -> str:
+    """서버 자동 계산방법 문구(시간 단위 가능하면 시간 형식, 아니면 기존 분 형식)."""
+    if minutes > 0 and minutes % 3 == 0:
+        core = f"시급 {rate:,}원 × 승인 근로 {_hours_text(minutes)}시간({minutes}분, 원 미만 반올림)"
+        return f"용역비({core})" if freelancer else core
+    if freelancer:
+        return f"용역비(시급 {rate:,}원 × 승인 {minutes}분) — 분 단위 환산, 원 미만 반올림"
+    return f"시급 {rate:,}원 × 승인 근로 {minutes}분(분 단위 환산, 원 미만 반올림)"
+
+
 def calc_note_text(calc: dict[str, Any]) -> str:
-    qty_text = format(Decimal(str(calc["qty"])).normalize(), "f")
-    prefix = "시급" if calc["unit"] in {"hour", "minute"} else "단가"
-    return f"{prefix} {calc['rate']:,}원 × {qty_text}{CALC_UNITS[calc['unit']]}"
+    unit, qty = calc["unit"], Decimal(str(calc["qty"]))
+    if unit == "minute" and qty == qty.to_integral_value() and int(qty) % 3 == 0:
+        qty_text, unit_text = _hours_text(int(qty)), CALC_UNITS["hour"]
+    else:
+        qty_text, unit_text = format(qty.normalize(), "f"), CALC_UNITS[unit]
+    prefix = "시급" if unit in {"hour", "minute"} else "단가"
+    return f"{prefix} {calc['rate']:,}원 × {qty_text}{unit_text}"
 
 
 _AUTO_NOTE_RE = re.compile(
     r"(?:시급 ([\d,]+)원 × 승인 근로 (\d+)분\(분 단위 환산, 원 미만 반올림\)"
-    r"|용역비\(시급 ([\d,]+)원 × 승인 (\d+)분\) — 분 단위 환산, 원 미만 반올림)"
+    r"|용역비\(시급 ([\d,]+)원 × 승인 (\d+)분\) — 분 단위 환산, 원 미만 반올림"
+    r"|(?:용역비\()?시급 ([\d,]+)원 × 승인 근로 [\d.]+시간\((\d+)분, 원 미만 반올림\)\)?)"
 )
 
 
 def _auto_note_is_stale(note: str, calc: dict[str, Any]) -> bool:
-    """서버가 만든 시급 계산방법인데 단가·분이 현재 calc 와 다르면 True(관리자가 쓴 메모는 False)."""
+    """서버가 만든 시급 계산방법(분·시간 형식)인데 단가·근로 분이 현재 calc 와 다르면 True(관리자 메모는 False)."""
     match = _AUTO_NOTE_RE.fullmatch(note)
-    if not match or calc["unit"] != "minute":
+    if not match or calc["unit"] not in {"minute", "hour"}:
         return False
-    rate = int((match.group(1) or match.group(3)).replace(",", ""))
-    minutes = int(match.group(2) or match.group(4))
-    return rate != calc["rate"] or Decimal(minutes) != Decimal(str(calc["qty"]))
+    rate = int((match.group(1) or match.group(3) or match.group(5)).replace(",", ""))
+    minutes = int(match.group(2) or match.group(4) or match.group(6))
+    cur = Decimal(str(calc["qty"])) * (Decimal(60) if calc["unit"] == "hour" else Decimal(1))
+    return rate != calc["rate"] or Decimal(minutes) != cur
 
 
 def _clean_item_list(

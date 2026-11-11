@@ -183,7 +183,13 @@
     const payDateInput = host.querySelector("[data-payroll-pay-date]");
     const isFreelancer = () => (active?.employment_tax_type || planTaxType || employee()?.current_employment?.employment_tax_type) === "freelancer_33";
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
-    const calcPayload = row => row.calc && row.calc.rate !== "" && row.calc.qty !== "" && row.calc.rate !== undefined && row.calc.qty !== undefined ? {rate:Number(row.calc.rate), qty:Number(row.calc.qty), unit:row.calc.unit || "hour"} : null;
+    // 분 단위 수량이 3의 배수면 시간으로 보여 준다(금액 동일: rate × qty/60). 그 외 분 단위는 그대로.
+    const hourView = c => {
+      if (!c || c.unit !== "minute" || c.qty === "" || c.qty === undefined) return c;
+      const q = Number(c.qty);
+      return Number.isInteger(q) && q > 0 && q % 3 === 0 ? {...c, qty:Math.round(q / 60 * 100) / 100, unit:"hour"} : c;
+    };
+    const calcPayload = row => row.calc && row.calc.rate !== "" && row.calc.qty !== "" && row.calc.rate !== undefined && row.calc.qty !== undefined ? (c => ({rate:Number(c.rate), qty:Number(c.qty), unit:c.unit || "hour"}))(hourView(row.calc)) : null;
     const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || "", calcPayload(row)]), d:d.map(row => [row.code, row.label, Number(row.amount), row.source || "", Boolean(row.confirmed), row.calc_note || ""]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
     const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut, familyCount, held:{status:reportStatus, reason:unreportedReason, items:heldItems, release:heldRelease}})});
@@ -231,7 +237,7 @@
       if (isFreelancer() && form.elements.insurance_deduction.value === "") form.elements.insurance_deduction.value = "0";
     };
     const isFactRow = row => Boolean(active?.supersedes_id || ["confirmed", "paid"].includes(active?.status)) && row.label !== TOPUP_LABEL;
-    const AUTO_NOTE = /^(?:시급 [\d,]+원 × 승인 근로 \d+분\(분 단위 환산, 원 미만 반올림\)|용역비\(시급 [\d,]+원 × 승인 \d+분\) — 분 단위 환산, 원 미만 반올림)$/;
+    const AUTO_NOTE = /^(?:시급 [\d,]+원 × 승인 근로 \d+분\(분 단위 환산, 원 미만 반올림\)|(?:용역비\()?시급 [\d,]+원 × 승인 근로 [\d.]+시간\(\d+분, 원 미만 반올림\)\)?|용역비\(시급 [\d,]+원 × 승인 \d+분\) — 분 단위 환산, 원 미만 반올림)$/;
     const CALC_UNITS = [["hour", "시간"], ["minute", "분"], ["day", "일"], ["month", "월"], ["count", "건"]];
     const calcReady = row => {const c = row.calc; return Boolean(c) && c.rate !== "" && c.rate !== undefined && c.qty !== "" && c.qty !== undefined && Number.isFinite(Number(c.rate)) && Number(c.rate) >= 0 && Number.isFinite(Number(c.qty)) && Number(c.qty) >= 0 && CALC_UNITS.some(([unit]) => unit === c.unit);};
     const calcAmount = c => Math.round(Number(c.rate) * Number(c.qty) / (c.unit === "minute" ? 60 : 1) + 1e-9);
@@ -555,7 +561,7 @@
       amounts.forEach(([name]) => {form.elements[name].value = values[name] ?? "";});
       payDateInput.value = values.pay_date ?? "";
       const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}, optOut:clone(active?.settlement_opt_out) || []};
-      pay = source.pay || []; ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
+      pay = (source.pay || []).map(row => row.calc ? {...row, calc:hourView(row.calc)} : row); ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
       ded.forEach(row => {if (row.source === "manual" && String(row.calc_note || "").trim() && row.note_manual === undefined) row.note_manual = true;});  // 저장된 수동 행의 메모는 관리자 글로 보존한다
       familyCount = values.items && values.items.familyCount !== undefined ? String(values.items.familyCount ?? "") : active?.tax_family_count ? String(active.tax_family_count) : ""; workMinutesBase = work.work_minutes === undefined || work.work_minutes === "" ? "" : String(work.work_minutes);
       const held = source.held || {status:active?.report_status || "reported", reason:active?.unreported_reason || "", items:clone(active?.held_items) || [], release:active?.held_release_amount || ""};
