@@ -28,7 +28,7 @@ def test_finalize_ownership_and_config(monkeypatch, case):
             return 'AADS_IGNORED' if case == 'ignored' else ''
         if command.startswith('cat --'):
             content = '{broken' if case == 'invalid' else '{"apply": true}'
-            return f'[GO100 명령 실행 — exit=0]\n$ {command}\n{content}'
+            return f'[{project} 명령 실행 — exit=0]\n$ {command}\n{content}'
         if command == 'git rev-parse HEAD':
             return 'a' * 40
         if 'abbrev-ref' in command:
@@ -50,7 +50,7 @@ def test_finalize_ownership_and_config(monkeypatch, case):
     monkeypatch.setattr(tracker, '_sensitive_paths', sensitive)
     monkeypatch.setattr(tracker, 'git_project_lock', lock)
     result = asyncio.run(tracker._finalize_group(
-        session_id='session', project='GO100', repo='kis-autotrade-v4', rows=[row]))
+        session_id='session', project='KIS', repo='kis-autotrade-v4', rows=[row]))
     if case == 'invalid':
         assert not result['ok']
         assert result['skipped_invalid_config'] == [path]

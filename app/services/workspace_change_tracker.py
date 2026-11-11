@@ -276,6 +276,20 @@ def _command_has_error(text: str) -> bool:
     )
 
 
+def _is_remote_git_failure(text: str) -> bool:
+    if not isinstance(text, str):
+        return True
+    if _command_has_error(text):
+        return True
+    lowered = text.lower()
+    if "[stderr]" in lowered:
+        return True
+    m = re.search(r"exit=([0-9]+)", text)
+    if m and m.group(1) != "0":
+        return True
+    return False
+
+
 def _command_no_changes(text: str) -> bool:
     lowered = text.lower()
     return (
@@ -415,7 +429,7 @@ def _parse_porcelain_paths(text: str) -> set[str]:
     paths: set[str] = set()
     for line in (text or "").splitlines():
         raw = line.rstrip()
-        if not raw or raw.startswith("[") or raw.startswith("$ "):
+        if not raw or raw.startswith("[") or raw.startswith("$ ") or raw.startswith("##"):
             continue
         if len(raw) < 4:
             continue
@@ -848,6 +862,140 @@ async def _finalize_group(
     repo: str,
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    all_ledger_paths = [str(row.get("file_path") or "").strip() for row in rows]
+    all_ledger_paths = [path for path in dict.fromkeys(all_ledger_paths) if path]
+
+    # GO100 운영 폴더 직접 수정 차단 (CEO 지시 2026-11-11, R5B)
+    # Chat-Finalize 가 GO100 운영 폴더(/root/kis-autotrade-v4)를 직접 커밋/푸시하지 못하도록 차단한다.
+    from app.services.go100_prod_tree_guard import (
+        PROD_ROOT,
+        has_suspicious_chars,
+        is_prod_tree_code_path,
+    )
+
+    is_go100 = str(project or "").strip().upper() == "GO100"
+    if is_go100 and all_ledger_paths and any(
+        is_prod_tree_code_path(p) or has_suspicious_chars(p) for p in all_ledger_paths
+    ):
+        quoted_paths = " ".join(shlex.quote(p) for p in all_ledger_paths)
+        status_cmd = f"git -C {PROD_ROOT} status --porcelain -- {quoted_paths}"
+        try:
+            status_text = await _run_git_command(project, repo, status_cmd)
+            status_str = status_text if isinstance(status_text, str) else str(status_text or "")
+            if _is_remote_git_failure(status_str):
+                err_detail = status_str.strip() or "remote git status returned error"
+                if all_ledger_paths:
+                    try:
+                        await _mark_group(
+                            session_id=session_id,
+                            project=project,
+                            repo=repo,
+                            file_paths=[],
+                            ledger_file_paths=all_ledger_paths,
+                            status=_STATUS_DIRTY,
+                            last_error=f"go100_prod_tree_status_unknown: {err_detail}"[:500],
+                        )
+                    except Exception:
+                        pass
+                return {
+                    "project": project,
+                    "repo": repo,
+                    "files": all_ledger_paths,
+                    "ok": False,
+                    "blocked": True,
+                    "status": _STATUS_DIRTY,
+                    "reason": "go100_prod_tree_status_unknown",
+                    "detail": f"remote git status failed: {err_detail}"[:500],
+                    "commit_sha": None,
+                    "commit_message": "",
+                }
+
+            porcelain_paths = _parse_porcelain_paths(status_str)
+            if not porcelain_paths:
+                # 원격 git status 출력이 비어 있음 = 원복됐거나 main 이관 후 정리됨
+                if all_ledger_paths:
+                    try:
+                        await _mark_group(
+                            session_id=session_id,
+                            project=project,
+                            repo=repo,
+                            file_paths=[],
+                            ledger_file_paths=all_ledger_paths,
+                            status=_STATUS_RECONCILED_CLEAN,
+                            last_error="",
+                        )
+                    except Exception as exc:
+                        logger.warning("mark_group reconciled_clean failed: %s", exc)
+                return {
+                    "project": project,
+                    "repo": repo,
+                    "files": all_ledger_paths,
+                    "ok": True,
+                    "status": _STATUS_RECONCILED_CLEAN,
+                    "commit_sha": None,
+                    "commit_message": "",
+                    "detail": "reconciled clean: remote working tree matches HEAD",
+                }
+
+            # 원격에 변경이 남아 있음 -> status dirty 유지, 차단
+            pending_paths = sorted(porcelain_paths)
+            guide_msg = "러너로 main 에 옮긴 뒤 운영 폴더를 원복해야 배포 가능"
+            detail_msg = f"go100_prod_tree_direct_edit: {guide_msg}"
+            if all_ledger_paths:
+                try:
+                    await _mark_group(
+                        session_id=session_id,
+                        project=project,
+                        repo=repo,
+                        file_paths=[],
+                        ledger_file_paths=all_ledger_paths,
+                        status=_STATUS_DIRTY,
+                        last_error=detail_msg,
+                    )
+                except Exception as exc:
+                    logger.warning("mark_group dirty failed: %s", exc)
+            return {
+                "project": project,
+                "repo": repo,
+                "files": all_ledger_paths,
+                "ok": False,
+                "blocked": True,
+                "status": _STATUS_DIRTY,
+                "reason": "go100_prod_tree_direct_edit",
+                "pending_paths": pending_paths,
+                "message": guide_msg,
+                "detail": detail_msg,
+                "commit_sha": None,
+                "commit_message": "",
+            }
+        except Exception as exc:
+            err_detail = str(exc)
+            if all_ledger_paths:
+                try:
+                    await _mark_group(
+                        session_id=session_id,
+                        project=project,
+                        repo=repo,
+                        file_paths=[],
+                        ledger_file_paths=all_ledger_paths,
+                        status=_STATUS_DIRTY,
+                        last_error=f"go100_prod_tree_status_unknown: {err_detail}"[:500],
+                    )
+                except Exception:
+                    pass
+            return {
+                "project": project,
+                "repo": repo,
+                "files": all_ledger_paths,
+                "ok": False,
+                "blocked": True,
+                "status": _STATUS_DIRTY,
+                "reason": "go100_prod_tree_status_unknown",
+                "detail": f"remote git status failed: {err_detail}"[:500],
+                "commit_sha": None,
+                "commit_message": "",
+            }
+
     file_paths = [_normalize_repo_path(project, repo, row["file_path"]) for row in rows]
     file_paths = [path for path in dict.fromkeys(file_paths) if path]
 
