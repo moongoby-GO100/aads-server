@@ -1008,6 +1008,12 @@ async def save_payroll(payload: GenericPayload, current_user: dict = Depends(get
     return {"statement": await run_in_threadpool(svc.save_payroll, payload.model_dump(), current_user)}
 
 
+@router.post("/payroll/deductions/preview")
+async def preview_payroll_deductions(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    # 저장하지 않는다. 화면이 입력을 바꿀 때마다 공제를 서버 정본 계산으로 다시 보여 준다.
+    return await run_in_threadpool(svc.preview_payroll_deductions, payload.model_dump(), current_user)
+
+
 @router.post("/payroll/draft-from-attendance")
 async def payroll_draft_from_attendance(payload: GenericPayload, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"statement": await run_in_threadpool(svc.payroll_draft_from_attendance, payload.model_dump(), current_user)}

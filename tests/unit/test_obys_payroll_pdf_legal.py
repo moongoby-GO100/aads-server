@@ -403,6 +403,7 @@ let row=Object.assign({id:'s1',business_id:'b1',employee_email:'one@example.test
 const api=async(path,options={})=>{
   if(path.startsWith('/employees/approved'))return {employees:[{id:'e1',email:'one@example.test',name:'합성 직원',branch:'A'}]};
   if(path.startsWith('/payroll?'))return {statements:[row]};
+  if(path==='/payroll/deductions/preview')return {deduction_items:JSON.parse(options.body).deduction_items};
   if(path==='/payroll'){saved=JSON.parse(options.body);row=Object.assign({},row,saved,{net_pay:0});return {statement:row}}
   throw Error('unexpected API '+path);
 };

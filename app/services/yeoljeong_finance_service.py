@@ -10333,13 +10333,93 @@ def _payroll_lock_email(row: dict[str, Any]) -> str:
 
 
 def _monthly_scheduled_hours(employment: dict[str, Any] | None) -> float | None:
-    """계약 weekly_hours("주 10시간 30분")에서 월 소정근로시간(주휴 제외)을 구한다. 계약이 없거나 읽을 수 없으면 None."""
+    """계약 weekly_hours("주 10시간 30분"·"주 10.5시간"·"주10시간")에서 월 소정근로시간(주휴 제외)을 구한다.
+
+    계약이 없거나 읽을 수 없으면 None."""
     text = str(((employment or {}).get("weekly_hours")) or "")
-    match = re.search(r"주\s*(\d+)시간(?:\s*(\d+)분)?", text)
+    match = re.search(r"주\s*(\d+(?:\.\d+)?)\s*시간(?:\s*(\d+)\s*분)?", text)
     if not match:
         return None
     weekly = float(match.group(1)) + float(match.group(2) or 0) / 60
     return weekly * 365 / 7 / 12
+
+
+def preview_payroll_deductions(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """저장 없이 공제 항목을 계산해 돌려준다(DB 쓰기 없음). 수동 보존·단시간 가입 제외 판정은 저장과 같은 함수를 쓴다."""
+    _tenant_id(user)
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="급여 공제 미리보기 권한이 없습니다")
+    from app.services.yeoljeong_payroll_deductions import (
+        INSURANCE_CODES, TAX_CODES, apply_statutory_deductions, formula_amount, formula_inputs, pending_input_codes,
+    )
+    from app.services.yeoljeong_payroll_pdf import PayrollItemError, normalize_payroll_items
+
+    month = str(payload.get("payroll_month") or payload.get("month") or "").strip()
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(status_code=400, detail="payroll_month 는 YYYY-MM 형식이어야 합니다")
+    taxable = _payroll_integer_for_api(payload.get("taxable_pay"), field="taxable_pay")
+    # 월 소정근로시간은 요청값을 받지 않는다(요청에 monthly_scheduled_hours 가 있어도 무시). 저장 경로와 같게 계약에서만 읽는다.
+    hours: float | None = None
+    email = str(payload.get("employee_email") or "").strip().lower()
+    request_id = str(payload.get("employee_request_id") or "").strip()
+    if email or request_id:
+        employee = _find_employee_record(user, employee_email=email, employee_request_id=request_id)
+        if not employee:
+            raise HTTPException(status_code=403, detail="급여 공제 미리보기 권한이 없습니다")
+        derived = _derive_current_employment(
+            _read_hr("contracts", user), employee_email=str(employee.get("email") or ""),
+            employee_request_id=str(employee.get("id") or ""), business_id=_record_business_id(employee),
+            payroll_month=month,
+        )
+        hours = _monthly_scheduled_hours((derived or {}).get("employment"))
+    raw_items = payload.get("deduction_items") or []
+    if not isinstance(raw_items, list) or not all(isinstance(item, dict) for item in raw_items):
+        raise HTTPException(status_code=400, detail="deduction_items 는 항목 목록이어야 합니다")
+    typed: dict[str, dict[str, Any]] = {}  # 계산식 입력값을 고친 항목: code → 요청 formula
+    prepared: list[dict[str, Any]] = []
+    for raw in raw_items:
+        if raw.get("source") == SETTLEMENT_SOURCE or raw.get("settlement_of_root_id"):
+            continue  # 정산 항목은 법정 공제 계산 대상이 아니다
+        item = {key: value for key, value in raw.items() if key not in {"formula", "note_manual"}}
+        formula = raw.get("formula")
+        if isinstance(formula, dict) and formula.get("edited"):
+            amount = formula_amount(formula.get("base"), formula.get("rate_pct"))
+            if amount is None:
+                raise HTTPException(status_code=400, detail="기준금액은 0 이상 정수, 요율은 0~100(%) 숫자여야 합니다")
+            # 관리자가 직접 쓴 메모(note_manual)는 자동 문구로 덮어쓰지 않는다. 판정은 화면이 보낸 표시만 쓴다(접두사 추측 금지).
+            written = bool(raw.get("note_manual")) and bool(str(raw.get("calc_note") or "").strip())
+            item.update(
+                amount=amount, source="manual",
+                calc_note=str(raw.get("calc_note")) if written else f"기준금액 {int(str(formula['base']).strip()):,}원 × {Decimal(str(formula['rate_pct']).strip()).normalize():f}%, 10원 미만 절사(관리자 수정)",
+            )
+            typed.setdefault(str(item.get("code")), {"base": int(str(formula["base"]).strip()), "rate_pct": float(formula["rate_pct"])})
+        prepared.append(item)
+    try:
+        current = normalize_payroll_items({"deduction_items": prepared}).get("deduction_items") or []
+    except PayrollItemError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    items, basis = apply_statutory_deductions(
+        current, month=month, taxable_pay=taxable, tax_family_count=payload.get("family", payload.get("tax_family_count")),
+        monthly_scheduled_hours=hours, trust_auto=True,
+    )
+    health = next((i for i in items if i["code"] == "health_insurance"), None)
+    formulas = formula_inputs(month, taxable, int(health["amount"]) if health else None)
+    out = []
+    for item in items:
+        row = dict(item)
+        row["needs_input"] = bool(row.get("needs_input")) and not row.get("confirmed")
+        row["calc_note"] = str(row.get("calc_note") or "")
+        shown = typed.get(row["code"]) if row.get("source") == "manual" and row["code"] in typed else formulas.get(row["code"])
+        if shown and not (hours is not None and row["code"] in {"national_pension", "health_insurance", "long_term_care"} and basis.get("short_time_exclusion")):
+            row["formula"] = shown
+        out.append(row)
+    sums = {name: sum(int(i["amount"]) for i in items if i["code"] in codes) for name, codes in (
+        ("tax_withholding", TAX_CODES), ("insurance_deduction", INSURANCE_CODES), ("other_deduction", OTHER_DEDUCTION_CODES))}
+    return {
+        "deduction_items": out, **sums, "total_deductions": sum(sums.values()),
+        "pending_codes": pending_input_codes(items), "monthly_scheduled_hours": None if hours is None else round(hours, 2),
+        "short_time_exclusion": bool(basis.get("short_time_exclusion")), "deduction_basis": basis,
+    }
 
 
 def _apply_statutory_payroll_deductions(

@@ -144,7 +144,7 @@
     const initialNotice = options.linkStatus === "ambiguous" ? AMBIGUOUS_LINK_TEXT : BLOCKED_TEXT;
     let selected = mustChoose ? "" : wantedId || idOf(employees[0]);
     let active = null, busy = false, generation = 0;
-    let pay = [], ded = [], work = {}, optOut = [], planTaxType = "";
+    let pay = [], ded = [], work = {}, optOut = [], planTaxType = "", familyCount = "", workMinutesBase = "";
     let reportStatus = "reported", unreportedReason = "", heldItems = [], heldRelease = "";
     const activeHeld = () => ({status:active?.report_status || "reported", reason:active?.unreported_reason || "", items:active?.held_items || [], release:active?.held_release_amount || 0});
     const heldNow = () => heldSnapshot(reportStatus, unreportedReason, heldItems, heldRelease);
@@ -184,12 +184,13 @@
     const isFreelancer = () => (active?.employment_tax_type || planTaxType || employee()?.current_employment?.employment_tax_type) === "freelancer_33";
     const inputValues = () => Object.fromEntries(amounts.map(([name]) => [name, form.elements[name].value]));
     const calcPayload = row => row.calc && row.calc.rate !== "" && row.calc.qty !== "" && row.calc.rate !== undefined && row.calc.qty !== undefined ? {rate:Number(row.calc.rate), qty:Number(row.calc.qty), unit:row.calc.unit || "hour"} : null;
-    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || "", calcPayload(row)]), d:d.map(row => [row.code, row.label, Number(row.amount)]),
+    const snapshot = (p, d, w) => JSON.stringify({p:p.map(row => [row.code, row.label, Number(row.amount), row.calc_note || "", calcPayload(row)]), d:d.map(row => [row.code, row.label, Number(row.amount), row.source || "", Boolean(row.confirmed), row.calc_note || ""]),
       w:workFields.map(([name]) => w[name] === undefined || w[name] === "" ? null : Number(w[name]))});
-    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut, held:{status:reportStatus, reason:unreportedReason, items:heldItems, release:heldRelease}})});
+    const remember = () => employee() && drafts.set(key(), {id:active?.id || "", ...inputValues(), pay_date:payDateInput.value, items:clone({pay, ded, work, optOut, familyCount, held:{status:reportStatus, reason:unreportedReason, items:heldItems, release:heldRelease}})});
     const dirty = () => amounts.some(([name]) => form.elements[name].value !== String(active?.[name] ?? ""))
       || payDateInput.value !== String(active?.pay_date ?? "")
       || snapshot(pay, ded, work) !== snapshot(active?.pay_items || [], active?.deduction_items || [], active?.work_summary || {})
+      || String(familyCount ?? "") !== String(active?.tax_family_count || "")
       || JSON.stringify(optOut) !== JSON.stringify(active?.settlement_opt_out || [])
       || heldNow() !== heldBaseline();
     const heldError = () => {
@@ -210,8 +211,9 @@
     const itemPayload = () => ({
       // 정산 항목은 서버가 버리고 다시 계산한다. 그래도 보내는 이유는 총지급액 칸에 포함된 금액을 서버가 빼기 위해서다.
       pay_items:pay.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), calc_note:row.calc_note || "", ...(calcPayload(row) ? {calc:calcPayload(row)} : {}), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
-      deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
+      deduction_items:ded.map(row => ({code:row.code, label:row.label, amount:Number(row.amount), ...(row.source === "auto" || row.source === "manual" ? {source:row.source} : {}), ...(row.confirmed ? {confirmed:true} : {}), ...(row.calc_note ? {calc_note:row.calc_note} : {}), ...(isSettlement(row) ? {settlement_of_root_id:row.settlement_of_root_id} : {})})),
       settlement_opt_out:optOut,
+      ...(familyCount !== "" && Number.isSafeInteger(Number(familyCount)) && Number(familyCount) >= 1 ? {tax_family_count:Number(familyCount)} : {}),
       ...heldPayload(),
       work_summary:Object.fromEntries(workFields.filter(([name]) => work[name] !== undefined && work[name] !== "").map(([name]) => [name, Number(work[name])]))
     });
@@ -243,12 +245,24 @@
         <label>단위<select class="field" style="min-height:44px" ${at} data-k="calc_unit">${CALC_UNITS.map(([unit, label]) => `<option value="${unit}"${unit === (c.unit || "hour") ? " selected" : ""}>${label}</option>`).join("")}</select></label>
         <small data-calc-flag="${index}" role="status">${esc(calcFlagText(row))}</small></div></td></tr>`;
     };
-    const ITEM_CSS = `<style data-payroll-item-style>@media (max-width:480px){.payroll-item-table{display:block;white-space:normal}.payroll-item-table thead{display:none}.payroll-item-table tbody{display:block}.payroll-item-table tbody tr.pi-row,.payroll-item-table tbody tr.pi-calc{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-top:1px solid #eef1f5;cursor:default}.payroll-item-table tr.pi-row>td,.payroll-item-table tr.pi-calc>td{display:block;border:0;padding:0;min-width:0;box-sizing:border-box}.payroll-item-table tr.pi-row>td.pi-code{flex:1 1 30%}.payroll-item-table tr.pi-row>td.pi-label{flex:1 1 40%}.payroll-item-table tr.pi-row>td.pi-del{flex:0 0 64px;order:3}.payroll-item-table tr.pi-row>td.pi-amount{flex:1 1 35%;order:4}.payroll-item-table tr.pi-row>td.pi-note{flex:1 1 55%;order:5}.payroll-item-table tr.pi-calc>td[colspan]{flex:1 1 100%;order:6}.payroll-item-table tr.pi-row>td.pi-code select,.payroll-item-table tr.pi-row>td.pi-label input,.payroll-item-table tr.pi-row>td.pi-amount input,.payroll-item-table tr.pi-row>td.pi-note input,.payroll-item-table tr.pi-row>td.pi-del .btn,.payroll-item-table tr.pi-calc input,.payroll-item-table tr.pi-calc select{width:100%;min-height:44px;min-width:44px;box-sizing:border-box}.payroll-item-table tr.pi-calc label{flex:1 1 90px}}</style>`;
-    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `${ITEM_CSS}<table class="payroll-item-table"><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th>${kind === "pay" ? "<th>계산방법</th>" : ""}<th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : kind === "pay" && isHeldLine(row) ? heldRowHtml(row) : `<tr class="pi-row">
+    // 공제 항목 '계산방법' 칸: 자동 문구(읽기 전용)·수동 배지·계산식 입력(기준금액·요율)·0원 확인·자동값으로 되돌리기.
+    // 요율과 계산은 서버가 한다 — 화면은 서버가 돌려준 기준금액·요율(%)을 보여 주고 고친 값을 미리보기 API 로 보낸다.
+    const isAutoRow = row => row.source === "auto";
+    const dedBadge = row => row.needs_input && !row.confirmed ? "확인 필요" : isAutoRow(row) ? "자동" : "수동";
+    const dedNoteCell = (row, index) => {
+      const at = `data-item="ded" data-i="${index}"`, f = row.formula, controls = [...insuranceCodes, ...taxCodes].includes(row.code) && !isFreelancer();
+      return `<td class="pi-note pi-ded"><input class="field" style="min-height:44px" aria-label="계산방법" ${at} data-k="calc_note" maxlength="200" placeholder="계산방법·메모" value="${esc(row.calc_note || "")}"${isAutoRow(row) ? " readonly" : ""}>
+        ${controls ? `<div class="pi-ded-ctl" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><small data-ded-badge="${index}" role="status">${dedBadge(row)}</small>
+        ${f ? `<label>기준금액(원)<input class="field" style="min-height:44px;min-width:110px" type="number" min="0" step="1" inputmode="numeric" ${at} data-k="f_base" value="${esc(f.base)}"></label><label>요율(%)<input class="field" style="min-height:44px;min-width:80px" type="number" min="0" max="100" step="any" inputmode="decimal" ${at} data-k="f_rate" value="${esc(f.rate_pct)}"></label>` : ""}
+        <label class="pi-chk" style="display:inline-flex;align-items:center;gap:4px;min-height:44px"><input type="checkbox" style="width:24px;height:24px;min-height:24px;min-width:24px" ${at} data-k="confirmed"${row.confirmed ? " checked" : ""}>0원 확인</label>
+        <button type="button" class="btn" style="min-height:44px;min-width:44px" data-ded-revert="${index}"${isAutoRow(row) ? " hidden" : ""}>자동값으로 되돌리기</button></div>` : ""}</td>`;
+    };
+    const ITEM_CSS = `<style data-payroll-item-style>@media (max-width:480px){.payroll-item-table{display:block;white-space:normal}.payroll-item-table thead{display:none}.payroll-item-table tbody{display:block}.payroll-item-table tbody tr.pi-row,.payroll-item-table tbody tr.pi-calc{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-top:1px solid #eef1f5;cursor:default}.payroll-item-table tr.pi-row>td,.payroll-item-table tr.pi-calc>td{display:block;border:0;padding:0;min-width:0;box-sizing:border-box}.payroll-item-table tr.pi-row>td.pi-code{flex:1 1 30%}.payroll-item-table tr.pi-row>td.pi-label{flex:1 1 40%}.payroll-item-table tr.pi-row>td.pi-del{flex:0 0 64px;order:3}.payroll-item-table tr.pi-row>td.pi-amount{flex:1 1 35%;order:4}.payroll-item-table tr.pi-row>td.pi-note{flex:1 1 55%;order:5}.payroll-item-table tr.pi-calc>td[colspan]{flex:1 1 100%;order:6}.payroll-item-table tr.pi-row>td.pi-code select,.payroll-item-table tr.pi-row>td.pi-label input,.payroll-item-table tr.pi-row>td.pi-amount input,.payroll-item-table tr.pi-row>td.pi-note input,.payroll-item-table tr.pi-row>td.pi-del .btn,.payroll-item-table tr.pi-calc input,.payroll-item-table tr.pi-calc select{width:100%;min-height:44px;min-width:44px;box-sizing:border-box}.payroll-item-table tr.pi-calc label{flex:1 1 90px}.payroll-item-table tr.pi-row>td.pi-note.pi-ded{flex:1 1 100%;order:5}.payroll-item-table tr.pi-row>td.pi-note button,.payroll-item-table tr.pi-row>td.pi-note label.pi-chk{min-height:44px;min-width:44px;box-sizing:border-box}.payroll-item-table tr.pi-row>td.pi-note .pi-ded-ctl input[type=number]{width:auto;flex:1 1 90px}}</style>`;
+    const itemTable = (kind, rows, codes, title) => `<h3>${title}</h3>${rows.length ? `${ITEM_CSS}<table class="payroll-item-table"><thead><tr><th>구분</th><th>항목명</th><th>금액(원)</th><th>계산방법</th><th></th></tr></thead><tbody>${rows.map((row, index) => isSettlement(row) ? settlementRowHtml(kind, row, isFactRow(row)) : kind === "pay" && isHeldLine(row) ? heldRowHtml(row) : `<tr class="pi-row">
       <td class="pi-code"><select class="field" style="min-height:44px" aria-label="구분" data-item="${kind}" data-i="${index}" data-k="code">${codes.map(([code, label]) => `<option value="${code}"${code === row.code ? " selected" : ""}>${label}</option>`).join("")}</select></td>
       <td class="pi-label"><input class="field" style="min-height:44px" aria-label="항목명" data-item="${kind}" data-i="${index}" data-k="label" maxlength="40" value="${esc(row.label)}"></td>
       <td class="pi-amount"><input class="field" style="min-height:44px" aria-label="금액(원)" type="number" min="0" step="1" data-item="${kind}" data-i="${index}" data-k="amount" value="${esc(row.amount)}"></td>
-      ${kind === "pay" ? `<td class="pi-note"><input class="field" style="min-height:44px" aria-label="계산방법" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : ""}
+      ${kind === "pay" ? `<td class="pi-note"><input class="field" style="min-height:44px" aria-label="계산방법" data-item="${kind}" data-i="${index}" data-k="calc_note" maxlength="200" placeholder="예: 시급 × 시간" value="${esc(row.calc_note || "")}"></td>` : dedNoteCell(row, index)}
       <td class="pi-del"><button type="button" class="btn" style="min-height:44px;min-width:44px" aria-label="삭제" data-item-del="${kind}" data-i="${index}">삭제</button></td></tr>${kind === "pay" ? calcRowHtml(kind, row, index) : ""}`).join("")}</tbody></table>` : "<p>항목 없음 — 위 합계 칸에 간편 입력할 수 있습니다.</p>"}
       <button type="button" class="btn" style="min-height:44px" data-item-add="${kind}">${kind === "pay" ? "지급 항목 추가" : "공제 항목 추가"}</button>`;
     const heldBalanceOf = () => {
@@ -281,12 +295,112 @@
         + heldSectionHtml()
         + (optOut.length ? `<p role="status">이번 달 제외한 전월 차액 ${optOut.length}건 · 다음 명세에 다시 반영됩니다. <button type="button" class="btn" style="min-height:44px" data-settle-restore="1">제외 해제</button></p>` : "")
         + (freelancer ? '<button type="button" class="btn" style="min-height:44px" data-item-tax="1">3.3% 자동 계산(소득세 3% · 지방소득세 0.3%)</button>' : "")
-        + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}</div>`;
+        + `<h3>근로일수 및 근로시간</h3><div class="toolbar">${workFields.map(([name, label]) => `<label>${label}<input class="field" style="min-height:44px" type="number" min="0" step="1" data-work-field="${name}" value="${esc(work[name] ?? "")}"></label>`).join("")}<label>공제대상가족(본인 포함, 명)<input class="field" style="min-height:44px" type="number" min="1" max="20" step="1" inputmode="numeric" data-family-field="1" value="${esc(familyCount)}"></label></div>`;
     };
     const refresh = () => {syncDerived(); remember(); totals(); restoreButtons();};
+    // ---- 공제 자동 재계산: 저장 없이 서버 미리보기를 호출해 수동이 아닌 공제 행만 갱신한다(요율·계산식은 서버 정본). ----
+    let previewTimer = null, previewSeq = 0;
+    const dedAmountsValid = () => ded.every(row => row.amount !== "" && row.amount !== undefined && Number.isSafeInteger(Number(row.amount)) && Number(row.amount) >= 0);
+    const previewEligible = () => Boolean(employee()) && !isFreelancer() && form.elements.taxable_pay.value !== "" && Number.isSafeInteger(Number(form.elements.taxable_pay.value)) && Number(form.elements.taxable_pay.value) >= 0;
+    const previewRow = row => ({code:row.code, label:row.label, amount:Number(row.amount) || 0, source:isAutoRow(row) ? "auto" : "manual", ...(row.confirmed ? {confirmed:true} : {}), ...(row.calc_note ? {calc_note:row.calc_note} : {}), ...(row.note_manual ? {note_manual:true} : {}),
+      ...(row.formula?.edited ? {formula:{base:row.formula.base, rate_pct:row.formula.rate_pct, edited:true}} : {})});
+    const focusedIn = () => typeof document !== "undefined" && document.activeElement && itemsHost.contains && itemsHost.contains(document.activeElement);
+    const syncDedRowUi = index => {
+      const row = ded[index], at = `[data-item="ded"][data-i="${index}"]`, find = selector => itemsHost.querySelector?.(selector);
+      if (!row) return;
+      const badge = find(`[data-ded-badge="${index}"]`), revert = find(`[data-ded-revert="${index}"]`), note = find(`${at}[data-k="calc_note"]`);
+      if (badge) badge.textContent = dedBadge(row);
+      if (revert) revert.hidden = isAutoRow(row);
+      if (note) {note.readOnly = isAutoRow(row); if (note !== (typeof document !== "undefined" ? document.activeElement : null)) note.value = row.calc_note || "";}
+      for (const [k, value] of [["amount", row.amount], ["f_base", row.formula?.base], ["f_rate", row.formula?.rate_pct]]) {
+        const box = find(`${at}[data-k="${k}"]`); if (box && value !== undefined && box !== (typeof document !== "undefined" ? document.activeElement : null)) box.value = value;
+      }
+      const check = find(`${at}[data-k="confirmed"]`); if (check) check.checked = Boolean(row.confirmed);
+    };
+    const dedSignature = rows => rows.map(row => [row.code, isSettlement(row) ? "s" : "d", Boolean(row.formula), [...insuranceCodes, ...taxCodes].includes(row.code)].join(":")).join("|");
+    // 행 편집 순번: 요청 시점의 rev 와 응답 적용 시점의 rev 가 다르면 그 행은 응답으로 덮어쓰지 않는다.
+    const bump = row => {row.rev = (row.rev || 0) + 1;};
+    const applyPreview = (result, sentRev, formulaOnly) => {
+      let stale = false;
+      const unchanged = row => sentRev.has(row) && sentRev.get(row) === (row.rev || 0);
+      const before = dedSignature(ded), mine = ded.filter(row => !isSettlement(row)), rest = ded.filter(isSettlement), used = new Set();
+      if (formulaOnly) {
+        for (const server of result.deduction_items || []) {
+          const row = mine.find(item => !used.has(item) && item.code === server.code);
+          if (row) {used.add(row); if (!unchanged(row)) stale = true; else if (server.formula) row.formula = server.formula;}
+        }
+        if (!focusedIn()) renderItems();
+        if (stale) schedulePreview();
+        return;
+      }
+      const next = (result.deduction_items || []).map(server => {
+        const row = mine.find(item => !used.has(item) && item.code === server.code);
+        if (!row) return {...server};
+        used.add(row);
+        if (!unchanged(row)) {stale = true; return row;}
+        if (isAutoRow(row) || row.formula?.edited) return {...server, ...(row.note_manual ? {note_manual:true} : {})};
+        // 수동 행은 덮어쓰지 않는다. 확인 대기 여부만 서버 판정을 따른다.
+        row.needs_input = Boolean(server.needs_input) && !row.confirmed;
+        return row;
+      });
+      ded = [...next, ...mine.filter(row => !used.has(row)), ...rest];
+      if (dedSignature(ded) !== before) renderItems();
+      else ded.forEach((_, index) => syncDedRowUi(index));
+      refresh();
+      if (stale) schedulePreview();
+    };
+    // 저장 직전에 최신 계산을 기다리기 위한 상태: 진행 중인 요청과 마지막 요청의 실패 여부.
+    let previewInflight = null, previewFailed = false;
+    const runPreview = (opts = {}) => {
+      const promise = doPreview(opts).finally(() => {if (previewInflight === promise) previewInflight = null;});
+      previewInflight = promise;
+      return promise;
+    };
+    const doPreview = async (opts = {}) => {
+      previewFailed = false;
+      if (!previewEligible() || !current() || !dedAmountsValid()) return;
+      const seq = ++previewSeq, gen = generation, sent = ded.filter(row => !isSettlement(row)), person = employee(), sentRev = new Map(sent.map(row => [row, row.rev || 0]));
+      const body = {payroll_month:month, taxable_pay:Number(form.elements.taxable_pay.value), employee_email:email(person), employee_request_id:person.id || "",
+        ...(familyCount !== "" ? {family:Number(familyCount)} : active?.tax_family_count ? {family:active.tax_family_count} : {}),
+        deduction_items:sent.map(previewRow)};
+      try {
+        const result = await api("/payroll/deductions/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+        // 늦게 도착한 이전 요청, 다른 직원·명세로 바뀐 뒤의 응답은 버린다.
+        if (!current() || seq !== previewSeq || gen !== generation || !result) return;
+        applyPreview(result, sentRev, opts.formulaOnly === true);
+      } catch (error) {
+        if (!opts.formulaOnly && current() && seq === previewSeq && gen === generation) {
+          previewFailed = true;
+          message.textContent = `공제 자동 계산을 하지 못했습니다: ${error.message}`;
+        }
+      }
+    };
+    // 저장 직전: 예약된 미리보기를 바로 실행하고 끝날 때까지 기다린다. 최신 계산을 얻지 못하면 저장하지 않는다.
+    const settlePreview = async () => {
+      for (let round = 0; round < 5; round++) {
+        if (previewTimer) {clearTimeout(previewTimer); previewTimer = null; await runPreview();}
+        else if (previewInflight) await previewInflight;
+        else break;
+      }
+      if (previewTimer || previewInflight) throw new Error("공제 자동 계산이 끝나지 않았습니다. 잠시 후 다시 저장하세요.");
+      if (previewFailed && previewEligible()) throw new Error("공제 자동 계산에 실패해 저장하지 않았습니다. 입력값을 확인하고 다시 시도하세요.");
+    };
+    const schedulePreview = (delay = 350) => {
+      previewSeq++;  // 이미 날아간 요청의 응답은 더 이상 유효하지 않다
+      clearTimeout(previewTimer);
+      previewTimer = null; previewFailed = false;
+      if (previewEligible()) previewTimer = setTimeout(() => {previewTimer = null; runPreview();}, delay);
+    };
+    // 공제 행의 수동 편집: 금액·계산식 입력·0원 확인은 그 행을 수동으로 바꾼다.
+    const dedEdit = (row, data, control) => {
+      if (data.k === "confirmed") {row.confirmed = control.checked; row.source = "manual"; if (row.confirmed) row.needs_input = false;}
+      else if (data.k === "amount") {row[data.k] = control.value; row.source = "manual"; if (row.formula) row.formula.edited = false;}  // 금액 직접 입력이 계산식 수정보다 나중이면 직접 입력값을 보존한다
+      else {row.formula = {...(row.formula || {}), [data.k === "f_base" ? "base" : "rate_pct"]:control.value, edited:true}; row.source = "manual";}
+    };
     itemsHost.oninput = event => {
       const control = event.target, data = control.dataset || {};
       if (data.workField) work[data.workField] = control.value;
+      else if (data.familyField !== undefined) familyCount = control.value;
       else if (data.heldField) {const row = heldItems[Number(data.hi)]; if (!row) return; row[data.heldField] = control.value;}
       else if (control.matches && control.matches("[data-report-reason]")) unreportedReason = control.value;
       else if (control.matches && control.matches("[data-held-release]")) heldRelease = control.value;
@@ -294,7 +408,10 @@
       else if (data.item) {
         const row = (data.item === "pay" ? pay : ded)[Number(data.i)];
         if (!row) return;
-        if (data.k.startsWith("calc_")) {
+        if (data.item === "ded") bump(row);
+        if (data.item === "ded" && ["f_base", "f_rate", "confirmed", "amount"].includes(data.k)) dedEdit(row, data, control);
+        else if (data.item === "ded" && data.k === "calc_note") {row.calc_note = control.value; row.note_manual = control.value.trim() !== "";}
+        else if (data.k.startsWith("calc_")) {
           const prev = row.calc && calcReady(row) ? calcNote(row.calc) : "";
           // 서버 자동 생성 문구("시급 N원 × 승인 근로 M분(…)")도 계산 칸에서 만든 문구로 보고 함께 갱신한다. 관리자가 직접 쓴 문구는 보존한다.
           const autoNote = note => !note || note === prev || AUTO_NOTE.test(note);
@@ -308,9 +425,12 @@
           if (amountBox) amountBox.value = row.amount; if (noteBox) noteBox.value = row.calc_note || "";
         } else row[data.k] = control.value;
         if (data.item === "pay") {const flag = itemsHost.querySelector?.(`[data-calc-flag="${data.i}"]`); if (flag) flag.textContent = calcFlagText(row);}
+        if (data.k === "code" && data.item === "ded") row.source = "manual";
         if (data.k === "code") {row.label = (((data.item === "pay" ? payCodes : dedCodes).find(([code]) => code === row.code)) || [])[1] || row.label; renderItems();}
       }
+      if (data.item === "ded") syncDedRowUi(Number(data.i));
       refresh();
+      if (data.familyField !== undefined || data.item === "pay" || (data.item === "ded" && data.k !== "calc_note" && data.k !== "label")) schedulePreview();
     };
     itemsHost.onchange = event => {
       const control = event.target;
@@ -387,6 +507,11 @@
       } else if (data.settleRestore) {
         optOut = [];
         message.textContent = "제외를 해제했습니다. 저장하면 남은 전월 차액이 다시 반영됩니다.";
+      } else if (data.dedRevert !== undefined) {
+        const row = ded[Number(data.dedRevert)];
+        if (!row) return;
+        bump(row); row.source = "auto"; row.confirmed = false; row.note_manual = false; if (row.formula) row.formula.edited = false;
+        renderItems(); refresh(); schedulePreview(0); return;
       } else if (data.itemDel) {
         (data.itemDel === "pay" ? pay : ded).splice(Number(data.i), 1);
       } else if (data.itemTax) {
@@ -397,6 +522,8 @@
         ded = [...ded.filter(row => !taxCodes.includes(row.code)), {code:"income_tax", label:"사업소득세(3%)", amount:tax.income}, {code:"local_income_tax", label:"지방소득세(0.3%)", amount:tax.local}];
       } else return;
       renderItems(); refresh();
+      // 행을 추가·삭제하면 날아가 있던 미리보기 응답은 낡았다 — schedulePreview 가 순번을 올려 버리게 하고 다시 예약한다.
+      if (data.itemAdd || data.itemDel || data.settleOff || data.settleRestore) schedulePreview();
     };
     const totals = () => {
       const values = inputValues();
@@ -425,9 +552,13 @@
       payDateInput.value = values.pay_date ?? "";
       const source = values.items || {pay:clone(active?.pay_items) || [], ded:clone(active?.deduction_items) || [], work:clone(active?.work_summary) || {}, optOut:clone(active?.settlement_opt_out) || []};
       pay = source.pay || []; ded = source.ded || []; work = source.work || {}; optOut = source.optOut || [];
+      ded.forEach(row => {if (row.source === "manual" && String(row.calc_note || "").trim() && row.note_manual === undefined) row.note_manual = true;});  // 저장된 수동 행의 메모는 관리자 글로 보존한다
+      familyCount = values.items && values.items.familyCount !== undefined ? String(values.items.familyCount ?? "") : active?.tax_family_count ? String(active.tax_family_count) : ""; workMinutesBase = work.work_minutes === undefined || work.work_minutes === "" ? "" : String(work.work_minutes);
       const held = source.held || {status:active?.report_status || "reported", reason:active?.unreported_reason || "", items:clone(active?.held_items) || [], release:active?.held_release_amount || ""};
       reportStatus = held.status === "unreported" ? "unreported" : "reported"; unreportedReason = held.reason || ""; heldItems = held.items || []; heldRelease = held.release ? String(held.release) : "";
       renderItems(); syncDerived();
+      clearTimeout(previewTimer); previewSeq++;
+      if (active?.id) runPreview({formulaOnly:true});
       host.querySelector("[data-payroll-state]").textContent = active
         ? `${month} · ${statusName(active.status)} · 버전 ${active.version || 1}${["confirmed", "paid"].includes(active.status) ? " · 수정 저장 시 새 초안 생성" : ""}`
         : `${month} · 새 초안`;
@@ -453,7 +584,7 @@
       picker.value = employee() ? selected : "";
       showNotices();
       if (!employee()) {
-        active = null; pay = []; ded = []; work = {}; optOut = [];
+        active = null; pay = []; ded = []; work = {}; optOut = []; familyCount = ""; workMinutesBase = "";
         reportStatus = "reported"; unreportedReason = ""; heldItems = []; heldRelease = "";
         statementPicker.innerHTML = '<option value="">새 초안 작성</option>';
         message.textContent = "";
@@ -481,12 +612,13 @@
     };
     picker.onchange = () => {remember();selected = picker.value;options.onSelect?.(selected);selectEmployee();};
     statementPicker.onchange = () => {remember();generation++;fill(ownStatements().find(row => row.id === statementPicker.value));};
-    form.oninput = () => {syncDerived();remember();totals();restoreButtons();};
+    form.oninput = event => {syncDerived();remember();totals();restoreButtons();if (event?.target && ["gross_pay", "taxable_pay", "non_tax_meal_allowance"].includes(event.target.name)) schedulePreview();};
     const execute = async operation => {
       if (busy || !employee()) return;
       busy = true;restoreButtons();message.textContent = "처리 중입니다.";
       const requestGeneration = generation;
       try {
+        if (previewTimer || previewInflight || previewFailed) await settlePreview();  // 대기 중인 계산이 없으면 지연 없이 진행
         await operation();
       } catch (error) {
         if (current() && requestGeneration === generation) message.textContent = error.message;

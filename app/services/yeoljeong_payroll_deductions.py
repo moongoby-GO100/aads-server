@@ -18,6 +18,7 @@ import csv
 import logging
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -164,7 +165,7 @@ def compute_statutory_items(
     else:
         # 순서: 과세급여 천원 미만 절사 → 상·하한 → 요율 → 10원 미만 절사. 기준소득월액은 천원 단위라
         # 과세 3,000,999원은 3,000,000원으로 본다. 절사 후 하한 아래가 되는 소액도 하한으로 올린다.
-        base = min(max(taxable // 1000 * 1000, bounds[0]), bounds[1]) if taxable > 0 else 0
+        base = _pension_base(taxable, bounds)
         result["national_pension"] = _item(
             "national_pension", _floor10(base * ppm // _PPM),
             f"기준소득월액 {base:,}원(과세급여 {taxable:,}원 천원 미만 절사, 상한 {bounds[1]:,}·하한 {bounds[0]:,}) × {ppm / 10_000:g}%, 10원 미만 절사",
@@ -286,14 +287,19 @@ def _prior_auto_amount(code: str, previous_basis: dict[str, Any] | None, legacy:
 
 def _is_unmodified_auto(
     item: dict[str, Any], code: str, previous_basis: dict[str, Any] | None, legacy: dict[str, dict[str, Any]],
-    *, fallback_amount: int | None = None,
+    *, fallback_amount: int | None = None, fresh_amount: int | None = None, trust_auto: bool = False,
 ) -> bool:
     """서버가 넣은 자동값 그대로인 항목인가. 금액을 고쳤거나 확인 표시가 있으면 관리자 입력이다.
 
     직전 자동값 기록이 없으면 fallback_amount(같은 code 대표 항목의 금액)와 같을 때만 사본으로 본다."""
     if item.get("source") != SOURCE_AUTO or item.get("confirmed"):
         return False
+    if trust_auto:
+        return True  # 미리보기: 화면이 금액을 고친 행은 source=manual 로 보낸다. auto 로 온 행은 직전 자동값(옛 금액)이어도 자동이다.
     amount = _int(item.get("amount"))
+    # 미리보기가 돌려준 자동값을 화면이 그대로 저장하면 금액이 현재 자동값과 같다 — 직전 저장값과 달라도 자동 항목이다.
+    if fresh_amount is not None and amount == fresh_amount:
+        return True
     if code in TAX_CODES and amount != 0:
         return False
     prior = _prior_auto_amount(code, previous_basis, legacy)
@@ -311,6 +317,7 @@ def apply_statutory_deductions(
     totals: dict[str, Any] | None = None,
     tax_family_count: Any = None,
     monthly_scheduled_hours: float | None = None,
+    trust_auto: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """공제 항목에 4대보험·소득세를 항목 단위로 채운다. (새 항목 목록, deduction_basis).
 
@@ -334,6 +341,13 @@ def apply_statutory_deductions(
     pending_before = (previous_basis or {}).get("pending_tax_amounts")
     pending_before = pending_before if isinstance(pending_before, dict) else {}
 
+    expected = {code: (None if entry.get("needs_input") else _int(entry.get("amount"))) for code, entry in fresh.items()}
+    first_health = next((i for i in items if i.get("code") == "health_insurance"), None)
+    if first_health is not None and not short_time and not _is_unmodified_auto(
+            first_health, "health_insurance", previous_basis, legacy, fresh_amount=expected.get("health_insurance"),
+            trust_auto=trust_auto):
+        # 건강보험이 관리자 값이면 자동 장기요양은 그 값 기준이다 — 미리보기가 돌려준 장기요양과 같은지 비교할 기준.
+        expected["long_term_care"] = long_term_care_item(month, _int(first_health.get("amount")))["amount"]
     kept: dict[str, dict[str, Any]] = {}
     auto_claimed: dict[str, int] = {}  # 첫 항목이 자동값이라 대표 자리를 자동으로 점유한 code → 그 항목의 금액
     others: list[dict[str, Any]] = []
@@ -351,7 +365,7 @@ def apply_statutory_deductions(
                     auto_claimed[code] if code in auto_claimed else _int(kept[code].get("amount")))):
                 extras.append(dict(item, source=SOURCE_MANUAL))
             continue
-        if _is_unmodified_auto(item, code, previous_basis, legacy):
+        if _is_unmodified_auto(item, code, previous_basis, legacy, fresh_amount=expected.get(code), trust_auto=trust_auto):
             auto_claimed[code] = _int(item.get("amount"))
             continue  # 아래에서 현재 과세급여로 다시 계산한다.
         manual = dict(item)
@@ -412,6 +426,40 @@ def apply_statutory_deductions(
     if replaced:
         basis["replaced_totals"] = replaced
     return merged + extras + others, basis
+
+
+def _pension_base(taxable: int, bounds: tuple[int, int]) -> int:
+    return min(max(taxable // 1000 * 1000, bounds[0]), bounds[1]) if taxable > 0 else 0
+
+
+def formula_inputs(month: str, taxable_pay: Any, health_amount: int | None = None) -> dict[str, dict[str, Any]]:
+    """보험 항목의 계산식 입력값(기준금액·요율%). 화면은 이 값을 보여 주고 고치면 서버 미리보기가 다시 계산한다."""
+    month = str(month or "").strip()
+    if not _MONTH_RE.fullmatch(month):
+        return {}
+    taxable = max(_int(taxable_pay), 0)
+    out: dict[str, dict[str, Any]] = {}
+    bounds = pension_bounds(month)
+    for code, base in (
+        ("national_pension", _pension_base(taxable, bounds) if bounds else None),
+        ("health_insurance", taxable), ("employment_insurance", taxable), ("long_term_care", health_amount),
+    ):
+        ppm = _lookup_rate(code, month)
+        if base is not None and ppm is not None:
+            out[code] = {"base": base, "rate_pct": ppm / 10_000}
+    return out
+
+
+def formula_amount(base: Any, rate_pct: Any) -> int | None:
+    """관리자가 고친 기준금액 × 요율(%) → 10원 미만 절사 금액. 형식이 틀리면 None. 요율은 서버만 해석한다."""
+    try:
+        base_int = int(str(base).strip())
+        rate = Decimal(str(rate_pct).strip())
+    except (ValueError, InvalidOperation):
+        return None
+    if base_int < 0 or not rate.is_finite() or rate < 0 or rate > 100:
+        return None
+    return _floor10(int(base_int * rate / 100))
 
 
 def pending_input_codes(deduction_items: list[dict[str, Any]] | None) -> list[str]:
