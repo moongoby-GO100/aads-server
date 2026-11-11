@@ -34,7 +34,7 @@ def test_allows_artifacts(path):
     assert _w("GO100", path) is None
 
 
-@pytest.mark.parametrize("project", ["AADS", "SF", "KIS"])
+@pytest.mark.parametrize("project", ["AADS", "SF", "NTV2"])
 def test_other_projects_pass(project):
     assert _w(project, "backend/app/main.py") is None
 
@@ -115,10 +115,21 @@ def test_chat_path_ticket_passes_gate(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("project", ["KIS", "kis", "자동매매"])
+@pytest.mark.parametrize("tool", ["write_remote_file", "patch_remote_file"])
+def test_chat_path_kis_alias_blocked(monkeypatch, tool, project):
+    ct, calls = _spy_ssh(monkeypatch)
+    params = {"project": project, "file_path": "backend/app/main.py", "content": "x",
+              "old_string": "a", "new_string": "b"}
+    out = asyncio.run(ct.execute_tool(tool, params, "postgresql://x"))
+    assert json.loads(out)["error"] == "go100_prod_tree_write_blocked"
+    assert calls == []
+
+
 def test_chat_path_other_project_not_blocked(monkeypatch):
     ct, calls = _spy_ssh(monkeypatch)
     asyncio.run(ct.execute_tool("write_remote_file", {
-        "project": "KIS", "file_path": "backend/app/probe.py", "content": "x"}, "postgresql://x"))
+        "project": "AADS", "file_path": "backend/app/probe.py", "content": "x"}, "postgresql://x"))
     assert len(calls) == 1
 
 
@@ -162,3 +173,52 @@ def test_tool_executor_path_blocked(monkeypatch, tool, path):
     assert reached == [tool]  # GO100 게이트까지 도달했다
     assert "go100_prod_tree_write_blocked" in text
     assert calls == []
+
+
+@pytest.mark.parametrize("project", ["KIS", "kis", "자동매매"])
+@pytest.mark.parametrize("tool", ["write_remote_file", "patch_remote_file"])
+def test_tool_executor_kis_alias_blocked(monkeypatch, tool, project):
+    from app.services.tool_executor import ToolExecutor
+    ct, calls = _spy_ssh(monkeypatch)
+    reached = _isolate_executor_gates(monkeypatch)
+    out = asyncio.run(ToolExecutor().execute(tool, {
+        "project": project, "file_path": "backend/app/main.py", "content": "x",
+        "old_string": "a", "new_string": "b"}))
+    text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+    assert "go100_prod_tree_write_blocked" in text
+    assert calls == []
+
+
+@pytest.mark.parametrize("project", ["KIS", "kis", "자동매매", "kis-autotrade", "GO100"])
+def test_kis_alias_blocks_code(project, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        for tool in ("write_remote_file", "patch_remote_file"):
+            out = json.loads(g.check(tool, {"project": project, "file_path": "backend/app/main.py"}))
+            assert out["error"] == "go100_prod_tree_write_blocked"
+            assert "GO100·KIS 공용 운영 폴더" in out["message"]
+    assert any(f"project={project}" in r.getMessage() for r in caplog.records)
+
+
+def test_kis_suspicious_path_blocked():
+    assert json.loads(_w("KIS", " /../backend/x.py"))["blocked"]
+
+
+def test_kis_artifacts_passes():
+    assert _w("KIS", "artifacts/x.json") is None
+
+
+def test_kis_ticket_passes_without_raw_in_log(monkeypatch, caplog):
+    import logging
+    monkeypatch.setenv("GO100_PROD_WRITE_TICKETS", "SECRET-T1")
+    with caplog.at_level(logging.WARNING):
+        assert _w("KIS", "backend/app/main.py", prod_write_ticket="SECRET-T1") is None
+    assert "SECRET-T1" not in caplog.text
+    assert "ticket_sha8=" in caplog.text
+
+
+def test_targets_prod_root_fallback_on_resolver_failure(monkeypatch):
+    import app.core.project_config as pc
+    monkeypatch.setattr(pc, "resolve_project", lambda v: (_ for _ in ()).throw(RuntimeError("x")))
+    assert g.targets_prod_root("KIS") and g.targets_prod_root("go100")
+    assert not g.targets_prod_root("AADS")

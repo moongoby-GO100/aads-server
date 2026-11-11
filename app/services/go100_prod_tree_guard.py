@@ -34,7 +34,7 @@ _TARGET_TOOLS = {"write_remote_file", "patch_remote_file"}
 _ALLOWED_PREFIXES = ("artifacts/", "logs/", "tmp/", ".cache/", "runtime/")
 
 BLOCK_MESSAGE = (
-    "GO100 운영 폴더 코드는 직접 수정할 수 없습니다(CEO 지시 2026-11-11). "
+    "GO100·KIS 공용 운영 폴더(/root/kis-autotrade-v4) 코드는 직접 수정할 수 없습니다(CEO 지시 2026-11-11). "
     "pipeline_runner_submit 으로 main 커밋→push→배포 시스템으로 반영하세요."
 )
 
@@ -70,6 +70,29 @@ def is_prod_tree_code_path(path: str) -> bool:
     return False
 
 
+_PROD_ALIAS_FALLBACK = {"go100", "kis", "백억이", "백억이투자분석", "자동매매", "kis-autotrade"}
+
+
+def targets_prod_root(project: Any) -> bool:
+    """project 값이 운영 폴더(PROD_ROOT)를 workdir 로 쓰는 프로젝트(GO100·KIS 공용)이면 True.
+
+    project_config 별칭 해석 후 PROJECT_MAP workdir 비교. 해석이 실패하면 GO100/KIS 별칭
+    문자열(대소문자 무시) 일치로 판정한다.
+    """
+    raw = str(project or "").strip()
+    if not raw:
+        return False
+    try:
+        from app.core.project_config import PROJECT_MAP, resolve_project
+
+        key = resolve_project(raw)
+        if key and key in PROJECT_MAP:
+            return posixpath.normpath(str(PROJECT_MAP[key].get("workdir") or "")) == PROD_ROOT
+    except Exception as exc:
+        logger.warning("go100_prod_tree_resolve_error project=%s error=%s", raw[:50], str(exc)[:200])
+    return raw.lower() in _PROD_ALIAS_FALLBACK
+
+
 def _tickets() -> set:
     return {t.strip() for t in os.getenv("GO100_PROD_WRITE_TICKETS", "").split(",") if t.strip()}
 
@@ -79,7 +102,7 @@ def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
     try:
         if tool_name not in _TARGET_TOOLS:
             return None
-        if str(tool_input.get("project") or "").strip().upper() != "GO100":
+        if not targets_prod_root(tool_input.get("project")):
             return None
         path = str(tool_input.get("file_path") or tool_input.get("path") or "")
         if not path:
@@ -90,10 +113,14 @@ def check(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:
         if ticket and ticket in _tickets():
             # 티켓 원문은 로그에 남기지 않는다 — sha256 앞 8자리만.
             logger.warning(
-                "go100_prod_tree_write_ticket_used tool=%s path=%s ticket_sha8=%s",
-                tool_name, path[:200], hashlib.sha256(ticket.encode()).hexdigest()[:8],
+                "go100_prod_tree_write_ticket_used tool=%s project=%s path=%s ticket_sha8=%s",
+                tool_name, str(tool_input.get("project"))[:50], path[:200], hashlib.sha256(ticket.encode()).hexdigest()[:8],
             )
             return None
+        logger.warning(
+            "go100_prod_tree_write_blocked tool=%s project=%s path=%s",
+            tool_name, str(tool_input.get("project"))[:50], path[:200],
+        )
         return json.dumps(
             {"error": "go100_prod_tree_write_blocked", "blocked": True, "message": BLOCK_MESSAGE},
             ensure_ascii=False,

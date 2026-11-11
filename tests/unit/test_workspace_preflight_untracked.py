@@ -9,6 +9,7 @@ from app.services import workspace_change_tracker as tracker
 
 @pytest.mark.parametrize('case', ['snapshot', 'command_delta', 'unknown', 'runtime', 'ignored', 'invalid', 'valid'])
 def test_finalize_ownership_and_config(monkeypatch, case):
+    # KIS 는 GO100 과 운영 폴더를 공유해 코드 경로가 R5B 로 차단된다 — 소유·설정 검증은 AADS 로 한다.
     path = 'var/ops/evidence/timer.json' if case == 'runtime' else 'config.json'
     row = {'file_path': path, 'source_tool': 'write_remote_file', 'git_status': '??'}
     if case == 'snapshot':
@@ -50,7 +51,7 @@ def test_finalize_ownership_and_config(monkeypatch, case):
     monkeypatch.setattr(tracker, '_sensitive_paths', sensitive)
     monkeypatch.setattr(tracker, 'git_project_lock', lock)
     result = asyncio.run(tracker._finalize_group(
-        session_id='session', project='KIS', repo='kis-autotrade-v4', rows=[row]))
+        session_id='session', project='AADS', repo='aads-server', rows=[row]))
     if case == 'invalid':
         assert not result['ok']
         assert result['skipped_invalid_config'] == [path]

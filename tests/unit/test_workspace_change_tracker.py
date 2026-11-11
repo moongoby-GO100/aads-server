@@ -198,6 +198,8 @@ def test_finalize_group_never_pushes_hardcoded_master():
 import asyncio
 from contextlib import asynccontextmanager
 
+import pytest
+
 
 class _FakeLedgerStore:
     def __init__(self, initial_rows=None):
@@ -430,14 +432,14 @@ def test_go100_preflight_finalize_blocks_deploy_command(monkeypatch):
 
 
 def test_kis_aads_groups_commit_as_before(monkeypatch):
-    """KIS·AADS 그룹: 기존대로 commit 함수가 호출되고 ok 값이 기존과 같음을 명시 assert. try/except 로 감싸지 않는다."""
+    """KIS(운영 폴더 코드가 아닌 artifacts/ 경로)·AADS 그룹: 기존대로 commit 함수가 호출되고 ok 값이 기존과 같음을 명시 assert. try/except 로 감싸지 않는다."""
     from app.services import workspace_change_tracker as tracker
 
     @asynccontextmanager
     async def fake_lock(*args, **kwargs):
         yield
 
-    for proj, repo, path in [("KIS", "kis-autotrade-v4", "strategy/bot.py"), ("AADS", "aads-server", "app/api/route.py")]:
+    for proj, repo, path in [("KIS", "kis-autotrade-v4", "artifacts/report.json"), ("AADS", "aads-server", "app/api/route.py")]:
         commands_called = []
         store = _FakeLedgerStore([
             {
@@ -493,3 +495,47 @@ def test_kis_aads_groups_commit_as_before(monkeypatch):
         assert any(cmd.startswith("git commit --only") for cmd in commands_called)
         assert any(cmd.startswith("git push origin") for cmd in commands_called)
         assert store.rows[0]["status"] == "pushed"
+
+
+def _run_kis_finalize(monkeypatch, project, status_out):
+    from app.services import workspace_change_tracker as tracker
+
+    store = _FakeLedgerStore([{
+        "session_id": "sess-kis-g", "project": project, "repo": "kis-autotrade-v4",
+        "file_path": "backend/app/main.py", "status": "dirty", "git_status": " M",
+    }])
+    commands_called = []
+
+    async def fake_run_git_command(p, repo, command):
+        commands_called.append(command)
+        return status_out if "status --porcelain" in command else ""
+
+    monkeypatch.setattr(tracker, "_run_git_command", fake_run_git_command)
+    monkeypatch.setattr(tracker, "list_changes", store.list_changes)
+    monkeypatch.setattr(tracker, "_mark_group", store.mark_group)
+    rows = asyncio.run(store.list_changes(session_id="sess-kis-g", project=project))
+    result = asyncio.run(tracker._finalize_group(
+        session_id="sess-kis-g", project=project, repo="kis-autotrade-v4", rows=rows))
+    return tracker, store, commands_called, result
+
+
+@pytest.mark.parametrize("project", ["KIS", "kis", "자동매매"])
+def test_kis_prod_tree_finalize_blocked(monkeypatch, project):
+    """project=KIS 별칭이어도 운영 폴더 코드 경로면 commit 없이 ok=False·dirty 유지."""
+    tracker, store, cmds, result = _run_kis_finalize(
+        monkeypatch, project, "[GO100 명령 실행 — exit=0]\n M backend/app/main.py\n")
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "go100_prod_tree_direct_edit"
+    assert not any(k in c for c in cmds for k in ("git add", "git commit", "git push"))
+    assert store.rows[0]["status"] == "dirty"
+    assert asyncio.run(tracker.has_pending_changes(session_id="sess-kis-g", project=project)) is True
+
+
+def test_kis_prod_tree_finalize_reconciled_clean(monkeypatch):
+    tracker, store, cmds, result = _run_kis_finalize(
+        monkeypatch, "KIS", "[GO100 명령 실행 — exit=0]\n$ git ...\n")
+    assert result["ok"] is True
+    assert result["status"] == "reconciled_clean"
+    assert not any(k in c for c in cmds for k in ("git add", "git commit", "git push"))
+    assert store.rows[0]["status"] == "reconciled_clean"

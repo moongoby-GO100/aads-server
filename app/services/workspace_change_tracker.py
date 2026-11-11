@@ -871,9 +871,10 @@ async def _finalize_group(
         PROD_ROOT,
         has_suspicious_chars,
         is_prod_tree_code_path,
+        targets_prod_root,
     )
 
-    is_go100 = str(project or "").strip().upper() == "GO100"
+    is_go100 = targets_prod_root(project)
     if is_go100 and all_ledger_paths and any(
         is_prod_tree_code_path(p) or has_suspicious_chars(p) for p in all_ledger_paths
     ):
