@@ -312,3 +312,24 @@ def test_review3_no_regex_blowup_on_large_input():
         out = redact_text(c)
         assert len(out) < len(c)
     assert time.monotonic() - started < 5.0
+
+
+# -- 병렬 재작업 runner-f31f9b00 반려 지적 3건 (d6c92a56 기준 재현, URL 작은따옴표 1건 수정) --
+Q4, DQ4, BS4 = chr(39), chr(34), chr(92)
+
+
+def test_review4_f31f9b00_findings():
+    # 1) 수량형 이름이라도 숫자가 아니면 가린다
+    for s in ("TOKEN_COUNT=fake", "SECRET_TYPE=fake"):
+        assert redact_text_counted(s) == (s.split("=")[0] + "=***", 1), s
+    assert redact_value({"TOKEN_COUNT": "fake", "SECRET_TYPE": "fake"}) == {"TOKEN_COUNT": "***", "SECRET_TYPE": "***"}
+    # 2) 직렬화된 값이 백슬래시 두 개로 끝남 (닫는 따옴표 앞 백슬래시 다섯 개)
+    raw = json.dumps({"stdout": "PASSWORD=" + DQ4 + "fake" + BS4 * 2 + DQ4 + " APP_PORT=8115"})
+    out = redact_text(raw)
+    assert "fake" not in out and json.loads(out)["stdout"] == "PASSWORD=" + DQ4 + "***" + DQ4 + " APP_PORT=8115"
+    # 3) URL 비밀번호 안의 작은따옴표
+    assert redact_text("postgresql://u:fake" + Q4 + "plain@host/db") == "postgresql://u:***@host/db"
+    assert "plain" not in redact_text("x postgresql://u:fake" + Q4 + "plain")
+    # 파이썬 repr 안의 URL 은 따옴표 밖을 먹지 않는다
+    rep = repr({"a": "postgresql://u:pw0@h/db", "b": "x"})
+    assert redact_text(rep) == rep.replace("pw0", "***")

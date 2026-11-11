@@ -38,16 +38,16 @@ _ALREADY = re.compile(r"(?i)^(?:\*+|\[redacted\]|<redacted>|\*+masked\*+)$")
 _MASKED_URL_VALUE = re.compile(r"^[A-Za-z][\w+.\-]*://[^\s@/]*:\*+@")
 
 _SCHEMES = r"(?:postgres(?:ql)?|mysql|mariadb|redis|rediss|amqps?|mongodb(?:\+srv)?|https?)"
-# scheme://user:PASSWORD@host — user 는 비어 있어도 됨, 비밀번호에 '@' 포함 허용
+# scheme://user:PASSWORD@host — user 는 비어 있어도 됨, 비밀번호에 '@'·작은따옴표 포함 허용 (runner-f31f9b00 리뷰: 옛 postgres 패턴도 가렸다)
 _URL_RE = re.compile(
-    r"(?i)\b(" + _SCHEMES + r"://)([^\s:/@'\"\\]*):([^\s/'\"\\]+)@"
+    r"(?i)\b(" + _SCHEMES + r"://)([^\s:/@'\"\\]*):([^\s/\"\\]+)@"
 )
 # 잘려서 '@' 가 없는 꼬리: scheme://user:pass<끝>.
 # 비밀번호 없는 URL 은 건드리지 않는다: 포트 숫자로 끝나거나 포트 뒤에 ?·# 가 오는 경우
 # (https://example.com:8443?x=1), IPv6 대괄호 호스트(https://[::1]:8443) — 3차 리뷰.
 # 한계: 숫자만으로 된 비밀번호가 '@' 직전에서 잘리면 포트와 구분할 수 없어 남는다.
 _URL_TAIL_RE = re.compile(
-    r"(?i)\b(" + _SCHEMES + r"://)([^\s:/@\[\]'\"\\]*):((?!\d*(?:[?#]|\Z))[^\s/@'\"\\]+)\Z"
+    r"(?i)\b(" + _SCHEMES + r"://)([^\s:/@\[\]'\"\\]*):((?!\d*(?:[?#]|\Z))[^\s/@\"\\]+)\Z"
 )
 
 _NAME = r"(?:--?)?[A-Za-z0-9_.\-]*" + _KEYWORDS + r"[A-Za-z0-9_.\-]*"
