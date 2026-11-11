@@ -2812,9 +2812,25 @@ async def _mockup_chat_gate(project: str, paths: list, *, message: str = "", dec
     return None, ""
 
 
+def _go100_prod_tree_block(tool_name: str, project: str, file_path: str, ticket: str = "") -> str:
+    """GO100 운영 폴더 직접 수정 차단(채팅·ToolExecutor 공통 지점). 차단이면 JSON 문자열, 아니면 ''."""
+    try:
+        from app.services.go100_prod_tree_guard import check as _go100_check
+
+        return _go100_check(
+            tool_name, {"project": project, "file_path": file_path, "prod_write_ticket": ticket}
+        ) or ""
+    except Exception as exc:  # 통과 쪽 실패
+        logger.warning("go100_prod_tree_gate_error tool=%s error=%s", tool_name, str(exc)[:200])
+        return ""
+
+
 async def tool_write_remote_file(project: str, file_path: str, content: str, backup: bool = True,
-                                 mockup_declaration: str = "") -> str:
+                                 mockup_declaration: str = "", prod_write_ticket: str = "") -> str:
     """원격 서버 파일 쓰기 (SSH, 자동 백업 포함). Yellow 등급. UI 파일이면 목업 승인 게이트(chat_write)를 거친다."""
+    _go100_blocked = _go100_prod_tree_block("write_remote_file", project, file_path, prod_write_ticket)
+    if _go100_blocked:
+        return _go100_blocked
     blocked, warning = await _mockup_chat_gate(project, [file_path], declaration=mockup_declaration)
     if blocked:
         return blocked
@@ -3047,9 +3063,12 @@ async def _read_raw_file(project: str, file_path: str) -> str:
 
 
 async def tool_patch_remote_file(project: str, file_path: str, old_string: str, new_string: str,
-                                 mockup_declaration: str = "") -> str:
+                                 mockup_declaration: str = "", prod_write_ticket: str = "") -> str:
     """원격 서버 파일 부분 수정 (diff 기반 패치). Yellow 등급.
     old_string을 찾아 new_string으로 교체. 정확히 1개만 매치되어야 함."""
+    _go100_blocked = _go100_prod_tree_block("patch_remote_file", project, file_path, prod_write_ticket)
+    if _go100_blocked:
+        return _go100_blocked
     project = project.upper()
     # 프로젝트 유효성 검사 (AADS 포함 — read/write가 내부에서 각각 로컬 처리)
     from app.core.project_config import PROJECT_MAP
@@ -7271,6 +7290,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("content", ""),
             params.get("backup", True),
             mockup_declaration=mockup_declaration_from_params(params),
+            prod_write_ticket=str(params.get("prod_write_ticket") or ""),
         )
     elif name == "patch_remote_file":
         return await tool_patch_remote_file(
@@ -7279,6 +7299,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             params.get("old_string", ""),
             params.get("new_string", ""),
             mockup_declaration=mockup_declaration_from_params(params),
+            prod_write_ticket=str(params.get("prod_write_ticket") or ""),
         )
     elif name == "run_remote_command":
         return await tool_run_remote_command(

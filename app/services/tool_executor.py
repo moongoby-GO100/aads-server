@@ -995,6 +995,19 @@ class ToolExecutor:
                     tool_name, str(_dir_err)[:200],
                 )
 
+            # GO100 운영 폴더 직접 수정 차단 (CEO 지시 2026-11-11). 통과 쪽 실패.
+            try:
+                from app.services.go100_prod_tree_guard import check as _go100_check
+
+                _go100_blocked = _go100_check(tool_name, tool_input)
+                if _go100_blocked:
+                    return _go100_blocked
+            except Exception as _go100_err:
+                logger.warning(
+                    "go100_prod_tree_gate_error tool=%s error=%s",
+                    tool_name, str(_go100_err)[:200],
+                )
+
             # tenant_id 는 위(게이트 앞)에서 이미 해석했다.
             # ACCT 프로젝트의 tenant_id는 정수("7" 등) — AADS UUID tenant와 다르다.
             # check_tenant_usage_limit은 AADS tenants.id(UUID)를 받으므로
@@ -2526,7 +2539,10 @@ class ToolExecutor:
             return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_write_remote_file
-            result = await tool_write_remote_file(project, file_path, content, backup)
+            result = await tool_write_remote_file(
+                project, file_path, content, backup,
+                prod_write_ticket=str(inp.get("prod_write_ticket") or ""),
+            )
             # 자동 후처리: ledger 기록 + hot-reload + CHANGELOG (잠금 범위 내 포함)
             try:
                 repo = self._default_repo_for_project(project, file_path)
@@ -2574,7 +2590,10 @@ class ToolExecutor:
             return {"error": f"파일 잠금 획득 실패(30초 초과): {file_path} — 다른 세션이 수정 중일 수 있습니다"}
         try:
             from app.api.ceo_chat_tools import tool_patch_remote_file
-            result = await tool_patch_remote_file(project, file_path, old_string, new_string)
+            result = await tool_patch_remote_file(
+                project, file_path, old_string, new_string,
+                prod_write_ticket=str(inp.get("prod_write_ticket") or ""),
+            )
             # 자동 후처리: ledger 기록 + hot-reload + CHANGELOG (잠금 범위 내 포함)
             try:
                 summary = f"patch: {str(old_string)[:40]}→{str(new_string)[:40]}"
