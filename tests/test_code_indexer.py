@@ -216,7 +216,6 @@ class TestDummyEmbedding:
     @pytest.mark.asyncio
     async def test_embed_texts_without_api_key(self):
         """GEMINI_API_KEY 없을 때 dummy 임베딩 반환 확인."""
-        import os
         original = os.environ.pop("GEMINI_API_KEY", None)
         os.environ.pop("GOOGLE_API_KEY", None)
         try:

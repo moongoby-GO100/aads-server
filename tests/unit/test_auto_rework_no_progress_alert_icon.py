@@ -1,7 +1,10 @@
 """중단·검토 요청은 실패 대신 경고 아이콘으로 저장한다."""
 import pytest
 
-from tests.unit.test_auto_rework_no_progress_alert import JOB, alert  # noqa: F401
+from tests.unit import test_auto_rework_no_progress_alert as _base
+
+JOB = _base.JOB
+alert = _base.alert
 
 
 @pytest.mark.asyncio

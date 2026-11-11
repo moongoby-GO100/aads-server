@@ -8,9 +8,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_pipeline_runner_checkpoint_save import (  # noqa: E402,F401
-    LOCAL, SH, _dirty, _read, _run, job,
-)
+import test_pipeline_runner_checkpoint_save as _base  # noqa: E402
+
+LOCAL = _base.LOCAL
+SH = _base.SH
+_dirty = _base._dirty
+_read = _base._read
+_run = _base._run
+job = _base.job
 
 PRUNE = "aads_pipeline_job_checkpoints_purge_terminal(), aads_pipeline_job_checkpoints_prune(interval '7 days')"
 
