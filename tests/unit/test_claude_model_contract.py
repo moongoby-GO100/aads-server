@@ -47,11 +47,20 @@ def test_direct_execution_sdk_uses_pinned_authenticated_container_cli(monkeypatc
 
 @pytest.mark.parametrize("requested,expected", list(AADS_MODEL_IDS.items()) + [
     ("claude-fable-5.1", "claude-fable-5-1"),
+    ("claude-fable-5.2", "claude-fable-5-2"),
+    ("claude-haiku-5.5", "claude-haiku-5-5"),
     ("opus", "claude-opus-5-5"), ("sonnet", "claude-sonnet-5-5"),
 ])
 def test_settings_to_exact_cli_model(requested, expected):
     assert resolve_model(requested) == expected
     assert resolve_model(runtime_alias(requested)) == expected
+
+
+def test_claude_haiku_55_contract_resolution():
+    assert resolve_model("claude-haiku-5-5") == "claude-haiku-5-5"
+    assert resolve_model("claude-haiku-5.5") == "claude-haiku-5-5"
+    assert resolve_model("claude-haiku") == "claude-haiku-4-5-20251001"
+    assert runtime_alias("claude-haiku-5-5") == "claude-haiku-5-5"
 
 
 @pytest.mark.parametrize("model", sorted(EXACT_MODEL_IDS))
