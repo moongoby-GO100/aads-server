@@ -46,6 +46,20 @@ def _change_set_body_hash(target_id: str, payload: Mapping[str, Any]) -> str:
     return canonical_hash({"target_id": target_id, "body": body})
 
 
+DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS = 14
+
+
+def goal_workflow_approval_ttl_days() -> int:
+    raw = os.getenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS")
+    if raw is None or not raw.strip():
+        return DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS
+    try:
+        val = int(raw.strip())
+        return val if val > 0 else DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS
+    except (ValueError, TypeError):
+        return DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS
+
+
 def _require_enabled() -> None:
     if not workflow_approval_enabled():
         raise _error(404, "goal_workflow_approval_disabled")
@@ -160,6 +174,7 @@ async def route_change_set(
         routes = ["ceo", "independent_reviewer"] if row["risk_tier"] == "A3" else ["project_lead"]
     else:
         routes = list(routes)
+    ttl_days = goal_workflow_approval_ttl_days()
     approvals: list[str] = []
     for route in routes:
         approval = await conn.fetchrow(
@@ -172,9 +187,9 @@ async def route_change_set(
             approval = await conn.fetchrow(
         """INSERT INTO agent_permission_requests
            (tenant_id,work_key,origin,action_type,action_summary,risk_level,decision,
-            requested_by,approval_scope,max_executions,gate_source,tier)
+            requested_by,approval_scope,max_executions,gate_source,tier,expires_at)
            VALUES($1::uuid,$2,'goal_workflow',$3,$4,$5,'pending',$6,$7::jsonb,1,
-                  'goal_workflow','approve') RETURNING id::text""",
+                  'goal_workflow','approve',now() + make_interval(days => $8::int)) RETURNING id::text""",
         tenant_id, f"goal-workflow:{change_set_id}:{route}", row["action"],
         f"{row['target_type']} {row['target_id']}", str(row["risk_tier"]).lower(),
         str(row["requested_by"]), json.dumps({
@@ -184,6 +199,7 @@ async def route_change_set(
             "required_role": route,
             "bulk_allowed": row["risk_tier"] != "A3",
         }),
+        ttl_days,
             )
         approvals.append(str(approval["id"]))
         await conn.execute(

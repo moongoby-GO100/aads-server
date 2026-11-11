@@ -14,11 +14,13 @@ from app.core.goal_work_hierarchy_policy import (
 )
 from app.services.goal_work_hierarchy import ActorScope
 from app.services.goal_workflow_approval import (
+    DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS,
     _apply_internal_patch,
     _change_set_body_hash,
     approval_preview,
     canonical_hash,
     decide_change_set,
+    goal_workflow_approval_ttl_days,
     preview_grant,
     request_outbox_retry,
     route_change_set,
@@ -504,3 +506,67 @@ def test_goal_progress_normalize_migration_is_idempotent_and_non_destructive():
     sql = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("--")).upper()
     assert "WHERE PROGRESS > 1" in sql
     assert "DROP " not in sql and "TRUNCATE" not in sql and "DELETE" not in sql
+
+
+class RouteInsertConn:
+    def __init__(self, project: str = "AADS", risk: str = "A2"):
+        self.change_set = {
+            "id": CHANGE, "tenant_id": TENANT, "project": project, "risk_tier": risk,
+            "action": "update", "target_type": "work_item", "target_id": GOAL,
+            "base_version": 1, "patch_hash": "sha256:" + "b" * 64,
+            "requested_by": SESSION, "approval_request_id": None,
+        }
+        self.permission_inserts: list[tuple[str, Any]] = []
+        self.route_inserts: list[tuple[str, Any]] = []
+        self.updates: list[tuple[str, Any]] = []
+
+    async def fetchrow(self, sql, *args):
+        if "FROM work_item_change_sets" in sql:
+            return self.change_set
+        if "FROM agent_permission_requests" in sql:
+            return None
+        if "INSERT INTO agent_permission_requests" in sql:
+            self.permission_inserts.append((sql, args))
+            return {"id": "req-new-1"}
+        return None
+
+    async def execute(self, sql, *args):
+        if "INSERT INTO work_item_change_set_approval_routes" in sql:
+            self.route_inserts.append((sql, args))
+        elif "UPDATE work_item_change_sets" in sql:
+            self.updates.append((sql, args))
+        return "INSERT 0 1"
+
+
+def test_route_change_set_sets_expires_at_by_default_ttl(monkeypatch):
+    monkeypatch.delenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS", raising=False)
+    conn = RouteInsertConn()
+    res = asyncio.run(route_change_set(conn, tenant_id=TENANT, change_set_id=CHANGE, actor=actor()))
+    assert res["approval_request_id"] == "req-new-1"
+    assert len(conn.permission_inserts) == 1
+    sql, args = conn.permission_inserts[0]
+    assert "expires_at" in sql
+    assert "make_interval(days => $8::int)" in sql
+    assert args[-1] == 14
+    assert DEFAULT_GOAL_WORKFLOW_APPROVAL_TTL_DAYS == 14
+
+
+def test_route_change_set_sets_expires_at_by_custom_env_ttl(monkeypatch):
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS", "30")
+    conn = RouteInsertConn()
+    res = asyncio.run(route_change_set(conn, tenant_id=TENANT, change_set_id=CHANGE, actor=actor()))
+    assert res["approval_request_id"] == "req-new-1"
+    assert len(conn.permission_inserts) == 1
+    sql, args = conn.permission_inserts[0]
+    assert "expires_at" in sql
+    assert "make_interval(days => $8::int)" in sql
+    assert args[-1] == 30
+
+
+def test_goal_workflow_approval_ttl_days_fallback(monkeypatch):
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS", "invalid")
+    assert goal_workflow_approval_ttl_days() == 14
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS", "-5")
+    assert goal_workflow_approval_ttl_days() == 14
+    monkeypatch.setenv("GOAL_WORKFLOW_APPROVAL_TTL_DAYS", "21")
+    assert goal_workflow_approval_ttl_days() == 21

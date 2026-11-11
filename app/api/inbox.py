@@ -96,13 +96,14 @@ class Item:
     read: bool = False
     link: str = ""
     in_action: bool = False
+    is_expired: bool = False
 
     def tabs(self) -> tuple[str, ...]:
         return (self.home_tab, "action") if self.in_action and self.home_tab != "action" else (self.home_tab,)
 
     def public(self, tab: str) -> dict[str, Any]:
         actions = ["open"] if self.read else ["open", "read"]
-        return {
+        payload = {
             "source": self.source,
             "source_id": self.source_id,
             "tab": tab,
@@ -116,6 +117,10 @@ class Item:
             "link": self.link,
             "actions": actions,
         }
+        if self.is_expired:
+            payload["is_expired"] = True
+            payload["expired"] = True
+        return payload
 
 
 @dataclass
@@ -178,6 +183,12 @@ def _clip(text: Any, limit: int = 160) -> str:
 def _as_dt(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=KST)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt if dt.tzinfo else dt.replace(tzinfo=KST)
+        except (ValueError, TypeError):
+            pass
     return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
@@ -394,7 +405,7 @@ async def load_alerts(pool: Any, ctx: Ctx) -> SourceResult:
 
 _PERMISSION_SELECT = (
     "SELECT r.id::text AS id, r.action_type, r.action_summary, r.risk_level, r.gate_source, "
-    "       r.decision, r.created_at, w.project_key AS project "
+    "       r.decision, r.created_at, r.expires_at, w.project_key AS project "
     "FROM agent_permission_requests r "
     "LEFT JOIN chat_sessions cs ON cs.id::text = r.requested_by "
     "LEFT JOIN chat_workspaces w ON w.id = cs.workspace_id "
@@ -404,7 +415,8 @@ _PERMISSION_SELECT = (
 async def load_approvals(pool: Any, ctx: Ctx) -> SourceResult:
     rows = await pool.fetch(
         _PERMISSION_SELECT
-        + "WHERE r.tenant_id=$1::uuid AND r.tier='approve' AND r.decision='pending' AND r.expires_at > now() "
+        + "WHERE r.tenant_id=$1::uuid AND r.tier='approve' AND r.decision='pending' "
+        "  AND (r.expires_at > now() OR r.gate_source = 'goal_workflow') "
         "  AND r.created_at > now() - make_interval(days => $2) "
         "ORDER BY r.created_at ASC LIMIT $3",
         ctx.tenant_id, APPROVAL_WINDOW_DAYS, APPROVAL_ROW_CAP,
@@ -412,6 +424,11 @@ async def load_approvals(pool: Any, ctx: Ctx) -> SourceResult:
     marks = await _read_marks(pool, ctx, "approval", [r["id"] for r in rows])
     items = []
     for r in rows:
+        gate_source = str(r.get("gate_source") or "")
+        expires_at = _as_dt(r["expires_at"]) if r.get("expires_at") else None
+        is_expired = bool(expires_at and expires_at <= ctx.now)
+        if is_expired and gate_source != "goal_workflow":
+            continue
         created = _as_dt(r["created_at"])
         mark = marks.get(r["id"])
         items.append(Item(
@@ -425,6 +442,7 @@ async def load_approvals(pool: Any, ctx: Ctx) -> SourceResult:
             occurred_at=created,
             read=mark is not None,
             link=f"/approvals?focus={r['id']}",
+            is_expired=is_expired,
         ))
     return SourceResult(items=items)
 

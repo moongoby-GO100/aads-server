@@ -524,3 +524,78 @@ def test_ohvis_request_rows_follow_head_state(pool, monkeypatch):
     read = {i.source_id: i.read for i in res.items}
     assert read == {"11": True, "12": True, "13": False, "14": True,
                     "15": False, "16": False, "17": False, "18": True}
+
+
+def test_inbox_displays_expired_goal_workflow_pending_with_expired_indicator(pool, monkeypatch):
+    c = make_client(pool, monkeypatch)
+    expired_gw_id = "44444444-4444-4444-8444-444444444444"
+    unexpired_gw_id = "66666666-6666-4666-8666-666666666666"
+    pool.approvals.append({
+        "id": expired_gw_id,
+        "action_type": "update_work_item",
+        "action_summary": "목표 작업안 승인 요청 (만료건)\n세부사항",
+        "risk_level": "medium",
+        "gate_source": "goal_workflow",
+        "decision": "pending",
+        "created_at": ago(days=15),
+        "expires_at": ago(days=1),
+        "project": "AADS",
+    })
+    pool.approvals.append({
+        "id": unexpired_gw_id,
+        "action_type": "update_work_item",
+        "action_summary": "목표 작업안 승인 요청 (유효건)\n세부사항",
+        "risk_level": "low",
+        "gate_source": "goal_workflow",
+        "decision": "pending",
+        "created_at": ago(hours=1),
+        "expires_at": NOW + timedelta(days=13),
+        "project": "AADS",
+    })
+
+    res = c.get("/api/v1/inbox", params={"tab": "action"})
+    assert res.status_code == 200
+    items = res.json()["items"]
+
+    # 만료된 goal_workflow 건 노출 및 만료 표시 필드 확인
+    expired_item = next((i for i in items if i["source"] == "approval" and i["source_id"] == expired_gw_id), None)
+    assert expired_item is not None, "만료된 goal_workflow pending 건이 인박스에 노출되어야 합니다"
+    assert expired_item["is_expired"] is True
+    assert expired_item["expired"] is True
+    # 기존 응답 필드 보존 확인
+    assert expired_item["source"] == "approval"
+    assert expired_item["tab"] == "action"
+    assert expired_item["title"] == "목표 작업안 승인 요청 (만료건)"
+    assert expired_item["link"] == f"/approvals?focus={expired_gw_id}"
+
+    # 유효한 goal_workflow 건 확인 (만료 플래그 없음)
+    unexpired_item = next((i for i in items if i["source"] == "approval" and i["source_id"] == unexpired_gw_id), None)
+    assert unexpired_item is not None
+    assert unexpired_item.get("is_expired") is not True
+
+
+def test_inbox_hides_expired_other_gate_sources(pool, monkeypatch):
+    c = make_client(pool, monkeypatch)
+    expired_other_id = "55555555-5555-4555-8555-555555555555"
+    pool.approvals.append({
+        "id": expired_other_id,
+        "action_type": "run_remote_command",
+        "action_summary": "실매매 가드 승인 요청",
+        "risk_level": "high",
+        "gate_source": "live_trading",
+        "decision": "pending",
+        "created_at": ago(hours=2),
+        "expires_at": ago(hours=1),
+        "project": "GO100",
+    })
+
+    res = c.get("/api/v1/inbox", params={"tab": "action"})
+    assert res.status_code == 200
+    items = res.json()["items"]
+    target = next((i for i in items if i["source"] == "approval" and i["source_id"] == expired_other_id), None)
+    assert target is None, "goal_workflow가 아닌 다른 gate_source의 만료 건은 숨겨져야 합니다"
+
+    # SQL 쿼리 조건 검증
+    approval_sqls = [s for s in pool.sql if "FROM agent_permission_requests r" in s and "tier='approve'" in s]
+    assert approval_sqls, "승인 목록 조회 SQL이 실행되어야 합니다"
+    assert "(r.expires_at > now() OR r.gate_source = 'goal_workflow')" in approval_sqls[-1]
