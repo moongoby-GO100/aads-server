@@ -1043,7 +1043,7 @@ def _response_mode_prompt_block(response_mode: str) -> str:
             "읽기 전용 조회 도구만 사용할 수 있고 그 외 호출은 서버가 차단한다.\n"
             "- 실행이 필요한 단계는 '실행 단계'로 적어 두고, 사용자가 상단 모드를 바꾼 뒤 "
             "진행하도록 안내한다. 승인 카드·제안 카드·후속 실행 지시를 만들지 않는다.\n"
-            "- 답변은 목표, 현재 상태(조회 근거), 단계별 계획, 위험, 검증 기준 순으로 정리한다."
+            "- 답변은 목표, 현재 상태(조회 근거), 단계별 계획, **권장안 및 권장 사유(선정 근거·기대효과·리스크 비교)**, 위험, 검증 기준 순으로 정리한다."
         )
     if response_mode == _RESPONSE_MODE_FAST:
         return (
@@ -1051,7 +1051,7 @@ def _response_mode_prompt_block(response_mode: str) -> str:
             "- 목표: 가능한 한 빨리 최종 응답을 완료한다.\n"
             "- 필수 실측/수정/배포 지시가 아닌 경우 외부 도구 사용을 최소화한다.\n"
             "- 불확실한 항목은 '미검증'으로 표시하고, 장시간 조사는 후속 작업으로 분리한다.\n"
-            "- 답변 마지막에는 커밋/푸시/배포/문서/미완료 상태를 짧게 명시한다."
+            "- 후속 조치나 대안이 있을 때는 **권장안**과 **권장 사유**를 함께 명시하고, 마지막에는 커밋/푸시/배포/문서/미완료 상태를 짧게 명시한다."
         )
     return (
         "\n\n[응답 모드: quality]\n"
@@ -1059,7 +1059,8 @@ def _response_mode_prompt_block(response_mode: str) -> str:
         "- 코드/DB/배포/운영 조치가 있으면 실제 검증 결과와 남은 미완료 항목을 반드시 분리해 보고한다.\n"
         "- 중간 보고로 끝내지 말고 가능한 확인, 조치, 검증을 이어서 수행한다."
         "\n- CEO가 문제점/개선안/연구/전수검수를 요청한 경우 3문장 안팎의 단답으로 끝내지 말고, "
-        "요약, 원인/근거, 조치/개선안, 검증 기준을 자연스러운 최종 보고로 작성한다."
+        "요약, 원인/근거, 조치/개선안, **권장안 및 권장 사유(왜 이 방안이 최적인지 근거·기대효과·리스크 비교)**, 검증 기준을 자연스러운 최종 보고로 작성한다."
+        "\n- 모든 보고·분석·진단·제안 응답에서는 반드시 **권장안(또는 권장 조치)**과 **권장 사유**를 빠짐없이 함께 제시한다."
         "\n- 도구 호출 예정 안내나 진행 중 문장을 최종 답변처럼 끝내지 않는다. "
         "실제 결과가 없으면 미검증/미완료와 다음 검증 경로를 명확히 분리한다."
     )
@@ -3769,6 +3770,208 @@ _PROGRESS_STRIP_RE = re.compile(
 )
 
 
+_GLUED_SENTENCE_BOUNDARY_RE = re.compile(
+    r'((?:다|요|음|함|됨|임)\.)(?=[가-힣"✅⚠️❌🔄#])'
+)
+_GLUED_CONCLUSION_LEAD_RE = re.compile(
+    r'((?:다|요|음|함|됨|임)[.!])[ \t]+(?=(?:✅|⚠️|❌|🔄)\s*\*\*|#{1,4}\s)'
+)
+_CONCLUSION_START_RE = re.compile(
+    r'^(?:(?:✅|⚠️|❌|🔄)\s*|#{1,4}\s+|\*\*\[?(?:결론|요약|핵심|판정)|1\.\s*\*\*(?:결론|요약|수행))'
+)
+_PRE_TOOL_NARRATION_HINT_RE = re.compile(
+    r'(?:하겠습니다|드리겠습니다|확인합니다|진행합니다|조회합니다|살펴보겠습니다|'
+    r'대조하겠습니다|점검하겠습니다|파악하겠습니다|분석하겠습니다|분리하겠습니다|'
+    r'대조해야\s*합니다|확인됐습니다|필요합니다|하지\s*않습니다)\s*[.!]?\s*$'
+)
+
+
+def _normalize_glued_paragraph_breaks(text: str) -> str:
+    if not text:
+        return ""
+    normalized = _GLUED_SENTENCE_BOUNDARY_RE.sub(r'\1\n\n', text)
+    normalized = _GLUED_CONCLUSION_LEAD_RE.sub(r'\1\n\n', normalized)
+    return normalized
+
+
+def _separate_pre_tool_narration(
+    content: str,
+    thinking_summary: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
+    """도구 호출 단계마다 누적된 상단 중간 진행 독백(Pre-tool narration)을 본문에서 분리해
+    thinking_summary(사고 과정/진행 경과 접기 영역)로 이동시키고, 본문 첫 줄에 핵심 결론과 표가 바로 노출되게 한다.
+    """
+    if not content or not _preserve_realtime_response_enabled():
+        return content, thinking_summary
+    normalized = _normalize_glued_paragraph_breaks(content).strip()
+    if not normalized:
+        return content, thinking_summary
+
+    lines = normalized.splitlines()
+    conclusion_line_idx: Optional[int] = None
+    for idx, raw_line in enumerate(lines):
+        if idx == 0:
+            continue
+        stripped_line = raw_line.strip()
+        if not stripped_line:
+            continue
+        if _CONCLUSION_START_RE.match(stripped_line):
+            conclusion_line_idx = idx
+            break
+
+    if conclusion_line_idx is None:
+        return normalized, thinking_summary
+
+    leading_text = "\n".join(lines[:conclusion_line_idx]).strip()
+    main_body = "\n".join(lines[conclusion_line_idx:]).strip()
+    if not leading_text or len(main_body) < 80 or len(leading_text) > 1200:
+        return normalized, thinking_summary
+    if "```" in leading_text or "|---" in leading_text or "| ---" in leading_text:
+        return normalized, thinking_summary
+
+    leading_paras = [p.strip() for p in re.split(r'\n\s*\n', leading_text) if p.strip()]
+    if not leading_paras or len(leading_paras) > 5:
+        return normalized, thinking_summary
+    if not any(_PRE_TOOL_NARRATION_HINT_RE.search(p) for p in leading_paras):
+        return normalized, thinking_summary
+
+    narration_block = "[진행 경과]\n" + "\n".join(f"- {p}" for p in leading_paras)
+    if thinking_summary and thinking_summary.strip():
+        if narration_block not in thinking_summary:
+            merged_thinking = f"{narration_block}\n\n{thinking_summary.strip()}"[:2000]
+        else:
+            merged_thinking = thinking_summary
+    else:
+        merged_thinking = narration_block[:2000]
+    return main_body, merged_thinking
+
+
+_RECOMMENDATION_KEYWORD_RE = re.compile(
+    r'(?:권장안|권장\s*조치|권장\s*방안|추천안|추천\s*방안|1순위\s*권장|→\s*권장)',
+    re.IGNORECASE,
+)
+_RECOMMENDATION_REASON_RE = re.compile(
+    r'(?:권장\s*사유|추천\s*사유|선정\s*사유|사유\s*[:：\-—]|이유\s*[:：\-—]|근거\s*[:：\-—]|기대\s*효과)',
+    re.IGNORECASE,
+)
+_MULTIPLE_OPTION_MARKER_RE = re.compile(
+    r'(?:(?:^|\n)\s*(?:[-*]\s*|\d+\.\s*|#{1,4}\s*)?(?:\*\*)?(?:[A-C]안|[1-3]안|방안\s*[1-3]|옵션\s*[1-3]))',
+)
+_RECOMMENDATION_USER_TRIGGERS: tuple[str, ...] = (
+    "보고",
+    "분석",
+    "진단",
+    "점검",
+    "검수",
+    "문제점",
+    "개선",
+    "권장",
+    "대안",
+    "방안",
+    "비교",
+    "제안",
+    "설계",
+    "기획",
+    "어떻게",
+)
+_RECOMMENDATION_REQUIRED_INTENTS: frozenset[str] = frozenset({
+    "report",
+    "audit",
+    "diagnosis",
+    "debug",
+    "error_analysis",
+    "analysis",
+    "complex_analysis",
+    "cto_code_analysis",
+    "cto_verify",
+    "cto_impact",
+    "cto_strategy",
+})
+
+
+def _has_recommendation_with_reason(text: str) -> bool:
+    """응답 본문에 권장안(추천 조치)과 권장 사유(근거)가 함께 포함되어 있는지 판별한다."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    has_rec = bool(_RECOMMENDATION_KEYWORD_RE.search(body))
+    has_reason = bool(_RECOMMENDATION_REASON_RE.search(body))
+    if has_rec and has_reason:
+        return True
+    # '권장안: ... (이유/왜냐하면/기대효과 ...)' 처럼 한 문단 안에 서술형 사유가 포함된 경우
+    if has_rec and any(tok in body for tok in ("기대효과", "리스크", "안정성", "최적", "유리", "때문", "방지")):
+        return True
+    return False
+
+
+def _requires_recommendation_with_reason(
+    user_message: str,
+    intent: Optional[str],
+    response_text: str,
+) -> bool:
+    """보고·분석·점검·대안 제시 턴인지 판별한다."""
+    body = (response_text or "").strip()
+    if len(body) < 120:
+        return False
+    user_text = (user_message or "").strip()
+    if _MULTIPLE_OPTION_MARKER_RE.search(body):
+        return True
+    normalized_intent = (intent or "").strip()
+    if normalized_intent in _RECOMMENDATION_REQUIRED_INTENTS:
+        return True
+    return any(trigger in user_text for trigger in _RECOMMENDATION_USER_TRIGGERS)
+
+
+async def _synthesize_missing_recommendation_block(
+    user_message: str,
+    response_text: str,
+    *,
+    intent: Optional[str] = None,
+) -> str:
+    """보고/분석 응답에 권장안 및 권장 사유가 누락된 경우, 원문을 훼손하지 않고 하단에 덧붙일
+    2~4줄짜리 '권장안 및 권장 사유' 블록을 생성한다.
+    """
+    import asyncio
+    from app.core.anthropic_client import call_llm_with_fallback
+
+    system_prompt = (
+        "당신은 AADS CEO 기술 보고 보조기입니다.\n"
+        "주어진 [사용자 요청]과 [AI 응답 본문]의 사실관계만 바탕으로, 하단에 덧붙일 "
+        "'권장안'과 '권장 사유' 블록만 2~4줄로 간결하게 작성하세요.\n"
+        "절대 규칙:\n"
+        "1. 본문에 없는 수치·커밋·서버 상태를 날조하지 마세요.\n"
+        "2. 반드시 아래 마크다운 형식을 그대로 사용하세요:\n"
+        "### 💡 권장안 및 사유\n"
+        "- **권장안**: (가장 우선 수행할 1순위 조치 또는 선택지 1~2문장)\n"
+        "- **권장 사유**: (왜 이 방안이 최적인지 기술적·운영적 근거, 기대효과, 리스크 최소화 측면 1~2문장)\n"
+        "3. 인사말이나 서론 없이 위 블록만 출력하세요."
+    )
+    prompt_user = (
+        f"[인텐트]\n{intent or 'report'}\n\n"
+        f"[사용자 요청]\n{(user_message or '').strip()[:800]}\n\n"
+        f"[AI 응답 본문]\n{(response_text or '').strip()[-3500:]}"
+    )
+    try:
+        synthesized = await asyncio.wait_for(
+            call_llm_with_fallback(
+                prompt=prompt_user,
+                system=system_prompt,
+                model="qwen-turbo",
+                max_tokens=350,
+                fallback_models=["gemini-2.5-flash", "claude-haiku-4-5-20251001"],
+            ),
+            timeout=float(os.getenv("AADS_RECOMMENDATION_SYNTH_TIMEOUT_SEC", "12")),
+        )
+    except Exception as exc:
+        logger.warning("recommendation_block_synthesis_failed: %s", str(exc)[:160])
+        return ""
+
+    cleaned = _clean_assistant_final_content(synthesized or "").strip()
+    if not cleaned or not _has_recommendation_with_reason(cleaned):
+        return ""
+    return cleaned
+
+
 def _clean_assistant_final_content(content: str) -> str:
     clean_content = content or ""
     if clean_content:
@@ -3780,6 +3983,8 @@ def _clean_assistant_final_content(content: str) -> str:
         clean_content = re.sub(r'\n\n⏳ _.*?_', '', clean_content, flags=re.DOTALL)
         clean_content = re.sub(r'^⏳ _[^\n]*_\s*', '', clean_content)
         clean_content = _PROGRESS_STRIP_RE.sub('', clean_content)
+        if _preserve_realtime_response_enabled():
+            clean_content = _normalize_glued_paragraph_breaks(clean_content)
         clean_content = clean_content.strip()
     return clean_content
 
@@ -11823,7 +12028,9 @@ async def _save_and_update_session(
         else None
     )
     intent = _normalize_final_assistant_intent(intent, content)
-    if not _preserve_realtime_response_enabled():
+    if _preserve_realtime_response_enabled():
+        content, thinking_summary = _separate_pre_tool_narration(content, thinking_summary)
+    else:
         content = await _rewrite_incomplete_final_report_once(
             content,
             session_id=sid,
@@ -15640,6 +15847,8 @@ async def send_message_stream(
                         full_response += _delta_chunk
                         yield f"data: {json.dumps({'type': 'delta', 'content': _delta_chunk})}\n\n"
                     elif etype == "thinking":
+                        if full_response.strip():
+                            _saw_tool_since_last_delta = True
                         thinking_summary += event.get("thinking", "")
                         yield f"data: {json.dumps({'type': 'thinking', 'thinking': event['thinking']})}\n\n"
                     elif etype == "tool_use":
@@ -16566,6 +16775,30 @@ async def send_message_stream(
         except Exception as _contract_err:
             logger.warning(f"completion_contract_check_failed: {_contract_err}")
 
+        # ═══ Phase B-Final: 보고·분석 응답에 권장안 및 권장 사유 누락 시 실시간 하단 보강 ═══
+        try:
+            if (
+                _requires_recommendation_with_reason(content, intent, full_response)
+                and not _has_recommendation_with_reason(full_response)
+            ):
+                _rec_block = await _synthesize_missing_recommendation_block(
+                    content,
+                    full_response,
+                    intent=intent,
+                )
+                if _rec_block:
+                    _rec_delta = f"\n\n{_rec_block}"
+                    full_response = f"{full_response.rstrip()}{_rec_delta}".strip()
+                    yield f"data: {json.dumps({'type': 'delta', 'content': _rec_delta})}\n\n"
+                    logger.info(
+                        "recommendation_with_reason_appended session=%s intent=%s chars=%d",
+                        session_id[:8],
+                        intent,
+                        len(_rec_block),
+                    )
+        except Exception as _rec_err:
+            logger.warning("recommendation_append_skipped session=%s error=%s", session_id[:8], _rec_err)
+
         # ═══ #19: Phase C — 응답 저장 (별도 커넥션) ═══
         _thinking_truncated = (thinking_summary or "")[:2000] or None
         if thinking_summary and len(thinking_summary) > 2000:
@@ -16631,7 +16864,7 @@ async def send_message_stream(
             logger.warning("chat_response_mode_record_failed session=%s error=%s", session_id[:8], _mode_save_err)
 
         # ═══ Phase C-1.5: Output Validator violation → quality_details 기록 ═══
-        if not _validation.is_valid:
+        if not _validation.is_valid and not _should_bypass_validator_for_realtime(_validation, full_response):
             try:
                 _violation_details = json.dumps({
                     "violation_type": _validation.violation_type,

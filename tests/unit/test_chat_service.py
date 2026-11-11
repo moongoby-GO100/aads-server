@@ -1251,6 +1251,53 @@ async def test_save_and_update_session_preserves_realtime_response_by_default(mo
     assert promoted[0].args[1] == realtime_text
 
 
+def test_normalize_glued_paragraph_breaks_and_separate_pre_tool_narration(monkeypatch):
+    monkeypatch.delenv("AADS_PRESERVE_REALTIME_RESPONSE", raising=False)
+    raw = (
+        "권장안을 기준으로 범위를 분리하겠습니다."
+        "원장에는 해당 마일스톤이 없어 점검을 진행합니다."
+        "✅ **담당 지정과 업무 재배정을 완료했습니다.**\n\n"
+        "| 항목 | 내용 |\n| --- | --- |\n| 담당 | 인프라관리자 | " + ("상세 설명 " * 15)
+    )
+    body, merged_thinking = chat_service._separate_pre_tool_narration(raw, "기존 사고 요약")
+    assert body.startswith("✅ **담당 지정과 업무 재배정을 완료했습니다.**")
+    assert merged_thinking is not None
+    assert "[진행 경과]" in merged_thinking
+    assert "권장안을 기준으로 범위를 분리하겠습니다." in merged_thinking
+    assert "기존 사고 요약" in merged_thinking
+
+
+@pytest.mark.asyncio
+async def test_recommendation_with_reason_detection_and_synthesis():
+    report_without_rec = (
+        "### 1. 서버 점검 결과\n\n"
+        "| 항목 | 상태 | 비고 |\n| --- | --- | --- |\n"
+        "| aads-server | healthy | 정상 응답 확인 [DB 조회] |\n"
+        "| disk_usage | 78% | 로그 정리 필요 [서버 실측] |\n"
+        "현재 디스크 사용량이 임계치에 근접해 있어 정리가 필요한 상태입니다."
+    )
+    assert chat_service._requires_recommendation_with_reason("점검해서 보고해", "report", report_without_rec) is True
+    assert chat_service._has_recommendation_with_reason(report_without_rec) is False
+
+    synthesized_block = (
+        "### 💡 권장안 및 사유\n"
+        "- **권장안**: 7일 이상 경과한 임시 로그를 즉시 정리하고 디스크 가드 주기를 단축합니다.\n"
+        "- **권장 사유**: 서비스 재시작 없이 안전하게 여유 공간을 확보하여 배포 중단 리스크를 예방할 수 있습니다."
+    )
+    with patch(
+        "app.core.anthropic_client.call_llm_with_fallback",
+        new=AsyncMock(return_value=synthesized_block),
+    ):
+        result = await chat_service._synthesize_missing_recommendation_block(
+            "점검해서 보고해",
+            report_without_rec,
+            intent="report",
+        )
+    assert "**권장안**" in result
+    assert "**권장 사유**" in result
+    assert chat_service._has_recommendation_with_reason(f"{report_without_rec}\n\n{result}") is True
+
+
 @pytest.mark.asyncio
 async def test_save_and_update_session_rewrites_incomplete_tail_before_final_save_guard(monkeypatch):
     monkeypatch.setenv("AADS_PRESERVE_REALTIME_RESPONSE", "false")
