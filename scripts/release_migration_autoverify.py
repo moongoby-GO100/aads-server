@@ -571,12 +571,18 @@ def _api_base() -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def _reviews(key: str) -> tuple[str | None, list[dict]]:
+def _reviews(key: str, rev_id: str | None = None) -> tuple[str | None, list[dict]]:
+    if rev_id:
+        rev_target = f"r.revision_id::text='{rev_id}'"
+        rev_out = f"'{rev_id}'"
+    else:
+        rev_target = "r.revision_id=h.latest_revision_id"
+        rev_out = "h.latest_revision_id::text"
     q = (
-        "SELECT json_build_object('rev', h.latest_revision_id::text, 'rows', COALESCE((SELECT json_agg(json_build_object("
+        f"SELECT json_build_object('rev', {rev_out}, 'rows', COALESCE((SELECT json_agg(json_build_object("
         "'model', r.reviewer_model, 'provider', r.reviewer_provider, 'cross', r.cross_company, 'verdict', r.verdict, "
         "'reason', left(r.reason, 400)) ORDER BY r.id) FROM project_document_reviews r "
-        "WHERE r.head_id=h.id AND r.revision_id=h.latest_revision_id), '[]'::json)) "
+        f"WHERE r.head_id=h.id AND {rev_target}), '[]'::json)) "
         f"FROM project_document_heads h WHERE h.project_key='AADS' AND h.document_key='{key}'"
     )
     r = _psql(q + ";", read_only=True, timeout=60)
@@ -592,13 +598,40 @@ def _head_generation(key: str) -> tuple[str | None, int | None]:
     if r.returncode != 0 or "|" not in r.stdout:
         return None, None
     rev, gen = r.stdout.strip().split("|", 1)
-    return rev, int(gen)
+    try:
+        return rev, int(gen)
+    except (ValueError, TypeError):
+        return rev, None
 
 
-def _kick_review(token: str, key: str) -> str | None:
+def _latest_revision_info(key: str) -> tuple[str | None, int | None, str | None, str | None]:
+    """(rev_id, generation, content_hash, version) of latest revision."""
+    q = (
+        "SELECT COALESCE(h.latest_revision_id::text, '') || '|' || h.generation || '|' || "
+        "COALESCE(r.content_hash, '') || '|' || COALESCE(r.version, '') "
+        "FROM project_document_heads h "
+        "LEFT JOIN project_document_revisions r ON r.id = h.latest_revision_id "
+        f"WHERE h.project_key='AADS' AND h.document_key='{key}';"
+    )
+    r = _psql(q, read_only=True, timeout=60)
+    if r.returncode != 0 or "|" not in r.stdout:
+        return None, None, None, None
+    parts = r.stdout.strip().split("|")
+    if len(parts) < 4:
+        return None, None, None, None
+    rev, gen_s, chash, ver = parts[0], parts[1], parts[2], parts[3]
+    try:
+        gen = int(gen_s)
+    except (ValueError, TypeError):
+        gen = None
+    return (rev or None), gen, (chash or None), (ver or None)
+
+
+def _kick_review(token: str, key: str, rev: str | None = None, gen: int | None = None) -> str | None:
     """검토 요청(POST /review)이 교차 검토를 예약한다. 문서 생성만으로는 검토가 돌지 않는다
     (2026-11-05 deploy_runs#5979: 생성 후 300초 동안 검토 0건)."""
-    rev, gen = _head_generation(key)
+    if rev is None or gen is None:
+        rev, gen = _head_generation(key)
     if rev is None:
         return "AI 검토 문서를 찾지 못함"
     req = urllib.request.Request(_api_base() + f"/api/v1/projects/AADS/documents/{key}/review",
@@ -617,35 +650,85 @@ def _kick_review(token: str, key: str) -> str | None:
 def review(paths: list[Path], release_sha: str) -> str | None:
     items = manifest_items(paths)
     key = "migration-autoverify-m-" + manifest_sha(items)[:12]
-    rev, rows = _reviews(key)
+    content = review_content(paths, items, release_sha)
+    target_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    rev, gen, latest_hash, latest_ver = _latest_revision_info(key)
+    target_rev = rev
     token = ""
-    if rev is None or not rows:
+
+    if rev is None or latest_hash != target_hash:
         token = _token()
         if not token:
             return "API 토큰 발급 실패"
-    if rev is None:
         task = source_task_for(paths)
         if not task:
             return "AI 검토 문서의 작성 출처(러너 잡 ID)를 찾지 못함"
-        body = dict(document_key=key, kind="contract", title="릴리스 마이그레이션 자동 검증 교차 검토",
-                    version="1.0.0", content=review_content(paths, items, release_sha), expected_generation=0,
-                    source_task_id=task, change_summary="자동 검증(추가형·시험 실행 통과) 마이그레이션의 AI 교차 검토")
-        req = urllib.request.Request(_api_base() + "/api/v1/projects/AADS/documents", json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+
+        if rev is None:
+            exp_gen = 0
+            new_ver = "1.0.0"
+        else:
+            exp_gen = gen if gen is not None else 0
+            parts = (latest_ver or "1.0.0").split(".")
+            patch = int(parts[2]) + 1 if len(parts) == 3 and parts[2].isdigit() else exp_gen
+            patch = max(patch, exp_gen)
+            new_ver = f"{parts[0] if len(parts) == 3 and parts[0].isdigit() else '1'}.0.{patch}"
+
+        body = {
+            "document_key": key,
+            "kind": "contract",
+            "title": "릴리스 마이그레이션 자동 검증 교차 검토",
+            "version": new_ver,
+            "content": content,
+            "expected_generation": exp_gen,
+            "source_task_id": task,
+            "change_summary": "자동 검증(추가형·시험 실행 통과) 마이그레이션의 AI 교차 검토",
+        }
+        req = urllib.request.Request(
+            _api_base() + "/api/v1/projects/AADS/documents",
+            json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
+        )
+        target_rev = None
+        target_gen = None
         try:
-            urllib.request.urlopen(req, timeout=120).read()
+            resp_bytes = urllib.request.urlopen(req, timeout=120).read()
+            try:
+                res = json.loads(resp_bytes.decode("utf-8"))
+                target_rev = res.get("revision_id")
+                target_gen = res.get("generation")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
         except urllib.error.HTTPError as e:
-            if e.code != 409:  # 409 = 동시에 다른 배포가 만든 경우, 아래에서 그 결과를 읽는다
+            if e.code != 409:  # 409 = 동시 배포 충돌 시 최신 리비전을 다시 읽어 판정
                 return f"AI 검토 문서 등록 실패 HTTP {e.code}"
         except Exception as e:  # noqa: BLE001
             return f"AI 검토 문서 등록 실패 {type(e).__name__}"
-    if token:
-        err = _kick_review(token, key)
+
+        if not target_rev:
+            target_rev, target_gen = _head_generation(key)
+        if not target_rev:
+            return "AI 검토 문서를 찾지 못함"
+
+        err = _kick_review(token, key, rev=target_rev, gen=target_gen)
         if err:
             return err
+    else:
+        # 본문 해시 동일: 새 리비전 등록 안 함, 기존 판정 사용
+        target_rev = rev
+        _, rows = _reviews(key, rev_id=target_rev)
+        if not rows:
+            token = _token()
+            if not token:
+                return "API 토큰 발급 실패"
+            err = _kick_review(token, key, rev=target_rev, gen=gen)
+            if err:
+                return err
+
     deadline = time.monotonic() + float(os.environ.get("AADS_MIGRATION_AI_REVIEW_WAIT_S", "300"))
     while True:
-        rev, rows = _reviews(key)
+        _, rows = _reviews(key, rev_id=target_rev)
         verdicts = [x.get("verdict") for x in rows]
         if any(v not in ("pass", None) for v in verdicts):
             bad = [f"{x['model']}={x['verdict']}: {x.get('reason') or ''}" for x in rows if x.get("verdict") != "pass"]
