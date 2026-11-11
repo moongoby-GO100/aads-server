@@ -563,12 +563,17 @@ _LEGACY_PEOPLE_WHERE = (
     " AND ((to_jsonb(h)->>'tenant_id') IS NULL OR to_jsonb(h)->>'tenant_id'=$2)"
     " AND ($5::text IS NULL OR lower(to_jsonb(h)->>'employee_email')=$5)"
 )
+_LEGACY_PAYROLL_SUPERSEDED_FILTER = (
+    " AND (to_jsonb(h)->'statement_payload'->>'superseded_by' IS NULL"
+    " OR to_jsonb(h)->'statement_payload'->>'superseded_by' = '')"
+)
 LEGACY_PEOPLE_SQL: dict[str, str] = {
     "payroll": (
         "SELECT * FROM yeoljeong_payroll_statements" + _LEGACY_PEOPLE_WHERE
         + " AND ($3::text IS NULL OR left(payroll_month,7)>=$3)"
         " AND ($4::text IS NULL OR left(payroll_month,7)<=$4)"
-        " ORDER BY payroll_month DESC, id DESC LIMIT $6"
+        + _LEGACY_PAYROLL_SUPERSEDED_FILTER
+        + " ORDER BY payroll_month DESC, id DESC LIMIT $6"
     ),
     "attendance": (
         "SELECT * FROM yeoljeong_attendance_records" + _LEGACY_PEOPLE_WHERE
@@ -577,6 +582,35 @@ LEGACY_PEOPLE_SQL: dict[str, str] = {
         " ORDER BY work_date DESC, id DESC LIMIT $6"
     ),
 }
+
+
+def _is_payroll_superseded(row: Any) -> bool:
+    """급여 명세가 새 버전으로 대체되었는지 여부. statement_payload.superseded_by 또는 superseded_by 존재 여부."""
+    payload = None
+    direct = ""
+    if isinstance(row, dict):
+        direct = str(row.get("superseded_by") or "").strip()
+        payload = row.get("statement_payload")
+    elif hasattr(row, "__getitem__"):
+        try:
+            direct = str(row["superseded_by"] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            pass
+        try:
+            payload = row["statement_payload"]
+        except (KeyError, IndexError, TypeError):
+            payload = None
+
+    if direct:
+        return True
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = None
+    if isinstance(payload, dict):
+        return bool(str(payload.get("superseded_by") or "").strip())
+    return False
 
 
 def _merge_people_rows(rows, legacy, route, limit=500):
@@ -603,7 +637,7 @@ async def _fetch_legacy_people(sql, *, parameters):
         await connection.close()
 
 
-async def _legacy_people_rows(user, business_id, route, start=None, end=None, email=None, limit=500):
+async def _legacy_people_rows(user, business_id, route, start=None, end=None, email=None, limit=500, include_history: bool = False):
     """Read legacy source only for its owning tenant and an exact canonical identity."""
     from app.core.obys_tenant import is_legacy_obys_tenant
     from app.services.yeoljeong_finance_service import CANONICAL_BUSINESSES
@@ -634,6 +668,8 @@ async def _legacy_people_rows(user, business_id, route, start=None, end=None, em
     if route == "payroll":
         # payroll_month is TEXT 'YYYY-MM'; compare months so a 'YYYY-MM-01' bound keeps that month.
         start, end = (str(start)[:7] if start else None), (str(end)[:7] if end else None)
+        if include_history:
+            sql = sql.replace(_LEGACY_PAYROLL_SUPERSEDED_FILTER, "")
     fetched = await _fetch_legacy_people(
         sql,
         parameters=(legacy_id, str(user["tenant_id"]), str(start) if start else None,
@@ -674,6 +710,7 @@ async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
     own_email: str | None = None,
+    include_history: bool = False,
 ) -> tuple[list[tuple[str, dict[str, Any]]], str]:
     if route == "attendance" and own_email is not None:
         if not own_email:
@@ -775,20 +812,34 @@ async def _source_rows(
             if route == "payroll":
                 start = str(date_from)[:7] if date_from else None
                 end = str(date_to)[:7] if date_to else None
-                rows = list(await connection.fetch(
+                payroll_sql = (
                     "SELECT *, (tax_withholding+insurance_deduction+other_deduction) AS total_deductions "
                     "FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL "
                     "AND ($2::text IS NULL OR left(payroll_month,7)>=$2) "
-                    "AND ($3::text IS NULL OR left(payroll_month,7)<=$3) ORDER BY payroll_month DESC,id DESC",
-                    business_id, start, end))
+                    "AND ($3::text IS NULL OR left(payroll_month,7)<=$3) ORDER BY payroll_month DESC,id DESC"
+                )
+                if not include_history:
+                    payroll_sql = (
+                        "SELECT *, (tax_withholding+insurance_deduction+other_deduction) AS total_deductions "
+                        "FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL "
+                        "AND ($2::text IS NULL OR left(payroll_month,7)>=$2) "
+                        "AND ($3::text IS NULL OR left(payroll_month,7)<=$3) "
+                        "AND (statement_payload->>'superseded_by' IS NULL OR statement_payload->>'superseded_by' = '') "
+                        "ORDER BY payroll_month DESC,id DESC"
+                    )
+                rows = list(await connection.fetch(payroll_sql, business_id, start, end))
             else:
                 rows = list(await connection.fetch(sql, business_id))
             if route in {"payroll", "attendance"}:
-                legacy = await _legacy_people_rows(user, business_id, route, date_from, date_to, limit=None)
+                legacy = await _legacy_people_rows(
+                    user, business_id, route, date_from, date_to, limit=None, include_history=include_history,
+                )
                 rows = _merge_people_rows(rows, legacy, route, None)
                 if legacy:
                     source += "+acct_legacy"
             if route == "payroll":
+                if not include_history:
+                    rows = [row for row in rows if not _is_payroll_superseded(row)]
                 rows = await _with_payroll_settlement_state(user, rows)
             kind = "bank-account" if source == "yeoljeong_bank_accounts" else "generic"
             return [(kind, dict(row)) for row in rows], source
@@ -833,6 +884,7 @@ async def workspace_summary(
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     current_user: dict[str, Any] = Depends(get_current_user),
+    include_history: bool = Query(False),
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
@@ -840,8 +892,14 @@ async def workspace_summary(
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=date_from, date_to=date_to, own_email=own_email,
+        include_history=include_history,
     )
-    source_rows = _filter_source_dates(source_rows, date_from, date_to)
+    if selected_route == "payroll":
+        _filter_source_dates([], date_from, date_to)
+        if not include_history:
+            source_rows = [(k, r) for k, r in source_rows if not _is_payroll_superseded(r)]
+    else:
+        source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
     if selected_route in {"bank-connect", "integrations"}:
         needs_attention = sum(row.get("status") in {"needs_auth", "error", "pending"}
@@ -2939,6 +2997,7 @@ async def workspace_records(
     limit: int = Query(200, ge=1, le=500),
     offset: Annotated[int, Query(ge=0)] = 0,
     current_user: dict[str, Any] = Depends(get_current_user),
+    include_history: bool = Query(False),
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
@@ -2973,9 +3032,12 @@ async def workspace_records(
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=date_from, date_to=date_to, own_email=own_email,
+        include_history=include_history,
     )
     if selected_route == "payroll":
         _filter_source_dates([], date_from, date_to)
+        if not include_history:
+            source_rows = [(k, r) for k, r in source_rows if not _is_payroll_superseded(r)]
     else:
         source_rows = _filter_source_dates(source_rows, date_from, date_to)
     matching = _filter(
@@ -3047,6 +3109,7 @@ async def workspace_record_detail(
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=None, date_to=None, own_email=own_email,
+        include_history=True,
     )
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
     record = next((item for item in records if item["id"] == record_id), None)
