@@ -146,6 +146,27 @@ def test_ensure_fail_closed_when_base_missing(tmp_path, sh):
     assert f"FAIL rework_base_unavailable | rework_base_unavailable: {sha} on vmi3725547" in log
 
 
+@pytest.mark.parametrize("header", ["RETRY_OF_LINK: runner-aaaaaaaa", "RETRY_OF: runner-aaaaaaaa",
+                                    "RETRY_OF_LINK: runner-aaaaaaaa\\nMILESTONE_ID: m1"])
+def test_ensure_does_not_inherit_start_commit_from_retry_markers(tmp_path, sh, header):
+    """REWORK_OF/AUTO_REWORK_OF 없는 새 작업은 마일스톤 실패 링크(RETRY_OF_LINK)로 출발 커밋을 물려받지 않는다(origin/main 출발)."""
+    repo = _mkrepo(tmp_path / "r")
+    # 사라진 커밋을 가리키는 DB 행 — 상속했다면 rework_base_unavailable 로 끝난다.
+    db = f"printf '%s\\x1e%s\\x1e%s' {'c' * 40} vmi3725547 0"
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} $'{header}\\nTARGET: x'", db=db)
+    assert r.returncode == 0 and "FAIL" not in log and "REWORK_BASE" not in log
+
+
+def test_ensure_still_inherits_with_rework_of(tmp_path, sh):
+    repo = _mkrepo(tmp_path / "r")
+    db = f"printf '%s\\x1e%s\\x1e%s' {'c' * 40} vmi3725547 0"
+    cfg = tmp_path / "ssh_config"
+    cfg.write_text("Host unrelated\n    HostName 1.2.3.4\n")
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {repo} $'REWORK_OF: runner-aaaaaaaa\\nTARGET: x'",
+                env={"RUNNER_ARTIFACT_SSH_CONFIG": str(cfg)}, db=db)
+    assert r.returncode == 1 and "FAIL rework_base_unavailable" in log
+
+
 FAKE_SSH = r"""#!/bin/bash
 # 실제 ssh 인자를 기록하고, 원격 명령을 peer 저장소 경로로 치환해 로컬에서 실행한다(전송 계층은 git 이 그대로 탄다).
 # -F 로 지정한 설정 파일에서만 별칭(HostName·IdentityFile)을 읽는다고 가정한다: -F 가 없거나 다르면 실패한다.
@@ -211,7 +232,7 @@ def test_ensure_fetches_from_peer_via_real_ssh_args(peer_env, sh):
     sha = _peer_commit(peer)
     _git(peer, "update-ref", "refs/runner-artifacts/runner-aaaaaaaa", sha)
     assert not _has(local, sha)
-    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'RETRY_OF_LINK: runner-aaaaaaaa'",
+    r, log = sh(f"ensure_rework_base_or_fail runner-n1 sess {local} $'REWORK_OF: runner-aaaaaaaa'",
                 env=env, db=f"printf '%s\\x1e%s\\x1e%s' {sha} vmi3725547 0")
     assert r.returncode == 0, log
     assert "REWORK_BASE_HOST_MAP host=vmi3725547 alias=mesh-42 via=remote_hostname" in log
@@ -598,3 +619,209 @@ def test_existing_parent_worktree_keeps_original_path(peer_env, sh):
     assert r.returncode == 0, log + r.stderr
     assert 'source=/tmp/aads-wt-runner-aaaaaaaa' in log
     assert 'source=repo:' not in log and 'cat-file -e' not in sshlog.read_text()
+
+
+# ── ALLOWED_FILES 명시 ignore 파일 git add -f (결함 3) ──
+LIB_AI = '\n'.join(_extract(n) for n in ('instruction_allowed_file_paths', 'stage_allowed_ignored_files')) + '\nlog() { echo "LOG:$*" >&2; }\n'
+
+
+def _ai_git(cwd, *a):
+    return subprocess.run(['git', '-C', str(cwd), *a], check=True, capture_output=True, text=True).stdout
+
+
+def _ai_sh(body, stdin=''):
+    return subprocess.run(['bash', '-euc', LIB_AI + body], input=stdin, text=True, capture_output=True)
+
+
+@pytest.fixture
+def ai_repo(tmp_path):
+    _ai_git(tmp_path, 'init', '-q')
+    _ai_git(tmp_path, 'config', 'user.name', 'T')
+    _ai_git(tmp_path, 'config', 'user.email', 't@e.com')
+    (tmp_path / '.gitignore').write_text('docs/reports/*\n.pytest_cache/\n')
+    (tmp_path / 'a.py').write_text('1\n')
+    _ai_git(tmp_path, 'add', '.gitignore', 'a.py')
+    _ai_git(tmp_path, 'commit', '-qm', 'init')
+    (tmp_path / 'docs/reports').mkdir(parents=True)
+    (tmp_path / 'docs/reports/r1.md').write_text('listed\n')
+    (tmp_path / 'docs/reports/r2.md').write_text('not listed\n')
+    (tmp_path / '.pytest_cache').mkdir()
+    (tmp_path / '.pytest_cache/x').write_text('cache\n')
+    return tmp_path
+
+
+def test_allowed_ignored_parse_only_explicit_paths():
+    instr = ('TITLE: x\nALLOWED_FILES:\n- scripts/a.sh\n- `docs/reports/r1.md`\n- docs/reports/*.md\n'
+             '- ../evil.py\n- /etc/passwd.conf\n- docs/dir/\n\n- later/notlisted.py\n')
+    out = _ai_sh('instruction_allowed_file_paths "$(cat)"', instr).stdout.split()
+    assert out == ['scripts/a.sh', 'docs/reports/r1.md']
+
+
+def test_allowed_ignored_parse_inline_header():
+    out = _ai_sh('instruction_allowed_file_paths "$(cat)"', 'ALLOWED_FILES: app/x.py, tests/test_x.py\n본문 app/y.py\n').stdout.split()
+    assert out == ['app/x.py', 'tests/test_x.py']
+
+
+def test_allowed_ignored_listed_ignored_file_staged_unlisted_excluded(ai_repo):
+    instr = 'ALLOWED_FILES:\n- docs/reports/r1.md\n- a.py\n'
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', instr)
+    assert r.returncode == 0, r.stderr
+    _ai_git(ai_repo, 'add', '-A', '--', '.')
+    staged = _ai_git(ai_repo, 'diff', '--cached', '--name-only').split()
+    assert staged == ['docs/reports/r1.md']          # r2.md(미명시 ignore)·.pytest_cache 는 제외
+    assert 'ALLOWED_IGNORED_STAGED' in r.stderr
+
+
+def test_allowed_ignored_intent_to_add_flag_for_review_diff(ai_repo):
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)" -fN', 'ALLOWED_FILES:\n- docs/reports/r1.md\n')
+    assert r.returncode == 0, r.stderr
+    assert _ai_git(ai_repo, 'diff', '--name-only').split() == ['docs/reports/r1.md']   # git diff 에 보인다
+    assert _ai_git(ai_repo, 'ls-files', 'docs/reports').split() == ['docs/reports/r1.md']
+
+
+def test_allowed_ignored_wildcard_does_not_stage_anything(ai_repo):
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', 'ALLOWED_FILES:\n- docs/reports/*.md\n')
+    assert r.returncode == 0
+    assert _ai_git(ai_repo, 'diff', '--cached', '--name-only') == ''
+
+
+def test_allowed_ignored_secret_and_missing_paths_skipped(ai_repo):
+    (ai_repo / '.env').write_text('K=1\n')
+    (ai_repo / '.gitignore').write_text('docs/reports/*\n.env\n')
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', 'ALLOWED_FILES:\n- .env\n- docs/reports/none.md\n')
+    assert r.returncode == 0
+    assert _ai_git(ai_repo, 'diff', '--cached', '--name-only') == ''
+
+
+# ── 재작업 출발점: 실패 링크가 있는 마일스톤의 새 작업은 최신 origin/main 에서 시작한다 (worktree HEAD 기준) ──
+@pytest.fixture
+def start_point_env(tmp_path):
+    """origin(bare) + 로컬 clone. 확보 함수가 아니라 prepare_clean_job_worktree 가 만든 실제 worktree HEAD 를 본다."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    work = tmp_path / "seed"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "main")
+    _git(work, "config", "user.name", "T")
+    _git(work, "config", "user.email", "t@e.com")
+    (work / "f").write_text("1\n")
+    _git(work, "add", "f")
+    _git(work, "commit", "-qm", "c1")
+    _git(work, "remote", "add", "origin", str(origin))
+    _git(work, "push", "-q", "origin", "main")
+    main = tmp_path / "main"
+    subprocess.run(["git", "clone", "-q", str(origin), str(main)], check=True)
+    _git(main, "config", "user.name", "T")
+    _git(main, "config", "user.email", "t@e.com")
+    # 로컬이 아직 모르는 최신 커밋을 origin 에 올린다 — worktree 는 fetch 후의 이 커밋이어야 한다.
+    (work / "f").write_text("2\n")
+    _git(work, "commit", "-qam", "c2-latest")
+    _git(work, "push", "-q", "origin", "main")
+    return main, _git(work, "rev-parse", "HEAD")
+
+
+def _start_point_run(tmp_path, main, instruction, job="runner-n1"):
+    funcs = "\n".join(_extract(n) for n in ("rework_instruction_start_sha", "ensure_rework_base_or_fail", "prepare_clean_job_worktree"))
+    wt = tmp_path / "wt-start"
+    logf = tmp_path / "log"
+    logf.write_text("")
+    gone = "c" * 40  # 사라진 커밋: 상속했다면 rework_base_unavailable 로 끝난다
+    script = f"""
+log() {{ echo "$*" >> {logf}; }}
+db_exec() {{ printf '%s\\x1e%s\\x1e%s' {gone} vmi3725547 0; }}
+sql_escape() {{ echo "'$1'"; }}
+db_update() {{ :; }}
+_fail_job() {{ echo "FAIL $3 | $5" >> {logf}; }}
+is_git_workdir() {{ git -C "$1" rev-parse --git-dir >/dev/null 2>&1; }}
+worktree_busy_pids() {{ :; }}
+git_fetch_origin_with_retry() {{ git -C "$1" fetch -q origin; }}
+_reap_job_temp_pg() {{ :; }}
+_reap_job_test_containers() {{ :; }}
+_ckpt_resume_try() {{ return 1; }}
+git_dirty_count() {{ git -C "$1" status --porcelain | wc -l; }}
+RUNNER_ARTIFACT_NS=refs/runner-artifacts
+RUNNER_ARTIFACT_SSH_CONFIG=/nonexistent
+{funcs}
+ensure_rework_base_or_fail {job} sess {main} "$INSTR" || exit 11
+prepare_clean_job_worktree {job} AADS sess {main} {wt}
+"""
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=os.environ | {"INSTR": instruction}, timeout=60)
+    return r, logf.read_text(), wt
+
+
+@pytest.mark.parametrize("instr", ["RETRY_OF_LINK: runner-aaaaaaaa\nTARGET: x",
+                                   "RETRY_OF_LINK: runner-aaaaaaaa\nMILESTONE_ID: m1\nTARGET: x",
+                                   "RETRY_OF: runner-aaaaaaaa\nTARGET: x"])
+def test_new_job_on_failed_link_milestone_starts_from_latest_origin_main(tmp_path, start_point_env, instr):
+    main, latest = start_point_env
+    r, log, wt = _start_point_run(tmp_path, main, instr)
+    assert r.returncode == 0, r.stderr + log
+    assert "rework_base_unavailable" not in log
+    assert _git(wt, "rev-parse", "HEAD") == latest          # 실제 worktree HEAD = fetch 된 최신 origin/main
+    assert _git(wt, "rev-parse", "HEAD") != "c" * 40
+
+
+def test_rework_of_job_with_vanished_parent_commit_does_not_start(tmp_path, start_point_env):
+    main, _latest = start_point_env
+    r, log, wt = _start_point_run(tmp_path, main, "REWORK_OF: runner-aaaaaaaa\nTARGET: x")
+    assert r.returncode == 11 and "FAIL rework_base_unavailable" in log
+    assert not wt.exists()
+
+
+# ── 한글·확장자 없는 허용 경로 인식 (결함 1) ──
+def test_allowed_paths_parse_korean_and_extensionless():
+    instr = ("ALLOWED_FILES:\n- docs/reports/20261111_GO100_산업지도_M1_로그인검증_결과.md\n"
+             "- docs/reports/검증결과-runner-verify.md\n- Makefile\n- scripts/hooks/pre-commit\n"
+             "- .github/workflows/check.yml\n- docs/dir/\n- ../evil\n- docs/reports/*.md\n")
+    out = _ai_sh('instruction_allowed_file_paths "$(cat)"', instr).stdout.split()
+    assert out == ["docs/reports/20261111_GO100_산업지도_M1_로그인검증_결과.md",
+                   "docs/reports/검증결과-runner-verify.md", "Makefile",
+                   "scripts/hooks/pre-commit", ".github/workflows/check.yml"]
+
+
+def test_allowed_paths_parse_korean_under_c_locale():
+    r = subprocess.run(["bash", "-euc", LIB_AI + 'instruction_allowed_file_paths "$(cat)"'],
+                       input="ALLOWED_FILES: docs/reports/한글_결과.md\n", text=True, capture_output=True,
+                       env={**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONIOENCODING": "ascii", "PYTHONUTF8": "0"})
+    assert r.stdout.split() == ["docs/reports/한글_결과.md"]
+
+
+def test_allowed_ignored_korean_report_staged_others_excluded(ai_repo):
+    (ai_repo / "docs/reports/한글_결과.md").write_text("k\n")
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', "ALLOWED_FILES:\n- docs/reports/한글_결과.md\n")
+    assert r.returncode == 0, r.stderr
+    _ai_git(ai_repo, "-c", "core.quotepath=false", "add", "-A", "--", ".")
+    staged = _ai_git(ai_repo, "-c", "core.quotepath=false", "diff", "--cached", "--name-only").split()
+    assert staged == ["docs/reports/한글_결과.md"]        # r1.md·r2.md·.pytest_cache 는 허용 목록 밖이라 제외
+
+
+def test_allowed_ignored_extensionless_ignored_file_staged(ai_repo):
+    (ai_repo / ".gitignore").write_text("docs/reports/*\nMakefile\n")
+    (ai_repo / "Makefile").write_text("all:\n")
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', "ALLOWED_FILES:\n- Makefile\n")
+    assert r.returncode == 0, r.stderr
+    assert _ai_git(ai_repo, "diff", "--cached", "--name-only").split() == ["Makefile"]
+
+
+# ── 재작업 1/2 반려 지적 교정 ──
+_KO_HEADER_INSTR = (
+    "TITLE: x\n\n## 허용 파일\n"
+    "scripts/pipeline-runner.sh, scripts/pipeline-runner.sh.local(존재 시), app/services/code_reviewer.py, "
+    "docs/reports/20261111_AADS_러너결함수정_재작업.md(신규, 필요 시 .gitignore 예외 1줄)\n\n"
+    "## 결과 보고\n- docs/reports/notlisted.md\n"
+)
+
+
+def test_allowed_paths_parse_korean_header_current_instruction_format():
+    out = _ai_sh('instruction_allowed_file_paths "$(cat)"', _KO_HEADER_INSTR).stdout.split()
+    assert "docs/reports/20261111_AADS_러너결함수정_재작업.md" in out
+    assert "scripts/pipeline-runner.sh" in out and "app/services/code_reviewer.py" in out
+    assert "docs/reports/notlisted.md" not in out          # 다음 절(## 결과 보고)은 허용 목록이 아니다
+
+
+def test_allowed_ignored_korean_header_report_staged(ai_repo):
+    (ai_repo / "docs/reports/20261111_AADS_러너결함수정_재작업.md").write_text("k\n")
+    r = _ai_sh(f'stage_allowed_ignored_files j {ai_repo} "$(cat)"', _KO_HEADER_INSTR)
+    assert r.returncode == 0, r.stderr
+    staged = _ai_git(ai_repo, "-c", "core.quotepath=false", "diff", "--cached", "--name-only").split()
+    assert staged == ["docs/reports/20261111_AADS_러너결함수정_재작업.md"]

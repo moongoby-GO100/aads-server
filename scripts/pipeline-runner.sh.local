@@ -3629,7 +3629,7 @@ commit_job_worktree_for_approval() {
     local job_id="$1" session_id="$2" worktree_dir="$3" main_workdir="$4" instruction="$5"
     local pre_exec_sha="${6:-}"
     # 검증(격리·provenance·scope·stage)이 어디서 실패해도 워커가 만든 커밋은 ref 로 남긴다.
-    runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
+    command -v runner_artifact_pin >/dev/null 2>&1 && runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
     if ! verify_isolated_job_worktree "$job_id" "$worktree_dir" "$main_workdir"; then
         _fail_job "$job_id" "$session_id" "approval_worktree_not_isolated" "BLOCK: awaiting_approval 거부 — runner isolated worktree 검증 실패 (${worktree_dir})"
         return 1
@@ -3660,6 +3660,7 @@ commit_job_worktree_for_approval() {
     local stage_err stage_rc=0
     stage_err=$(mktemp "/tmp/pipeline-approval-stage-${job_id}.err.XXXXXX")
     { git -C "$worktree_dir" add -A -- . && { git -C "$worktree_dir" reset -q -- .runner_full_diff.patch || true; }; } >/dev/null 2>"$stage_err" || stage_rc=$?
+    command -v stage_allowed_ignored_files >/dev/null 2>&1 && stage_allowed_ignored_files "$job_id" "$worktree_dir" "$instruction" || true
     if [[ "$stage_rc" -ne 0 ]]; then
         local stage_msg
         stage_msg=$(head -c 1024 "$stage_err" | tr -d '\r' | mask_git_diagnostics | head -c 1024)
@@ -3836,8 +3837,69 @@ print("fix(pipeline-runner): " + clean(sys.argv[1]) + " — " + summary)
                        'commit_sha', $(sql_escape "$commit_sha"), 'worktree_path', $(sql_escape "$worktree_dir")
                    )), updated_at=NOW()
                WHERE job_id='${job_id}';"
-    runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
+    command -v runner_artifact_pin >/dev/null 2>&1 && runner_artifact_pin "$job_id" "$worktree_dir" "$pre_exec_sha" || true
     printf '%s' "$commit_sha"
+}
+
+# 지시서 ALLOWED_FILES 에 "명시된" 경로만 뽑는다(한 줄에 하나). 헤더 줄 본문과 이어지는 불릿(-,*,숫자.) 줄을 읽고,
+# 와일드카드(* ? [ ]), 절대경로, '..', 디렉터리(끝 '/') 는 버린다 — 명시된 파일 경로만 git add -f 대상이 될 수 있다.
+# 한글 등 UTF-8 경로·확장자 없는 파일(Makefile)·숨김 경로(.github/workflows/x.yml)도 인식한다.
+# python 소스는 C locale 안전을 위해 ASCII 로 둔다.
+instruction_allowed_file_paths() {
+    printf '%s' "$1" | python3 -c '
+import re, sys
+# ASCII-only source (C locale safe); read/write UTF-8 bytes explicitly.
+text = sys.stdin.buffer.read().decode("utf-8", "replace").splitlines()
+out, active, block = [], False, False
+for line in text:
+    if re.match(r"^[\s#>*`-]*ALLOWED_FILES\b", line):
+        active, block = True, False
+        body = line.split(":", 1)[1] if ":" in line else ""
+    elif re.match(r"^[\s#>*`-]*\ud5c8\uc6a9\s*(?:\ud30c\uc77c|\uacbd\ub85c)", line):
+        # current instruction format: "## <Korean: allowed files>" header, paths on the following lines until a blank/heading line
+        active, block = True, True
+        body = line.split(":", 1)[1] if ":" in line else ""
+    elif active and block and line.strip() and not line.lstrip().startswith("#"):
+        body = line
+    elif active and not block and re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line):
+        body = line
+    else:
+        active = block = False
+        continue
+    for tok in re.split(r"[\s,;`\x27\"()<>|]+", body):
+        tok = tok.rstrip(".:")
+        # \w matches unicode letters/digits (Korean paths); extensionless files (Makefile) and dot-prefixed paths (.github) allowed.
+        # prose words are harmless: stage_allowed_ignored_files re-checks exists/untracked/ignored.
+        if not re.fullmatch(r"[\w@+.][\w@+./\-]*", tok):
+            continue
+        if tok.endswith("/") or ".." in tok.split("/") or tok in (".", ".."):
+            continue
+        if tok not in out:
+            out.append(tok)
+sys.stdout.buffer.write(("\n".join(out) + "\n").encode("utf-8"))
+' 2>/dev/null
+}
+
+# ALLOWED_FILES 에 명시됐지만 .gitignore 대상이라 `git add -A` 에서 빠지는 신규 파일만 `git add -f` 로 넣는다.
+# $4: git add 플래그(기본 -f, diff 캡처 단계에서는 -fN — AI 검수가 같은 파일을 보도록 intent-to-add).
+# 명시되지 않은 ignore 파일(.pytest_cache 등)은 건드리지 않는다. 이미 추적 중이거나 존재하지 않는 경로, 비밀 파일은 넘어간다.
+# 2026-11-10 GO100: docs/reports/*.md 가 ignore 라 러너 커밋에서 빠져 AI 검수가 '보고서 누락'으로 2회 반려했다.
+stage_allowed_ignored_files() {
+    local job_id="$1" worktree_dir="$2" instruction="$3" addflag="${4:--f}" path n=0
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        case "$path" in
+            .runner_full_diff.patch|HANDOVER.md|*/HANDOVER.md|.env|.env.*|*/.env|*/.env.*|.git/*) continue ;;
+        esac
+        [[ -f "$worktree_dir/$path" ]] || continue
+        git -C "$worktree_dir" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 && continue
+        git -C "$worktree_dir" check-ignore -q -- "$path" 2>/dev/null || continue
+        if git -C "$worktree_dir" add "$addflag" -- "$path" >/dev/null 2>&1; then
+            n=$((n + 1))
+            log "  ALLOWED_IGNORED_STAGED job=$job_id path=$path — ALLOWED_FILES 에 명시된 ignore 대상 파일을 git add -f" >&2
+        fi
+    done < <(instruction_allowed_file_paths "$instruction")
+    return 0
 }
 
 # dirty 파일 경로 목록 (rename은 신규 경로 기준, 공백 경로 안전)
@@ -5188,6 +5250,42 @@ for line in sys.stdin:
 '
 }
 
+# 프로젝트 디렉터리($1) 또는 git-common-dir 에 연결된 주 작업트리에서 가상환경 인터프리터를 찾는다.
+# 환경변수 PIPELINE_SELF_VERIFY_PYTHON 이 지정되고 실행 가능하면 그것을 최우선으로 쓴다.
+# 없으면 빈 문자열을 출력해 호출부가 시스템 기본 python 을 유지하도록 한다.
+self_verify_project_python() {
+    local dir="$1" cand common main
+    if [[ -n "${PIPELINE_SELF_VERIFY_PYTHON:-}" && -x "${PIPELINE_SELF_VERIFY_PYTHON}" ]]; then
+        printf '%s' "$PIPELINE_SELF_VERIFY_PYTHON"; return 0
+    fi
+    for cand in "$dir/venv/bin/python" "$dir/.venv/bin/python"; do
+        [[ -x "$cand" ]] && { printf '%s' "$cand"; return 0; }
+    done
+    common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=""
+    if [[ -n "$common" ]]; then
+        main="${common%/.git}"
+        if [[ "$main" != "$common" && "$main" != "$dir" ]]; then
+            for cand in "$main/venv/bin/python" "$main/.venv/bin/python"; do
+                [[ -x "$cand" ]] && { printf '%s' "$cand"; return 0; }
+            done
+        fi
+    fi
+    return 0
+}
+
+# argv(2번째 인자부터)의 python/python3/pytest 시작 토큰을 프로젝트 인터프리터($1)로 바꿔 NUL 구분으로 출력한다.
+# $1 이 비면 원본 그대로. bash scripts/run_unit_tests.sh 같은 다른 명령은 건드리지 않는다.
+self_verify_rewrite_argv() {
+    local py="$1"; shift
+    if [[ -n "$py" ]]; then
+        case "${1:-}" in
+            python|python3|python3.[0-9]*) shift; set -- "$py" "$@" ;;
+            pytest) shift; set -- "$py" -m pytest "$@" ;;
+        esac
+    fi
+    printf '%s\0' "$@"
+}
+
 self_verify_classify() {
     case "$2" in
         0) printf pass ;;
@@ -5217,6 +5315,14 @@ pre_review_self_verify() {
         fi
         count=$((count + 1))
         mapfile -d '' -t argv < <(python3 -c 'import shlex,sys; sys.stdout.buffer.write(b"".join(x.encode()+b"\0" for x in shlex.split(sys.argv[1])))' "$cmd")
+        local vpy interp
+        vpy=$(self_verify_project_python "$dir")
+        mapfile -d '' -t argv < <(self_verify_rewrite_argv "$vpy" "${argv[@]}")
+        case "${argv[0]:-}" in
+            "$vpy") interp="$vpy (프로젝트 venv)" ;;
+            python|python3|python3.[0-9]*|pytest) interp="$(command -v "${argv[0]}" 2>/dev/null || echo "${argv[0]}") (시스템 python)" ;;
+            *) interp="${argv[0]:-?}" ;;
+        esac
         out=$(mktemp)
         local acquired="${out}.acquired" dir_ready="${out}.dir-ready"
         rc=0
@@ -5248,9 +5354,9 @@ pre_review_self_verify() {
         fi
         rm -f "$acquired"
         verdict=$(self_verify_classify "$cmd" "$rc")
-        feedback="[Runner self-verify] $cmd rc=$rc"$'\n'"$(tail -n 80 "$out")"
+        feedback="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'"$(tail -n 80 "$out")"
         rm -f "$out"
-        summary+="[Runner self-verify] $cmd rc=$rc"$'\n'
+        summary+="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'
         if [[ "$verdict" == fail ]]; then
             feedback+=$'\n''수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음.'
             summary+="[Runner self-verify] 수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음."$'\n'
@@ -6214,6 +6320,7 @@ recover_review_hold_job() {
     log "▶ REVIEW_HOLD_RECOVERY job=$job_id project=$project worktree=$worktree_dir base=${base_sha:0:12}"
 
     # 기존 승인 커밋 경로 그대로 — pre-commit 훅을 거치고 --no-verify 를 쓰지 않는다.
+    stage_allowed_ignored_files "$job_id" "$worktree_dir" "$instruction" -f
     raw_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$base_sha") || return 1
     commit_sha=$(printf '%s' "$raw_commit_sha" | tr -d '\r' | grep -oE '[0-9a-f]{40}' | tail -n1) || commit_sha=""
     if [[ -z "$commit_sha" || "$(git -C "$worktree_dir" rev-parse HEAD 2>/dev/null || true)" != "$commit_sha" ]]; then
@@ -7341,6 +7448,8 @@ $out_tail")
             _new_untracked="$_ignored_new"
         fi
     fi
+    # ALLOWED_FILES 에 명시된 ignore 대상 파일은 AI 검수가 보는 diff 에도 들어가야 한다(커밋 단계의 git add -f 와 같은 대상).
+    stage_allowed_ignored_files "$job_id" "${worktree_dir:-$workdir}" "$instruction" -fN
     local git_diff=""
     local _current_head=""
     _current_head=$(git rev-parse HEAD 2>/dev/null) || _current_head=""
@@ -7533,6 +7642,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
     # 리뷰 판정과 산출물 보존을 분리한다. 리뷰가 실패하거나 인프라 장애로
     # review_hold 에 머물러도 이 SHA 로 결과를 복구할 수 있어야 한다.
     # 변경사항 0건은 위 no_changes 경로에서 이미 종결되므로 빈 커밋은 만들지 않는다.
+    stage_allowed_ignored_files "$job_id" "${worktree_dir:-$workdir}" "$instruction" -f
     local approval_commit_sha=""
     approval_commit_sha=$(commit_job_worktree_for_approval "$job_id" "$session_id" "$worktree_dir" "$main_workdir" "$instruction" "$pre_exec_sha") || {
         _release_work_lock "$project" "$job_id" "$parallel_group"
@@ -8101,7 +8211,7 @@ runner_artifact_remote_ref() {
     printf '%s' "$out"
 }
 
-# 지시서의 AUTO_REWORK_OF/RETRY_OF/RETRY_OF_LINK 부모 커밋이 로컬에 없으면 부모의 러너 서버에서 가져온다.
+# 지시서의 AUTO_REWORK_OF/REWORK_OF 부모 커밋이 로컬에 없으면 부모의 러너 서버에서 가져온다.
 # 기준 SHA = 지시서의 출발 SHA(있으면) > 부모의 DB commit_hash. DB 에 commit_hash 가 없어도(error 종료) 지시서 SHA 가 있으면
 # 원격 ref 를 가져온다. 기준 SHA 가 로컬에 실재해야 통과한다 — DB/ref 가 다른 커밋을 가리키는 것은 통과 사유가 아니다.
 # 못 가져오면 Claude 를 띄우지 않고 error_detail='rework_base_unavailable: <sha> on <host>' 로 종료한다(fail-closed).
@@ -8109,11 +8219,13 @@ ensure_rework_base_or_fail() {
     local job_id="$1" session_id="$2" repo="$3" instruction="$4" parent row db_sha host alias want full instr_sha
     local parents
     parents=$(printf '%s\n' "$instruction" \
-        | sed -nE 's/^(AUTO_REWORK_OF|RETRY_OF|RETRY_OF_LINK):[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\2/p' | awk '!s[$0]++')
+        | sed -nE 's/^(AUTO_REWORK_OF|REWORK_OF):[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\2/p' | awk '!s[$0]++')
+    # 출발 커밋 상속은 REWORK_OF/AUTO_REWORK_OF 가 명시된 지시서만 한다. RETRY_OF·RETRY_OF_LINK 는 재시도 한도 계산(장부)용
+    # 표식일 뿐 출발점 상속 사유가 아니다 — 마일스톤의 실패 링크로 새 작업이 사라진 커밋을 물려받아 시작 전에 끝나던 결함(2026-11-11).
     [[ -n "$parents" ]] || return 0
     instr_sha=$(rework_instruction_start_sha "$instruction")
     local rework_parent
-    rework_parent=$(printf '%s\n' "$instruction" | sed -nE 's/^AUTO_REWORK_OF:[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\1/p' | head -1)
+    rework_parent=$(printf '%s\n' "$instruction" | sed -nE 's/^(AUTO_REWORK_OF|REWORK_OF):[[:space:]]*(runner-[0-9a-zA-Z_-]+)[[:space:]]*$/\2/p' | head -1)
     [[ -n "$rework_parent" ]] || rework_parent=$(printf '%s\n' "$parents" | head -1)
     for parent in $parents; do
         row=$(db_exec "SELECT COALESCE(commit_hash,''), COALESCE(runner_host,''), CAST(started_at IS NULL as int) FROM pipeline_jobs WHERE job_id=$(sql_escape "$parent");" 2>/dev/null) || row="__dberr__"

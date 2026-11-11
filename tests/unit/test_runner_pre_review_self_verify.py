@@ -10,7 +10,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = (ROOT / 'scripts/pipeline-runner.sh').read_text()
-NAMES = ('self_verify_extract', 'self_verify_classify', 'pre_review_self_verify')
+NAMES = ('self_verify_extract', 'self_verify_classify', 'self_verify_project_python',
+         'self_verify_rewrite_argv', 'pre_review_self_verify')
 
 
 def function(source, name):
@@ -319,3 +320,53 @@ def test_bad_directory_fails_open(tmp_path, bad_lane):
     assert 'self_verify_lock_unavailable' not in result.stdout
     assert 'self_verify_failed' not in result.stdout
     assert 'AI_REVIEW' in result.stdout
+
+
+def _fake_venv(tmp_path, name='venv'):
+    py = tmp_path / name / 'bin' / 'python'
+    py.parent.mkdir(parents=True)
+    py.write_text('#!/bin/sh\nexit 0\n')
+    py.chmod(0o755)
+    return py
+
+
+def test_project_python_prefers_venv(tmp_path):
+    py = _fake_venv(tmp_path)
+    assert run(f'self_verify_project_python {tmp_path}').stdout == str(py)
+
+
+def test_project_python_empty_without_venv(tmp_path):
+    assert run(f'self_verify_project_python {tmp_path}').stdout == ''
+
+
+def test_project_python_configured_interpreter_wins(tmp_path):
+    _fake_venv(tmp_path)
+    other = _fake_venv(tmp_path / 'o', 'x')
+    out = run(f'self_verify_project_python {tmp_path}', PIPELINE_SELF_VERIFY_PYTHON=str(other))
+    assert out.stdout == str(other)
+
+
+def test_rewrite_argv_uses_venv_for_pytest_and_python(tmp_path):
+    for argv, want in [('pytest tests/a.py', ['/v/python', '-m', 'pytest', 'tests/a.py']),
+                       ('python3 -m pytest b', ['/v/python', '-m', 'pytest', 'b']),
+                       ('bash scripts/run_unit_tests.sh x', ['bash', 'scripts/run_unit_tests.sh', 'x']),
+                       ('ruff check .', ['ruff', 'check', '.'])]:
+        out = run(f'self_verify_rewrite_argv /v/python {argv}').stdout
+        assert out.split('\0')[:-1] == want
+
+
+def test_rewrite_argv_unchanged_without_venv():
+    out = run('self_verify_rewrite_argv "" pytest tests/a.py').stdout
+    assert out.split('\0')[:-1] == ['pytest', 'tests/a.py']
+
+
+def test_pre_review_self_verify_runs_with_venv_and_records_interpreter(tmp_path):
+    py = tmp_path / 'venv' / 'bin' / 'python'
+    py.parent.mkdir(parents=True)
+    py.write_text('#!/bin/sh\necho "ARGS:$*"\nexit 0\n')
+    py.chmod(0o755)
+    heavy = tmp_path / 'lane'
+    result = run(f'pre_review_self_verify j s {tmp_path} "$(cat)"; echo "SUMMARY:$SELF_VERIFY_PREFIX"',
+                 '`pytest tests/x.py`\n', RUNNER_HEAVY_DIR=str(heavy))
+    assert result.returncode == 0, result.stderr
+    assert 'interpreter=%s' % py in result.stdout

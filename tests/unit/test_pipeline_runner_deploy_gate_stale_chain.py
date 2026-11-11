@@ -219,7 +219,7 @@ post_to_chat() { :; }
 _notify_ai() { :; }
 promote_next_queued() { :; }
 _fail_job() { return 1; }
-''' + JQ_STUB + _function("review_rebased_aads_sha")
+''' + JQ_STUB + _function("review_category_is_hold") + "\n" + _function("review_rebased_aads_sha")
     path = tmp_path / "review_fn.sh"
     path.write_text(body, encoding="utf-8")
     log = tmp_path / "db.log"
@@ -280,7 +280,7 @@ post_to_chat() { :; }
 _notify_ai() { :; }
 promote_next_queued() { :; }
 _fail_job() { return 1; }
-''' + JQ_STUB + _function("review_rebased_aads_sha")
+''' + JQ_STUB + _function("review_category_is_hold") + "\n" + _function("review_rebased_aads_sha")
     path = tmp_path / "review_flag_fn.sh"
     path.write_text(body, encoding="utf-8")
     log = tmp_path / "db.log"

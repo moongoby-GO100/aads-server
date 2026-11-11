@@ -95,6 +95,7 @@ record_runner_event() {{
     echo "LEAK_EVENT_STDOUT:$2"
     echo "EVENT:$2" >> "$EVENT_LOG_FILE"
 }}
+runner_artifact_pin() {{ return 0; }}
 """
 
 

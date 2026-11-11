@@ -76,6 +76,7 @@ mask_git_diagnostics() { cat; }
 record_runner_event() {
     echo "EVENT:$2" >> "$EVENT_LOG_FILE"
 }
+runner_artifact_pin() { return 0; }
 """
 
 
