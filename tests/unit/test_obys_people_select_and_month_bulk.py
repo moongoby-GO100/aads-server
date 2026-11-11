@@ -85,7 +85,7 @@ def test_detail_tab_select_switches_calendar_rows(tmp_path):
         "function payrollDisplayV41(", "function attendanceStatusV41(", "function attendanceReviewV41(",
         "function attendanceMinutesV41(", "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(",
         "function filteredRows(c)", "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(",
-        "function scheduleMonthRangeV41(", "function scheduleCountV41(", "function workSchedulePanelV41("))
+        "function scheduleMonthRangeV41(", "function scheduleCountV41(", "function workSchedulePanelV41(", "function employmentMatchV41(", "function captureScheduleDraftV41(", "function restoreScheduleDraftV41("))
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
     body = r'''const assert=require('node:assert/strict');
 const state={route:'attendance',peopleMonth:'2026-10',readRole:'owner',status:'전체 상태',selected:{},search:'',businessId:'b1',peopleTab:'detail'};
@@ -157,7 +157,8 @@ def test_month_mode_posts_single_bulk_payload_and_blocks_over_1000(tmp_path):
     _need_node()
     html = ADMIN.read_text()
     helpers = _lines(html, ("function peopleMonthBoundsV41(", "function scheduleMonthRangeV41(",
-                            "function scheduleCountV41(", "function bindWorkSchedulesV41("))
+                            "function scheduleCountV41(", "function captureScheduleDraftV41(", "function restoreScheduleDraftV41(",
+                            "function scheduleNavigateV41(", "function scheduleShiftV41(", "function bindWorkSchedulesV41("))
     body = r'''const assert=require('node:assert/strict');
 const state={peopleMonth:'2026-02',businessId:'b1',scheduleEmployees:{b1:[]}};
 const kstDateV41=()=>'2026-10-30';
@@ -178,15 +179,22 @@ async function workspaceApi(path,opt){calls.push([path,opt])}
 function renderPageV41(){};function previewContractSchedulesV41(){};function maskEmployeeEmailV41(v){return v};function openRosterEditorV41(){};
 async function financeApiV41(){return {employees:[]}}
 ''' + helpers + r'''
+// 단위·월 변경은 이제 scheduleNavigateV41 로 상태를 바꾸고 화면을 다시 그린 뒤 bind 를 다시 호출한다.
+// 실제 renderPageV41 이 하는 일(상태→폼 값 반영, 재바인딩)을 하네스가 흉내 낸다. 재그림용 reload 는 제출 reload 집계에서 뺀다.
+const rerender=()=>{reloads=0;els.scheduleUnit.value=state.scheduleUnit;els.scheduleMonth.value=state.peopleMonth;
+ if(state.scheduleUnit==='month'){const r=scheduleMonthRangeV41(state.peopleMonth);vals.date_from=form.elements.date_from.value=r.from;vals.date_to=form.elements.date_to.value=r.to;}
+ else{const d=new Date(state.scheduleWeek+"T12:00:00Z");d.setUTCDate(d.getUTCDate()+6);form.elements.date_from.value=state.scheduleWeek;form.elements.date_to.value=d.toISOString().slice(0,10);}
+ submit.textContent=state.scheduleUnit==='month'?'월간 일정 일괄 등록':'주간 일정 일괄 등록';els.scheduleMonthLabel.hidden=state.scheduleUnit!=='month';bindWorkSchedulesV41();};
+const fire=async(id)=>{await handlers[id]();rerender()};
 (async()=>{
 bindWorkSchedulesV41();
 els.scheduleUnit.value='month';els.scheduleMonth.value='2026-02';
-handlers['scheduleUnit:change']();
+await fire('scheduleUnit:change');
 assert.equal(form.elements.date_from.value,'2026-02-01');assert.equal(form.elements.date_to.value,'2026-02-28');
 assert.equal(submit.textContent,'월간 일정 일괄 등록');assert.equal(els.scheduleMonthLabel.hidden,false);
 assert.equal(els.scheduleCount.textContent,'2명 × 20일 = 40칸');
 // 31일 달로 변경
-els.scheduleMonth.value='2026-10';handlers['scheduleMonth:change']();
+els.scheduleMonth.value='2026-10';await fire('scheduleMonth:change');
 assert.equal(form.elements.date_from.value,'2026-10-01');assert.equal(form.elements.date_to.value,'2026-10-31');
 assert.equal(els.scheduleCount.textContent,'2명 × 22일 = 44칸');
 // 제출: 단일 bulk 호출, 월 범위
@@ -197,11 +205,11 @@ const p=JSON.parse(calls[0][1].body);
 assert.equal(p.date_from,'2026-10-01');assert.equal(p.date_to,'2026-10-31');assert.deepEqual(p.weekdays,[0,1,2,3,4]);assert.equal(p.employees.length,2);
 assert.equal(state.scheduleNotice,'44칸 등록');assert.equal(reloads,1);
 // 주간으로 되돌리면 7일 범위
-state.scheduleWeek='2026-10-05';els.scheduleUnit.value='week';handlers['scheduleUnit:change']();
+state.scheduleWeek='2026-10-05';els.scheduleUnit.value='week';await fire('scheduleUnit:change');
 assert.equal(form.elements.date_from.value,'2026-10-05');assert.equal(form.elements.date_to.value,'2026-10-11');assert.equal(submit.textContent,'주간 일정 일괄 등록');
 // 1,000칸 초과 차단: 40명 x 31일
 checked=Array.from({length:40},(_,i)=>({value:'u'+i+'@x.test',dataset:{name:'n'+i,branch:'b'}}));weekdays=['0','1','2','3','4','5','6'];
-els.scheduleUnit.value='month';els.scheduleMonth.value='2026-10';handlers['scheduleUnit:change']();
+els.scheduleUnit.value='month';els.scheduleMonth.value='2026-10';await fire('scheduleUnit:change');
 assert.equal(els.scheduleCount.textContent.startsWith('40명 × 31일 = 1240칸'),true);
 form.onsubmit(ev);await new Promise(r=>setImmediate(r));
 assert.equal(calls.length,1);assert(els.scheduleStatus.textContent.includes('1,000칸'));

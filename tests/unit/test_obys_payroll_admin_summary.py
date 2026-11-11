@@ -75,7 +75,8 @@ def test_summary_html_escapes_and_marks_pending():
 
 def test_render_wires_summary_branch_column_and_filter():
     assert 'body=payrollSummaryHtmlV41(inMonth,month)+section("직원별 급여"' in SRC
-    assert 'table(inMonth,["직원","지점","총지급액","공제","실수령","상태"]' in SRC
+    # 급여 목록은 상태 탭·다음 할 일 버튼이 있는 payrollListHtmlV41 로 그린다(열: 직원·지점·근무시간·총지급·실수령·상태·다음 할 일).
+    assert 'payrollListHtmlV41(listItems,{tab:state.payrollTab||"all"' in SRC
     assert 'payrollFlagsV41(row)+payrollRowNoteV41(row):""' in SRC
     assert 'id="payrollBranch"' in SRC and 'getElementById("payrollBranch")?.addEventListener("change"' in SRC
     assert '["급여번호","직원","지점","총지급액"' in SRC
