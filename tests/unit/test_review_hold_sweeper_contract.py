@@ -561,3 +561,27 @@ def test_cto_enqueue_new_request_counts_once():
     assert out.returncode == 0, out.stderr
     assert "rc=0 handed=1" in out.stdout
     assert "CTO_ADJUDICATION_ENQUEUED" in out.stdout
+
+
+def test_sweeper_claim_and_exhausted_and_select_sql_exclude_diff_truncated_category():
+    """스위퍼의 claim SQL, exhausted_rows SQL, select_sql 문자열에 COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED' 가 포함되어야 한다."""
+    sweeper = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+
+    # 1. claim SQL
+    claim_start = sweeper.index('claimed=$(db_query "UPDATE pipeline_jobs')
+    claim_end = sweeper.index('RETURNING job_id;"', claim_start)
+    claim_sql = sweeper[claim_start:claim_end]
+    assert "COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'" in claim_sql
+
+    # 2. exhausted_rows SQL
+    exhausted_start = sweeper.index('exhausted_rows=$(db_query "')
+    exhausted_end = sweeper.index('LIMIT ${SWEEP_BATCH};"', exhausted_start)
+    exhausted_sql = sweeper[exhausted_start:exhausted_end]
+    assert "COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'" in exhausted_sql
+
+    # 3. select_sql
+    select_start = sweeper.index('select_sql="SELECT')
+    select_end = sweeper.index('LIMIT ${SWEEP_BATCH};"', select_start)
+    select_sql = sweeper[select_start:select_end]
+    assert "COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'" in select_sql
+

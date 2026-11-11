@@ -475,6 +475,7 @@ select_sql="SELECT job_id, project, COALESCE(review_retry_count,0), COALESCE(cha
 FROM pipeline_jobs
 WHERE status='review_hold'
   AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
+  AND COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'
   AND COALESCE(git_diff,'') <> ''
   AND COALESCE(review_retry_count,0) < ${SWEEP_MAX_RETRY}
   AND (COALESCE(error_detail,'') <> 'review_origin_adjudication_pending'
@@ -776,6 +777,7 @@ SELECT job_id, project
   FROM pipeline_jobs
  WHERE status='review_hold'
    AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
+   AND COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'
    AND COALESCE(review_retry_count,0) >= ${SWEEP_MAX_RETRY}
    AND COALESCE(error_detail,'') NOT IN ('review_origin_adjudication_pending', 'review_cto_adjudication_pending')
  ORDER BY updated_at ASC
@@ -853,6 +855,7 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error
               AND review_retry_count=${retry_count}
               AND review_retry_last_at IS NOT DISTINCT FROM ${last_at_sql}
               AND (review_flag_category IN (${INFRA_CATEGORIES}) OR review_needs_retry IS TRUE)
+              AND COALESCE(review_flag_category,'') <> 'REVIEW_DIFF_TRUNCATED'
             RETURNING job_id;" 2>/dev/null | tr -d '[:space:]') || claimed=""
         if [[ "$claimed" != "$job_id" ]]; then
             log "  SKIP ${job_id} — 다른 스위퍼가 소유권 확보"
@@ -1067,6 +1070,18 @@ while IFS=$'\x1e' read -r job_id project retry_count session_id request_id error
             db_exec "INSERT INTO chat_messages (id, session_id, role, content, created_at)
                      VALUES (gen_random_uuid(), '${session_id}'::uuid, 'assistant', ${msg}, NOW());"
         fi
+    elif [[ "$verdict" == "FLAG" && "$category" == "REVIEW_DIFF_TRUNCATED" ]]; then
+        # 절단만이 사유(리뷰어 구조화 basis=omitted_region) — 다시 돌려도 결과가 같다.
+        # 재시도 예산을 쓰지 않고 카테고리만 확정해 이후 스위프에서 제외하며, 원 세션 판정을 기다린다.
+        note=$(sql_escape "[자동재검수] REVIEW_DIFF_TRUNCATED — diff 절단만이 사유, 원 세션 판정 대기 (pipeline_review_adjudicate)")
+        db_exec "UPDATE pipeline_jobs
+                 SET review_flag_category='REVIEW_DIFF_TRUNCATED', review_needs_retry=FALSE,
+                     review_request_id=NULL,
+                     review_retry_last_at=NOW(),
+                     review_feedback=COALESCE(review_feedback,'') || E'\n' || ${note},
+                     updated_at=NOW()
+                 WHERE job_id='${job_id}' AND status='review_hold';"
+        log "  TRUNCATED_HOLD $job_id — 재검수 제외, 원 세션 판정 대기"
     elif [[ "$verdict" == "REQUEST_CHANGES" ]]; then
         # 인프라 장애가 아니라 실제 코드 반려 — 승인 큐로 올리지 않고 확정한다.
         note=$(sql_escape "[자동재검수] REQUEST_CHANGES score=${score} — ${issues:0:400}")

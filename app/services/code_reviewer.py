@@ -524,10 +524,16 @@ Developer와 완전히 독립된 컨텍스트에서 평가합니다.
   "scope_compliance": 0.0~1.0,
   "preservation": 0.0~1.0,
   "quality": 0.0~1.0,
-  "issues": ["구체적 문제점"],
+  "needs_retry": true | false,
+  "issues": [{"basis": "visible_code" | "omitted_region", "text": "구체적 문제점"}],
   "suggestions": ["개선 제안"],
   "summary": "한줄 요약"
-}""".replace("__RATIO_RULE__", PRESERVATION_RATIO_RULE_TEXT)
+}
+
+## issues 의 basis (diff 가 길이 제한으로 잘렸을 때 서버가 이 값으로 잘림 때문의 반려를 가려낸다)
+- visible_code: 지금 보이는 diff 에서 파일·함수·동작을 직접 확인한 지적. 보이는 코드가 틀렸다면, 다른 구간이 잘렸더라도 반드시 visible_code 다.
+- omitted_region: 생략 구간을 못 봐서 확인이 안 된다는 지적뿐일 때만 쓴다.
+- 확신이 없으면 visible_code 로 적어라. 절단 사실이 지적의 문장에 섞여 있어도 보이는 코드의 결함이 하나라도 있으면 그 항목은 visible_code 다.""".replace("__RATIO_RULE__", PRESERVATION_RATIO_RULE_TEXT)
 
 
 def _looks_like_git_diff(text: str) -> bool:
@@ -963,6 +969,18 @@ def _parse_upstream_truncation(diff: str) -> Optional[int]:
     """러너가 붙인 절단 고지가 있으면 원래 diff 바이트 수, 없으면 None."""
     match = _UPSTREAM_TRUNCATION_RE.match((diff or "").lstrip())
     return int(match.group(1)) if match else None
+
+
+# 러너(capture_job_diff_text → _job_diff_render)는 상한에서 자르면 diff 끝에 고정 표지
+# `# [TRUNCATED] 상한 N바이트 — 생략된 파일: …` 한 줄을 남기고 이 줄은 DB git_diff 에도 저장된다.
+# 스위퍼처럼 DB 의 git_diff 를 앞머리 고지 없이 그대로 재전송하는 경로도 이 표지로 절단을 안다.
+# diff 본문 줄은 항상 `+`/`-`/공백/`\`로 시작하므로 줄 맨앞 `# [TRUNCATED]` 는 diff 내용으로 위조할 수 없다.
+_DIFF_TRUNCATION_MARKER_RE = re.compile(r"^# \[TRUNCATED\] 상한 (\d+)바이트", re.MULTILINE)
+
+
+def _has_diff_truncation_marker(diff: Optional[str]) -> bool:
+    """러너가 남긴 절단 표지 줄이 있으면 True."""
+    return bool(diff) and _DIFF_TRUNCATION_MARKER_RE.search(diff) is not None
 
 
 def _extract_upstream_diffstat_files(diff: str) -> list[str]:
@@ -1780,8 +1798,22 @@ def _precheck_preservation_gate(
         (additions + deletions) * _PRESERVATION_NET_REMOVAL_RATIO,
     )
 
+    # 절단된 diff 의 줄 수는 하한일 뿐이다 — 추가 줄(재정의·이동 대상)이 생략 구간에 있으면
+    # "삭제만 보이는" 것처럼 계산돼 이 게이트가 조기 반환하고 LLM 검수·절단 정규화에 닿지 못한다.
+    # 절단 시에는 줄 수 비율 판정을 보류하고 사실만 남긴다(심볼 삭제 확정·범위 게이트는 아래에서 그대로 돈다).
+    line_gate_unverified = bool(diff_truncated) and (additions > 0 or deletions > 0)
+    if line_gate_unverified:
+        unverified_note = {
+            "preservation_line_gate_unverified": "diff_truncated",
+            "preservation_visible_additions": additions,
+            "preservation_visible_deletions": deletions,
+        }
+        feedback.update(unverified_note)
+        if exemption_out is not None:
+            exemption_out.update(unverified_note)
     if (
-        additions > 0
+        not line_gate_unverified
+        and additions > 0
         and deletions > additions * 0.5
         and net_removal > net_removal_allowance
     ):
@@ -1790,7 +1822,7 @@ def _precheck_preservation_gate(
             f"{net_removal}줄입니다. 기존 구현 조사표와 삭제 사유가 필요합니다."
             + _PRESERVATION_LINE_GATE_NOTE
         )
-    elif additions == 0 and deletions > 0:
+    elif not line_gate_unverified and additions == 0 and deletions > 0:
         issues.append(
             f"추가 없이 삭제 라인({deletions})만 존재합니다. 삭제 사유가 필요합니다."
             + _PRESERVATION_LINE_GATE_NOTE
@@ -1936,6 +1968,51 @@ async def _save_review_result(
         logger.warning("code_reviewer_db_save_error: error=%s", _sanitize_review_text(db_err, limit=200))
 
 
+_BASIS_VISIBLE = "visible_code"
+_BASIS_OMITTED = "omitted_region"
+_ISSUE_TEXT_KEYS = ("text", "issue", "description", "message", "summary")
+
+
+def _issue_text(issue: object) -> str:
+    """구조화 이슈(dict)·구형 문자열 모두에서 사람이 읽는 문장을 꺼낸다."""
+    if isinstance(issue, dict):
+        for key in _ISSUE_TEXT_KEYS:
+            value = issue.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(issue, ensure_ascii=False)
+    return str(issue)
+
+
+def _all_issues_omitted_region(issues: object) -> bool:
+    """이슈가 하나 이상이고 **모두** basis=omitted_region 인 구조화 항목일 때만 True.
+
+    문장 내용(단어)으로는 판정하지 않는다. basis 누락·구형 문자열·visible_code 가
+    하나라도 있으면 False — 결함이 섞인 반려를 절단 보류로 바꾸지 않는다(보수적).
+    """
+    if not isinstance(issues, list) or not issues:
+        return False
+    for issue in issues:
+        if not isinstance(issue, dict):
+            return False
+        basis = issue.get("basis")
+        if not isinstance(basis, str) or basis.strip().lower() != _BASIS_OMITTED:
+            return False
+    return True
+
+
+def _is_truncation_only_rejection(
+    verdict: str, needs_retry: bool, was_truncated: bool, issues: object
+) -> bool:
+    """REQUEST_CHANGES ∧ needs_retry ∧ 절단 ∧ 모든 이슈가 생략 구간 근거."""
+    return (
+        verdict == "REQUEST_CHANGES"
+        and bool(needs_retry)
+        and bool(was_truncated)
+        and _all_issues_omitted_region(issues)
+    )
+
+
 async def review_code_diff(
     project: str,
     job_id: str,
@@ -1966,13 +2043,17 @@ async def review_code_diff(
     # 게이트 입력과 절단 사실을 먼저 정한다. 측정값(diff_truncated)은 실제 절단 여부를 그대로 적는다.
     upstream_bytes = None if full_diff else _parse_upstream_truncation(diff)
     gate_diff = full_diff or diff
-    gate_truncated = bool(diff_truncated) if full_diff else (
-        upstream_bytes is not None or bool(diff_truncated)
+    # 절단 표지는 보존 게이트를 포함한 모든 사전 게이트가 쓰는 gate_truncated 에 먼저 반영한다.
+    # LLM 응답 정규화 시점에만 보면, 앞서 도는 게이트가 잘린 diff 를 완전한 것으로 보고 조기 반환한다.
+    marker_truncated = _has_diff_truncation_marker(gate_diff)
+    gate_truncated = (bool(diff_truncated) or marker_truncated) if full_diff else (
+        upstream_bytes is not None or bool(diff_truncated) or marker_truncated
     )
     truncation_source = (
-        ("full_diff_cap" if gate_truncated else None) if full_diff
+        ("full_diff_cap" if diff_truncated else "diff_marker" if gate_truncated else None) if full_diff
         else "upstream_prefix" if upstream_bytes is not None
-        else "upstream_flag" if gate_truncated
+        else "upstream_flag" if diff_truncated
+        else "diff_marker" if gate_truncated
         else None
     )
     original_chars = (
@@ -2074,6 +2155,8 @@ async def review_code_diff(
         "- 보이는 코드의 실제 결함만 판정하라.\n"
         "- 생략 구간 확인이 꼭 필요하면 verdict=FLAG, needs_retry=true 로 내고"
         " issues 에 확인이 필요한 파일/함수명을 구체적으로 적어라.\n"
+        "- 각 issue 의 basis 는 보이는 코드에서 확인한 지적이면 visible_code,"
+        " 생략 구간을 못 봐서 생긴 지적이면 omitted_region 으로 적어라.\n"
     ) if was_truncated else ""
     if unverified_symbols:
         truncation_notice += (
@@ -2432,6 +2515,24 @@ async def review_code_diff(
             flag_category = "CODE_QUALITY"
         if verdict == "FLAG" and not failure_stage:
             failure_stage = "review_analysis"
+
+        # 절단만이 사유인 반려는 재검수해도 결과가 같다 — 코드 결함 반려(review_failed)가 아니라
+        # 원 세션이 판정하는 review_hold 로 보낸다. 판별은 단어 목록이 아니라 리뷰어가 이슈마다
+        # 적은 basis 필드로만 한다(모두 omitted_region 일 때만).
+        raw_issues = details.get("issues", [])
+        if any(isinstance(item, dict) for item in raw_issues):
+            details["issues_structured"] = raw_issues
+            details["issues"] = [_issue_text(item) for item in raw_issues]
+        if _is_truncation_only_rejection(verdict, needs_retry, was_truncated, raw_issues):
+            verdict = "FLAG"
+            flag_category = "REVIEW_DIFF_TRUNCATED"
+            failure_stage = "review_diff_truncated"
+            needs_retry = False
+            details["flag_category"] = flag_category
+            details["failure_stage"] = failure_stage
+            details["needs_retry"] = False
+            details["truncation_only_rejection"] = True
+            logger.info("review_diff_truncated_hold job_id=%s", job_id)
 
         # A successful fallback is evidence too: retain every preceding
         # timeout/error and the final valid model in the durable code_reviews

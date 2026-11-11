@@ -602,5 +602,63 @@ def test_expired_origin_marker_left_by_a_previous_sweep_is_picked_up_once(db, sw
     assert _run(env.val("SELECT COUNT(*) FROM chat_deferred_reactions WHERE session_id=$1::uuid", cto)) == 1
 
 
+def test_sweeper_never_claims_or_exhausts_diff_truncated_even_with_needs_retry_true(db, sweeper_env):
+    """M3_REVIEW_PG_ADMIN_URL 환경: review_needs_retry=TRUE 여도 REVIEW_DIFF_TRUNCATED 행은 스위퍼에 잡히거나 소진 종결되지 않는다."""
+    env = Env(db)
+    job_exhaust = "runner-trunc-exh"
+    job_active = "runner-trunc-act"
+    origin = _run(env.session("origin", T1, "CEO"))
+
+    # 상한 도달 행 (retry_count=10 >= SWEEP_MAX_RETRY)
+    _run(env.job(job_exhaust, origin, review_flag_category="REVIEW_DIFF_TRUNCATED",
+                 review_needs_retry=True, review_retry_count=10))
+    # 일반 대기 행 (retry_count=0)
+    _run(env.job(job_active, origin, review_flag_category="REVIEW_DIFF_TRUNCATED",
+                 review_needs_retry=True, review_retry_count=0))
+
+    _sweep(sweeper_env)
+
+    # 둘 다 여전히 review_hold 상태여야 하며, 소진 종결(review_retry_exhausted)되거나 claim 되지 않아야 함
+    st_exh, ph_exh, _ = _run(_job_state(env, job_exhaust))
+    st_act, ph_act, _ = _run(_job_state(env, job_active))
+    assert (st_exh, ph_exh) == ("review_hold", "review_hold")
+    assert (st_act, ph_act) == ("review_hold", "review_hold")
+    # reactions 도 생성되지 않아야 함
+    assert _run(env.val("SELECT COUNT(*) FROM chat_deferred_reactions WHERE ohvis_task_id LIKE $1",
+                        f"%:{job_exhaust}:%")) == 0
+    assert _run(env.val("SELECT COUNT(*) FROM chat_deferred_reactions WHERE ohvis_task_id LIKE $1",
+                        f"%:{job_active}:%")) == 0
+
+
+def test_adjudicate_truncated_hold_unknown_in_pg_preserves_needs_retry_and_allows_subsequent_approval(db, sweeper_env):
+    """PG 환경: REVIEW_DIFF_TRUNCATED + UNKNOWN -> 상태·needs_retry·retry_count 불변 유지 후 원 세션의 후속 APPROVE 가능."""
+    env = Env(db)
+    job = "runner-trunc-adj"
+    origin = _run(env.session("origin", T1, "CEO"))
+    _run(env.job(job, origin, review_flag_category="REVIEW_DIFF_TRUNCATED",
+                 review_needs_retry=False, review_retry_count=0))
+
+    # 1. UNKNOWN 판정 제출
+    out_unk = _call(env, job, origin, "UNKNOWN")
+    assert out_unk["status"] == "review_hold"
+    assert out_unk["verdict"] == "UNKNOWN"
+
+    row = _run(env.row("SELECT status, phase, review_needs_retry, review_retry_count, error_detail FROM pipeline_jobs WHERE job_id=$1", job))
+    assert row["status"] == "review_hold"
+    assert row["phase"] == "review_hold"
+    assert row["review_needs_retry"] is False
+    assert row["review_retry_count"] == 0
+    assert row["error_detail"] != "review_adjudication_unknown"
+
+    # 2. 이후 원 세션이 APPROVE 판정 제출 가능
+    out_app = _call(env, job, origin, "APPROVE")
+    assert out_app["status"] == "awaiting_approval"
+    assert out_app["verdict"] == "APPROVE"
+
+    st_final, ph_final, _ = _run(_job_state(env, job))
+    assert (st_final, ph_final) == ("awaiting_approval", "awaiting_approval")
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-q"]))
+

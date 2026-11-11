@@ -3464,6 +3464,17 @@ resolve_job_base_sha() {
 }
 # ─── SHARED-BLOCK END: job_diff_contract ──────────────────────────────
 
+# review_hold 로 보낼 리뷰 flag_category 의 유일한 정의 — 모든 분기(ai_review 본 경로·rebase 후 재리뷰)가 이 함수를 쓴다.
+# 인프라 장애 4종 + REVIEW_DIFF_TRUNCATED(diff 절단만이 사유인 반려 — 재검수해도 같으므로 원 세션이 판정).
+# 스위퍼의 INFRA_CATEGORIES 에는 REVIEW_DIFF_TRUNCATED 를 넣지 않는다(자동 재검수 대상 제외).
+review_category_is_hold() {
+    case "${1:-}" in
+        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT|REVIEW_DIFF_TRUNCATED)
+            return 0 ;;
+    esac
+    return 1
+}
+
 # AADS-RUNNER-REVIEW-DIFF-TRUNCATION (2026-09-30): capture_job_diff_text 는 45000/5000/
 # 50000B 에서 조용히 자른다. 리뷰어는 앞부분만 보고 "뒤에 있어야 할 파일이 없다"고
 # 반려했다(runner-0e9ce12d/0f81541a/67757d58). 잘렸다는 사실과 전체 변경 파일 목록을
@@ -7693,6 +7704,9 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             log "  AI_REVIEW_PRECHECK_FAIL job=$job_id category=$review_flag_category"
         fi
     fi
+    if [[ "$review_flag_category" == "REVIEW_DIFF_TRUNCATED" ]]; then
+        review_needs_retry="false"
+    fi
     db_update "UPDATE pipeline_jobs
                SET review_verdict=$(sql_escape "$review_verdict"),
                    review_score=${review_score:-0.0},
@@ -7704,11 +7718,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
 
     # P0: 인프라 원인(리뷰 API/모델/파서 장애)과 실제 코드 반려를 구분
     local review_infra_failure="false"
-    case "$review_flag_category" in
-        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
-            review_infra_failure="true"
-            ;;
-    esac
+    review_category_is_hold "$review_flag_category" && review_infra_failure="true"
 
     if [[ "$review_verdict" != "APPROVE" ]]; then
         local review_error_detail="review_failed: verdict=${review_verdict} score=${review_score}"
@@ -7724,6 +7734,8 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             review_hold_status="review_hold"
             review_hold_phase="review_hold"
             review_hold_note="FLAG+hold — 리뷰 인프라 장애로 승인 보류"
+            [[ "$review_flag_category" == "REVIEW_DIFF_TRUNCATED" ]] \
+                && review_hold_note="FLAG+hold — diff 절단만이 반려 사유라 원 세션 판정 대기"
         fi
         log "  AI_REVIEW_HOLD job=$job_id status=${review_hold_status} phase=${review_hold_phase} ${review_error_detail}"
         local _ai_reviewer_note="${review_hold_note} — ${review_error_detail}"
@@ -7734,6 +7746,7 @@ $(printf '%s\n' "$_dirty_status" | head -20)
                    error_detail=$(sql_escape "$review_error_detail"),
                    result_output=$(sql_escape "$output"),
                    git_diff=$(sql_escape "$git_diff"),
+                   review_needs_retry=$([[ "$review_needs_retry" == "true" ]] && echo TRUE || echo FALSE),
                    review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ' || $(sql_escape "$_ai_reviewer_note"),
                    completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         # 위 UPDATE 는 result_output·git_diff 를 통째로 싣는다. 그게 어떤 이유로든
@@ -7748,11 +7761,15 @@ $(printf '%s\n' "$_dirty_status" | head -20)
             log "  REVIEW_HOLD_WRITE_MISSED job=$job_id status='${_hold_now}' expected='${review_hold_status}' — payload 없이 재시도"
             db_update "UPDATE pipeline_jobs SET status='${review_hold_status}', phase='${review_hold_phase}',
                        error_detail=$(sql_escape "$review_error_detail"),
+                       review_needs_retry=$([[ "$review_needs_retry" == "true" ]] && echo TRUE || echo FALSE),
                        review_feedback=COALESCE(review_feedback,'') || E'\n[AI Reviewer] ' || $(sql_escape "$_ai_reviewer_note"),
                        completed_at=NOW(), updated_at=NOW() WHERE job_id='${job_id}';"
         fi
         record_runner_event "$job_id" "job_terminal" "$review_hold_status" "$review_hold_phase" "$job_model" "" "$job_size" "" "{\"error_detail\":\"${review_hold_phase}\",\"verdict\":\"${review_verdict}\",\"flag_category\":\"${review_flag_category}\",\"policy\":\"FLAG+hold\"}"
-        if [[ "$review_infra_failure" == "true" ]]; then
+        if [[ "$review_flag_category" == "REVIEW_DIFF_TRUNCATED" ]]; then
+            post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰가 diff 절단(45000B 상한) 때문에 확인하지 못한 구간만 지적했습니다: $job_id — ${review_error_detail}
+코드 결함 반려가 아닙니다. 자동 재검수는 결과가 같아 하지 않습니다. 원 세션이 저장된 diff 와 테스트 증거를 보고 pipeline_review_adjudicate(job_id, expected_commit_sha, expected_diff_sha256, verdict=APPROVE|REJECT|UNKNOWN, findings) 로 판정해 주세요. 작업 산출물(worktree)은 보존했습니다: ${worktree_dir}"
+        elif [[ "$review_infra_failure" == "true" ]]; then
             post_to_chat "$session_id" "🟠 [Pipeline Runner] AI 리뷰 인프라 장애로 승인 보류: $job_id — ${review_error_detail}
 코드 반려가 아니라 리뷰 시스템 장애입니다. 지금은 CEO 승인 단계가 아니므로 승인 버튼이 표시되지 않습니다. 자동 재검수 통과 후 승인 대기로 전환되면 버튼이 생성됩니다. 작업 산출물(worktree)은 재검수를 위해 보존했습니다: ${worktree_dir}"
         else
@@ -8363,14 +8380,15 @@ review_rebased_aads_sha() {
     [[ "$score" =~ ^[0-9]+([.][0-9]+)?$ ]] || score="0"
     flag_category=$(printf '%s' "$response" | jq -r '.flag_category // empty')
     local review_infra_failure="false"
-    case "$flag_category" in
-        REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)
-            review_infra_failure="true" ;;
-    esac
+    review_category_is_hold "$flag_category" && review_infra_failure="true"
     if [[ "$review_infra_failure" == "true" ]]; then
+        local rebase_needs_retry="TRUE"
+        if [[ "$flag_category" == "REVIEW_DIFF_TRUNCATED" ]]; then
+            rebase_needs_retry="FALSE"
+        fi
         db_update "UPDATE pipeline_jobs SET status='review_hold', phase='review_hold',
                    review_verdict=$(sql_escape "$verdict"), review_score=${score:-0},
-                   review_flag_category=$(sql_escape "$flag_category"), review_needs_retry=TRUE,
+                   review_flag_category=$(sql_escape "$flag_category"), review_needs_retry=${rebase_needs_retry},
                    error_detail=$(sql_escape "review_infra_failed: category=${flag_category}"),
                    runner_pid=NULL, updated_at=NOW()
                    WHERE job_id='${job_id}' AND status='running' AND commit_hash='${sha}';"

@@ -430,7 +430,7 @@ def test_pipeline_runner_separates_review_infra_failure_from_code_rejection():
         script = _read_script(script_name)
 
         assert 'review_infra_failure="false"' in script
-        assert "REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT)" in script
+        assert "REVIEW_API_UNAVAILABLE|REVIEW_MODEL_NO_RESPONSE|REVIEW_PARSER_FAILURE|REVIEW_TIMEOUT|REVIEW_DIFF_TRUNCATED)" in script
         assert 'review_error_detail="review_infra_failed:' in script
         assert "WORKTREE_PRESERVED_FOR_REREVIEW" in script
         assert "AI 리뷰 인프라 장애로 승인 보류" in script
@@ -444,3 +444,62 @@ def test_pipeline_runner_does_not_label_unreviewed_diff_as_approved():
         assert 'if [[ "$review_verdict" == "APPROVE" && "$review_needs_retry" == "true" ]]; then' in script
         assert "AI 리뷰 미수행" in script
         assert "사람 검수 필요" in script
+
+
+def test_every_review_hold_branch_includes_diff_truncated_category():
+    """infra/hold 분기(ai_review 본 경로·rebase 후 재리뷰)가 REVIEW_DIFF_TRUNCATED 를 빠뜨리지 않는다."""
+    import re
+
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+        # 인프라 카테고리를 나열한 case 라벨은 전부 REVIEW_DIFF_TRUNCATED 도 가져야 한다.
+        lines = [ln for ln in script.splitlines() if "REVIEW_PARSER_FAILURE|" in ln and "REVIEW_TIMEOUT" in ln]
+        assert lines, script_name
+        for line in lines:
+            assert "REVIEW_DIFF_TRUNCATED" in line, (script_name, line)
+        # 두 호출 지점은 라벨을 직접 나열하지 않고 한 함수를 쓴다(분기별 사본이 갈라지지 않게).
+        assert script.count('review_category_is_hold "$review_flag_category"') == 1
+        assert script.count('review_category_is_hold "$flag_category"') == 1
+        assert not re.search(r'case "\$(review_)?flag_category" in\s+REVIEW_API_UNAVAILABLE', script)
+
+
+def test_review_category_is_hold_behaves_for_each_category():
+    script = _read_script("pipeline-runner.sh")
+    func = _extract_function(script, "review_category_is_hold") + "\n}\n"
+    expected = {
+        "REVIEW_API_UNAVAILABLE": 0, "REVIEW_MODEL_NO_RESPONSE": 0, "REVIEW_PARSER_FAILURE": 0,
+        "REVIEW_TIMEOUT": 0, "REVIEW_DIFF_TRUNCATED": 0, "CODE_QUALITY": 1, "": 1,
+    }
+    for category, rc in expected.items():
+        proc = subprocess.run(
+            ["bash", "-c", f'{func}\nreview_category_is_hold "$1"', "_", category],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert proc.returncode == rc, (category, proc.stderr)
+
+
+def test_sweeper_does_not_auto_rereview_diff_truncated_category():
+    sweeper = (ROOT / "scripts" / "review-hold-sweeper.sh").read_text(encoding="utf-8")
+    infra = next(ln for ln in sweeper.splitlines() if ln.startswith("INFRA_CATEGORIES="))
+    assert "REVIEW_DIFF_TRUNCATED" not in infra
+    assert "TRUNCATED_HOLD" in sweeper
+
+
+def test_every_hold_storage_branch_writes_needs_retry_false_for_diff_truncated():
+    """모든 hold 저장 분기(ai_review 본 경로, rebase 재검수 분기)가 REVIEW_DIFF_TRUNCATED 일 때 needs_retry=FALSE 로 저장한다."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+
+        # 1. rebase 후 재검수 분기 (review_rebased_aads_sha)
+        rebase_fn = _extract_function(script, "review_rebased_aads_sha")
+        assert 'if [[ "$flag_category" == "REVIEW_DIFF_TRUNCATED" ]]; then' in rebase_fn
+        assert 'rebase_needs_retry="FALSE"' in rebase_fn
+        assert "review_needs_retry=${rebase_needs_retry}" in rebase_fn
+
+        # 2. main ai_review 분기
+        review_trunc_check = script.index('if [[ "$review_flag_category" == "REVIEW_DIFF_TRUNCATED" ]]; then')
+        first_update = script.index("SET review_verdict=$(sql_escape \"$review_verdict\")", review_trunc_check)
+        update_window = script[review_trunc_check:first_update + 500]
+        assert 'review_needs_retry="false"' in update_window
+        assert 'review_needs_retry=$([[ "$review_needs_retry" == "true" ]] && echo TRUE || echo FALSE)' in update_window
+

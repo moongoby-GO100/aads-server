@@ -4457,6 +4457,8 @@ _REVIEW_INFRA_CATEGORIES = frozenset(
         "REVIEW_TIMEOUT",
     }
 )
+# 절단만이 사유인 반려 — 재검수해도 결과가 같으므로 자동 재검수 횟수와 무관하게 원 세션이 판정한다.
+_REVIEW_DIFF_TRUNCATED_CATEGORY = "REVIEW_DIFF_TRUNCATED"
 _ORIGIN_ADJUDICATION_STALE_MARKERS = frozenset(
     {"review_origin_adjudication_expired", "review_cto_adjudication_pending"}
 )
@@ -4538,11 +4540,13 @@ async def adjudicate_review_from_origin_session(
                 is_origin and row["tenant_id"] != row["session_tenant_id"]
             ):
                 raise HTTPException(status_code=409, detail="작업과 원 세션의 tenant가 일치하지 않습니다")
-            if row["review_flag_category"] not in _REVIEW_INFRA_CATEGORIES:
+            is_truncated_hold = row["review_flag_category"] == _REVIEW_DIFF_TRUNCATED_CATEGORY
+            if row["review_flag_category"] not in _REVIEW_INFRA_CATEGORIES and not is_truncated_hold:
                 raise HTTPException(status_code=409, detail="리뷰 인프라 장애 작업만 원 세션 폴백이 가능합니다")
 
             retry_threshold = _env_positive_int("REVIEW_ORIGIN_ADJUDICATION_RETRY_THRESHOLD", 3)
-            if int(row["review_retry_count"] or 0) < retry_threshold:
+            # REVIEW_DIFF_TRUNCATED 만 임계값을 건너뛴다. SHA·diff hash 검증은 아래에서 그대로 한다.
+            if not is_truncated_hold and int(row["review_retry_count"] or 0) < retry_threshold:
                 raise HTTPException(status_code=409, detail="자동 재검수 상한에 도달하지 않았습니다")
 
             commit_sha = str(row["commit_hash"] or "").lower()
@@ -4616,23 +4620,40 @@ async def adjudicate_review_from_origin_session(
                 )
                 next_status, next_phase = "error", "review_failed"
             elif is_origin:
-                result = await conn.execute(
-                    """
-                    UPDATE pipeline_jobs
-                       SET review_verdict='UNKNOWN', review_score=NULL,
-                           review_needs_retry=TRUE, review_request_id=NULL,
-                           review_retry_count=GREATEST($2 - 1, 0),
-                           review_retry_last_at=NOW(),
-                           error_detail='review_adjudication_unknown',
-                           review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] UNKNOWN — 다음 백오프 후 자동 재검수: ' || $3,
-                           updated_at=NOW()
-                     WHERE job_id=$1 AND status='review_hold' AND commit_hash=$4
-                    """,
-                    job_id,
-                    retry_threshold,
-                    findings,
-                    commit_sha,
-                )
+                if is_truncated_hold:
+                    # 절단 보류는 자동 재검수 대상이 아니다. 원 세션이 UNKNOWN 을 제출해도
+                    # needs_retry·retry_count 를 바꾸지 않고 review_hold 에 그대로 두어
+                    # 원 세션이 나중에 APPROVE/REJECT 할 수 있게 한다.
+                    result = await conn.execute(
+                        """
+                        UPDATE pipeline_jobs
+                           SET review_verdict='UNKNOWN', review_score=NULL,
+                               review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] UNKNOWN — 절단 보류 판정 유보(원 세션 후속 판정 대기): ' || $2::text,
+                               updated_at=NOW()
+                         WHERE job_id=$1 AND status='review_hold' AND commit_hash=$3
+                        """,
+                        job_id,
+                        findings,
+                        commit_sha,
+                    )
+                else:
+                    result = await conn.execute(
+                        """
+                        UPDATE pipeline_jobs
+                           SET review_verdict='UNKNOWN', review_score=NULL,
+                               review_needs_retry=TRUE, review_request_id=NULL,
+                               review_retry_count=GREATEST($2 - 1, 0),
+                               review_retry_last_at=NOW(),
+                               error_detail='review_adjudication_unknown',
+                               review_feedback=COALESCE(review_feedback,'') || E'\n[원 세션 판정] UNKNOWN — 다음 백오프 후 자동 재검수: ' || $3,
+                               updated_at=NOW()
+                         WHERE job_id=$1 AND status='review_hold' AND commit_hash=$4
+                        """,
+                        job_id,
+                        retry_threshold,
+                        findings,
+                        commit_sha,
+                    )
                 next_status, next_phase = "review_hold", "review_hold"
             else:
                 # CTO 의 UNKNOWN 은 판정이 아니다. 재검수 루프로 되돌리지 않고 요청만 소비하며,
