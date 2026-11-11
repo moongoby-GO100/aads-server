@@ -36,6 +36,7 @@ from scripts.claude_model_contract import resolve_relay_model as resolve_model
 from app.services.model_registry import resolve_executable_claude_model
 
 logger = logging.getLogger(__name__)
+from app.services import model_roles as _mr  # noqa: E402
 
 
 # ─── 설정 ─────────────────────────────────────────────────────────────────────
@@ -62,18 +63,11 @@ _MAX_DIFF_CHARS = 50000     # git diff 최대 문자수 (L3) — 사용자 알�
 # 보존·범위 게이트용 전체 diff 상한. 메모리 보호용이라 _MAX_DIFF_CHARS 보다 훨씬 크게 둔다.
 # 이걸 넘으면 review_diff_truncated=True 로 명시한다(표시 없는 절단 금지).
 _MAX_REVIEW_DIFF_CHARS = 2_000_000
-_REVIEW_MODEL = "claude-sonnet-5-5"
 _MAX_REVIEW_PARSE_RETRIES = 3  # AI 검수 인프라 실패(DELEGATED) 재시도 횟수 — 소진 후 세션 AI 직접 검수 전환
 
 # AADS-234: LiteLLM Runner 폴백 모델 — size 기반, 무료 쿼터 우선
 # CEO 지시: 전 사이즈 Sonnet 5 통일, 폴백 Codex GPT 5.6 Tela (2026-09-11)
-_CLAUDE_MODEL_BY_SIZE = {
-    "XS": "claude-sonnet-5-5",
-    "S":  "claude-sonnet-5-5",
-    "M":  "claude-sonnet-5-5",
-    "L":  "claude-sonnet-5-5",
-    "XL": "claude-sonnet-5-5",
-}
+_CLAUDE_MODEL_BY_SIZE = _mr.live_map("runner_claude_model_by_size")
 
 # CEO 지시(2026-09-11): 유료 LiteLLM 폴백 비활성화, 무료 Groq만 유지
 _LITELLM_FALLBACK_MODELS = {
@@ -85,7 +79,7 @@ _LITELLM_FALLBACK_MODELS = {
 }
 
 # Codex CLI 가용 모델 (Codex catalog, 2026-04-28)
-_CODEX_AVAILABLE_MODELS = {"default", "gpt-6-astra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_CODEX_AVAILABLE_MODELS = _mr.live_set("runner_codex_available_models")
 _TERMINAL_JOB_STATUSES = {
     "done",
     "error",
@@ -709,8 +703,8 @@ class PipelineCJob:
         if worker_model and worker_model.startswith("codex:"):
             codex_name = worker_model.split(":", 1)[1]
             if not _is_codex_model_allowed(codex_name):
-                logger.warning("Codex model '%s' is not a GPT model id, fallback to gpt-5.6-terra", codex_name)
-                worker_model = "codex:gpt-5.6-terra"
+                logger.warning("Codex model '%s' is not a GPT model id, fallback to %s", codex_name, _mr.role_scalar("runner_codex_default_model"))
+                worker_model = f"codex:{_mr.role_scalar('runner_codex_default_model')}"
         self.worker_model = worker_model
         # AADS-211: 병렬 실행 그룹
         self.parallel_group = parallel_group
@@ -785,6 +779,7 @@ class PipelineCJob:
         파이프라인 진행상황을 CEO 채팅방(chat_messages)에 직접 삽입.
         CEO가 채팅방에서 실시간으로 전 과정을 확인할 수 있도록 함.
         """
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         if not self.chat_session_id:
             logger.warning(f"pipeline_c | job={self.job_id} | _post_to_chat 건너뜀: chat_session_id 없음 (content={content[:80]}...)")
             return
@@ -802,7 +797,7 @@ class PipelineCJob:
                 source="pipeline_runner",
                 project=self.project,
                 metadata={"job_id": self.job_id, "phase": self.phase, "cycle": self.cycle},
-                model_used=_REVIEW_MODEL,
+                model_used=_mr.role_scalar("runner_review_model"),
                 intent="pipeline_c",
             )
             if result.posted:
@@ -909,6 +904,7 @@ class PipelineCJob:
 
     async def _run_inner(self):
         """run()의 실제 본체 — 프로젝트 락 안에서 실행."""
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         try:
             await self._save_to_db()
             # 작업 시작 이벤트
@@ -980,7 +976,7 @@ class PipelineCJob:
                 )
                 work_result = await self._run_litellm_fallback(enriched_instruction, override_model=_direct_model)
             elif _wm.startswith("codex:"):
-                _codex_model = _wm.split(":", 1)[1] or "gpt-5.6-terra"
+                _codex_model = _wm.split(":", 1)[1] or _mr.role_scalar("runner_codex_default_model")
                 self._log("codex_direct", f"Codex CLI 직접 실행 (CEO 명시 지정, model={_codex_model})")
                 await self._post_to_chat(
                     f"🤖 **[Codex Runner 시작]** `{self.job_id}`\n"
@@ -988,11 +984,7 @@ class PipelineCJob:
                     f"지시: {self.instruction[:300]}"
                 )
                 work_result = await self._run_codex_cli(enriched_instruction, override_model=_codex_model)
-            elif _wm.startswith("antigravity") or _wm.startswith(("gemini-4-argon-", "gemini-3.8-flash-")) or _wm in {
-                "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
-                "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
-                "gpt-oss-120b-medium",
-            }:
+            elif _wm.startswith("antigravity") or _wm.startswith(tuple(_mr.role_list("runner_antigravity_prefixes"))) or _wm in _mr.role_list("runner_antigravity_direct_models"):
                 _agy_model = _wm.split(":", 1)[1] if ":" in _wm else _wm
                 self._log("antigravity_direct", f"Antigravity CLI 직접 실행 (CEO 명시 지정, model={_agy_model})")
                 await self._post_to_chat(
@@ -1003,13 +995,13 @@ class PipelineCJob:
                 work_result = await self._run_antigravity_cli(enriched_instruction, override_model=_agy_model)
             elif _wm == "claude":
                 # Claude 명시 지정: Claude 직행 (크기별 모델 분기)
-                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
+                _claude_model = _CLAUDE_MODEL_BY_SIZE.get(self.size, _mr.role_scalar("runner_default_claude_model"))
                 work_result = await self._run_model_candidate(enriched_instruction, _claude_model)
             else:
                 # 기본: DB runner_model_config 우선순위 순회 → DB 미구성/실패 시 기존 폴백 유지
                 db_models = await _get_db_model_config(self.size)
                 model_cycle = db_models or [
-                    _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5"),
+                    _CLAUDE_MODEL_BY_SIZE.get(self.size, _mr.role_scalar("runner_default_claude_model")),
                 ]
                 self._log("model_cycle", f"모델 우선순위: {', '.join(model_cycle)}")
 
@@ -1154,7 +1146,7 @@ class PipelineCJob:
                 # 재작업 실패 시 Codex CLI 폴백 (LiteLLM 유료 비활성화, CEO 지시 2026-09-11)
                 if work_result.get("error") and self.project == "AADS":
                     self._log("codex_fallback_attempt", f"재작업 실패 → Codex CLI 폴백: {work_result['error'][:100]}")
-                    work_result = await self._run_codex_cli(revision_instruction, override_model="gpt-5.6-terra")
+                    work_result = await self._run_codex_cli(revision_instruction, override_model=_mr.role_scalar("runner_codex_default_model"))
 
                 if work_result.get("error"):
                     self._log("error", f"재작업 오류: {work_result['error']}")
@@ -1970,10 +1962,11 @@ class PipelineCJob:
 
     async def _run_codex_cli(self, instruction: str, override_model: str = "") -> dict:
         """Codex CLI 실행. ChatGPT Plus OAuth 기반."""
-        codex_model = override_model or "gpt-5.6-terra"
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
+        codex_model = override_model or _mr.role_scalar("runner_codex_default_model")
         if not _is_codex_model_allowed(codex_model):
-            logger.warning("pipeline_c_codex_invalid_model job=%s model=%s -> gpt-5.6-terra", self.job_id, codex_model)
-            codex_model = "gpt-5.6-terra"
+            codex_model = _mr.role_scalar("runner_codex_default_model")
+            logger.warning("pipeline_c_codex_invalid_model job=%s model=%s -> %s", self.job_id, override_model, codex_model)
 
         self.actual_model = f"codex:{codex_model}"
         self._log("codex_runner", f"Codex CLI 시작 (project={self.project}, model={codex_model})")
@@ -2043,13 +2036,14 @@ class PipelineCJob:
 
     async def _run_antigravity_cli(self, instruction: str, override_model: str = "") -> dict:
         """Antigravity CLI (agy) 실행. Google Pro OAuth 기반."""
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         raw_model = (override_model or "antigravity-pro").strip()
         if raw_model.startswith("antigravity:"):
             raw_model = raw_model.split(":", 1)[1].strip()
         if raw_model in ("antigravity-pro", ""):
-            agy_model = "gemini-4-argon-high"
+            agy_model = _mr.role_scalar("antigravity_pro_cli_model")
         elif raw_model in ("antigravity", "antigravity-flash"):
-            agy_model = "gemini-3.8-flash-medium"
+            agy_model = _mr.role_scalar("antigravity_flash_cli_model")
         else:
             agy_model = raw_model
 
@@ -2187,28 +2181,25 @@ class PipelineCJob:
 
     async def _run_model_candidate(self, instruction: str, model_spec: str) -> dict:
         """모델 스펙 접두사에 따라 실행기 선택."""
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         spec = (model_spec or "").strip()
         if not spec:
             return {"error": "빈 모델 스펙", "output": ""}
 
         if spec == "litellm":
-            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, _mr.role_scalar("runner_default_claude_model"))
 
         if spec == "claude":
-            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, "claude-sonnet-5-5")
+            spec = _CLAUDE_MODEL_BY_SIZE.get(self.size, _mr.role_scalar("runner_default_claude_model"))
 
         if spec.startswith("codex:"):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
-            return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or "gpt-5.6-terra")
+            return await self._run_codex_cli(instruction, override_model=spec.split(":", 1)[1] or _mr.role_scalar("runner_codex_default_model"))
 
         if (
             spec.startswith("antigravity")
-            or spec.startswith(("gemini-4-argon-", "gemini-3.8-flash-"))
-            or spec in {
-                "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
-                "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
-                "gpt-oss-120b-medium",
-            }
+            or spec.startswith(tuple(_mr.role_list("runner_antigravity_prefixes")))
+            or spec in _mr.role_list("runner_antigravity_direct_models")
         ):
             self._log("model_attempt", f"DB 모델 시도: {spec}")
             return await self._run_antigravity_cli(instruction, override_model=spec)

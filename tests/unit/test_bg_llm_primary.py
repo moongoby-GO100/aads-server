@@ -25,9 +25,9 @@ def reset_breaker():
     ac._bg_primary_skip_until = 0.0
 
 
-def test_default_primary_is_haiku():
+async def test_default_primary_is_haiku():
     if "LLM_BG_PRIMARY_MODEL" not in os.environ:
-        assert ac._BG_PRIMARY_MODEL == HAIKU
+        assert await ac._bg_primary_model() == HAIKU
 
 
 async def test_claude_primary_skips_litellm_and_logs_success():

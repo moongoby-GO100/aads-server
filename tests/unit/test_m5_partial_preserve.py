@@ -164,7 +164,7 @@ def test_fallback_candidates_skip_original_tried_and_duplicates():
 
 def test_429_fallback_path_uses_shared_budget_and_records_all_stages():
     src = inspect.getsource(chat_service)
-    block = src.split("_FALLBACK_CHAIN_429 = {", 1)[1].split("rate_limit_placeholder_preserved", 1)[0]
+    block = src.split("_FALLBACK_CHAIN_429 = _mr.live_map_list(", 1)[1].split("rate_limit_placeholder_preserved", 1)[0]
     # 실행이 공유하는 시도 목록 — 재개 경로가 새 예산을 만들지 않는다.
     assert 'state.setdefault("fallback_tried_models", [])' in block
     assert 'state.setdefault("fallback_trace", [])' in block

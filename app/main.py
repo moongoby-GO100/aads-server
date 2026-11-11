@@ -448,6 +448,13 @@ async def lifespan(app: FastAPI):
     configure_logging(log_level=settings.LOG_LEVEL, json_format=json_logs)
     logger.info("aads_server_starting", env=settings.ENVIRONMENT, json_logs=json_logs)
 
+    # 모델 역할 표(llm_model_roles) 1회 선적재 — 이후 동기 조회가 루프를 막지 않게 한다. 실패 시 코드 시드.
+    try:
+        from app.services.model_roles import ensure_loaded as _ensure_model_roles
+        await _ensure_model_roles()
+    except Exception as _mre:
+        logger.warning("model_roles_startup_preload_failed: " + str(_mre))
+
     # -- 서버 재시작 시 중단된 스트리밍: DB pool 초기화 후 resume (아래 참조) --
     # resume_interrupted_streams는 DB pool 이후에 실행됨 (line ~290)
 

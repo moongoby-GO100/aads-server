@@ -36,9 +36,10 @@ from app.services.model_switch_banner import (
 from app.core.project_config import normalize_project_label, resolve_project, get_display_name
 
 logger = logging.getLogger(__name__)
+from app.services import model_roles as _mr  # noqa: E402
 
-_AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
-_AUTO_ROUTED_RESUME_SKIP_MODELS = {"auto-default-llm", "claude-haiku", "qwen-turbo"}
+_AUTO_ROUTED_DB_DEFAULT_MODELS = _mr.live_set("auto_routed_db_default_models")
+_AUTO_ROUTED_RESUME_SKIP_MODELS = _mr.live_set("auto_routed_resume_skip_models")
 
 # Blue/Green API processes share the same DB.  A process-local task map cannot
 # prevent the other slot from reclaiming or finalising the same execution, so
@@ -348,20 +349,7 @@ async def _archive_competing_stream_placeholder(
             placeholder["id"], partial or placeholder["content"], not bool(partial),
         )
 
-_DEFAULT_PREMIUM_CLAUDE = "claude-opus-5-5"
-
-_MODEL_TIMEOUT_OVERRIDES = {
-    "gpt-5.6-sol": 1500,
-    "codex:gpt-5.6-sol": 1500,
-    "gpt-6-astra": 1500,
-    "codex:gpt-6-astra": 1500,
-    "claude-fable-5-1": 1200,
-    "claude-opus-5-5": 1200,
-    "claude-opus-5": 1200,
-    "claude-opus-4-6": 900,
-    "claude-haiku": 900,
-    "claude-sonnet": 900,
-}
+_MODEL_TIMEOUT_OVERRIDES = _mr.live_value_map("chat_model_timeout_overrides")
 
 _INTERRUPT_REASON_CATEGORIES = {
     "relay_503": ("codex_relay_busy", "relay_semaphore_timeout"),
@@ -1311,13 +1299,13 @@ def _cross_provider_chat_fallback_chain(base_model: Optional[str]) -> List[str]:
     if openai_raw_id:
         # openai: 직결은 도구 호출을 못 해 첫 시도부터 죽는다(2026-10-02 실측).
         # 같은 model_id 의 구독 CLI(codex:) 행을 1순위 재시도 후보로 둔다.
-        preferred = [base, f"codex:{openai_raw_id}", "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
+        preferred = [base, f"codex:{openai_raw_id}", *_mr.role_list("chat_chain_openai_direct_tail")]
     elif normalized.startswith(("claude-", "claude_")):
-        preferred = [base, "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
+        preferred = [base, *_mr.role_list("chat_chain_claude_tail")]
     elif normalized.startswith("codex:") or normalized.startswith("gpt-"):
-        preferred = [base, "claude-fable-5-1", "claude-opus-5-5", "claude-opus"]
+        preferred = [base, *_mr.role_list("chat_chain_codex_tail")]
     else:
-        preferred = [base, "claude-fable-5-1", "gpt-6-astra", "gpt-5.6-sol"]
+        preferred = [base, *_mr.role_list("chat_chain_other_tail")]
 
     chain: List[str] = []
     seen: set[str] = set()
@@ -3951,14 +3939,21 @@ async def _synthesize_missing_recommendation_block(
         f"[사용자 요청]\n{(user_message or '').strip()[:800]}\n\n"
         f"[AI 응답 본문]\n{(response_text or '').strip()[-3500:]}"
     )
+    # 역할이 DB 에서 비활성(0건)이면 LLM 을 호출하지 않고 추천 블록을 생략한다.
+    # (model=None 을 넘기면 call_llm_with_fallback 이 bg_haiku_model 로 채워 다른 역할 모델이 호출된다.)
+    # DB 조회 실패 시에는 role_scalar_async 가 시드 값을 돌려주므로 비어 있지 않다.
+    _synth_model = await _mr.role_scalar_async("recommendation_synth_model")
+    if not _synth_model:
+        logger.info("recommendation_block_synthesis_skipped: role recommendation_synth_model disabled")
+        return ""
     try:
         synthesized = await asyncio.wait_for(
             call_llm_with_fallback(
                 prompt=prompt_user,
                 system=system_prompt,
-                model="qwen-turbo",
+                model=_synth_model,
                 max_tokens=350,
-                fallback_models=["gemini-2.5-flash", "claude-haiku-4-5-20251001"],
+                fallback_models=await _mr.role_list_async("recommendation_synth_fallback_models"),
             ),
             timeout=float(os.getenv("AADS_RECOMMENDATION_SYNTH_TIMEOUT_SEC", "12")),
         )
@@ -4038,6 +4033,7 @@ async def _rewrite_incomplete_final_report_once(
     raw_messages: Optional[List[Dict[str, Any]]],
     tools_called: List[Dict[str, Any]],
 ) -> str:
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     clean_content = _clean_assistant_final_content(content)
     if (
         not _looks_like_incomplete_progress_tail(clean_content)
@@ -4068,7 +4064,7 @@ async def _rewrite_incomplete_final_report_once(
         rewritten = await _heartbeat_asyncio.wait_for(
             call_llm_with_fallback(
                 prompt,
-                model=os.getenv("AADS_FINAL_REPORT_REWRITE_MODEL", "qwen-turbo"),
+                model=os.getenv("AADS_FINAL_REPORT_REWRITE_MODEL") or _mr.role_scalar("final_report_rewrite_model"),
                 max_tokens=int(os.getenv("AADS_FINAL_REPORT_REWRITE_MAX_TOKENS", "1800")),
                 system=(
                     "You rewrite incomplete operational chat responses into concise final reports. "
@@ -7323,8 +7319,10 @@ async def with_background_completion(
                     execution_uuid,
                 )
 
-    async def _regenerate_stream(session_id: str, partial_content: str, model: str = "claude-sonnet") -> AsyncGenerator[str, None]:
+    async def _regenerate_stream(session_id: str, partial_content: str, model: Optional[str] = None) -> AsyncGenerator[str, None]:
         """에러 후 재시도: 마지막 user 메시지를 기반으로 스트리밍 재생성."""
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
+        model = model or _mr.role_scalar("default_chat_model")
         pool = get_pool()
         _sid = uuid.UUID(session_id)
         async with pool.acquire() as conn:
@@ -7372,6 +7370,7 @@ async def with_background_completion(
                 yield event
 
     async def _producer():
+        await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         nonlocal _client_gone, _client_gone_since, _token_idx
         _my_task = _heartbeat_asyncio.current_task()
         try:
@@ -7497,7 +7496,7 @@ async def with_background_completion(
                 _max_retries = 30
                 _retry_delay_sec = 3
                 _retried = False
-                _original_model = state.get("model_used", "claude-sonnet")
+                _original_model = state.get("model_used", _mr.role_scalar("default_chat_model"))
 
                 for _retry_idx in range(_max_retries):
                     logger.info(f"stream_retry session={session_id[:8]} attempt={_retry_idx+1}/{_max_retries} model={_original_model} delay={_retry_delay_sec}s")
@@ -7592,17 +7591,7 @@ async def with_background_completion(
                         logger.warning(f"stream_retry_failed session={session_id[:8]} attempt={_retry_idx+1}: {retry_err}")
 
                 if not _retried:
-                    _FALLBACK_CHAIN_429 = {
-                        "claude-opus-5-5": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-opus-5": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-opus-4-6": ["claude-opus-5-5", "claude-fable-5-1"],
-                        "claude-fable-5-1": ["claude-opus-5-5", "gpt-5.6-sol"],
-                        "gpt-5.6-sol": ["claude-fable-5-1", "claude-opus-5-5"],
-                        "gpt-6-astra": ["gpt-5.6-sol", "claude-opus-5-5"],
-                        "claude-haiku-4-5-20251001": ["claude-fable-5-1", "gpt-5.6-sol"],
-                        "claude-sonnet-5": ["claude-fable-5-1", "claude-opus-5-5"],
-                        "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.6-sol"],
-                    }
+                    _FALLBACK_CHAIN_429 = _mr.live_map_list("chat_fallback_chain_429")
                     # 단계 기록은 실행 하나에 한 벌이다. 재개 경로가 같은 state 를
                     # 다시 들어와도 이미 시도한 후보(`fallback_tried_models`)를
                     # 공유하므로 새 예산을 만들지 않는다.
@@ -13491,6 +13480,7 @@ async def _analyze_videos_with_gemini(
     Returns:
         list of {name, analysis} 딕셔너리
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     import os
     import base64 as _b64
 
@@ -13520,7 +13510,7 @@ async def _analyze_videos_with_gemini(
                     "동영상의 주요 내용, 장면, 텍스트, 중요한 시각 정보를 한국어로 상세히 설명해주세요."
                 )
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model=_mr.role_scalar("gemini_media_model"),
                     contents=[
                         genai_types.Part.from_bytes(data=video_bytes, mime_type=media_type),
                         analysis_prompt,
@@ -13549,6 +13539,7 @@ async def _analyze_images_with_gemini(
     NOTE: 채팅 API 경로에서는 더 이상 호출되지 않음 (AADS-214).
     CLI Relay는 content_blocks + --input-format stream-json으로 이미지 직접 전달 가능.
     현재 이 함수는 외부에서 직접 이미지 분석이 필요한 경우를 위해 보존."""
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     import os
     import base64 as _b64
 
@@ -13579,7 +13570,7 @@ async def _analyze_images_with_gemini(
                     "코드나 에러가 보이면 정확히 옮겨 적어주세요."
                 )
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model=_mr.role_scalar("gemini_media_model"),
                     contents=[
                         genai_types.Part.from_bytes(data=img_bytes, mime_type=media_type),
                         analysis_prompt,
@@ -13690,6 +13681,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
     Returns:
         분석 결과 텍스트
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     import base64 as _b64
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
     if not api_key:
@@ -13706,7 +13698,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
         while video_file.state.name == "PROCESSING":
             await _heartbeat_asyncio.sleep(2)
             video_file = genai.get_file(video_file.name)
-        model_g = genai.GenerativeModel("gemini-2.5-flash")
+        model_g = genai.GenerativeModel(_mr.role_scalar("gemini_media_model"))
         response = model_g.generate_content(
             [video_file, user_message or "이 동영상의 내용을 분석하고 설명해주세요."]
         )
@@ -13740,6 +13732,7 @@ async def send_message_stream(
     AADS-185: 3계층 Context Engineering + IntentRouter + ModelSelector + Tool Use 루프.
     SSE 청크: data: {"type": "delta"|"thinking"|"tool_use"|"tool_result"|"done"|"error", ...}
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     _reconciliation_request_override = model_override
     _reconciliation_intent_override = intent_override
     from app.services.llm_model_reconciliation import observe_compilation
@@ -14766,7 +14759,7 @@ async def send_message_stream(
             from app.services.intent_router import INTENT_MAP, IntentResult as _IR
             _fm = INTENT_MAP.get("file_read", {})
             intent_result = _IR(
-                intent="file_read", model=_fm.get("model", "claude-sonnet"),
+                intent="file_read", model=_fm.get("model", _mr.role_scalar("default_chat_model")),
                 use_tools=True, tool_group="all",
             )
             intent = "file_read"
@@ -14961,7 +14954,7 @@ async def send_message_stream(
                             "citations": _sources,
                             "complexity": _match_result.get("complexity", "MEDIUM"),
                             "crawl_count": _match_result.get("crawled_count", 0),
-                            "model": _match_result.get("synthesis_model", "gpt-5.5"),
+                            "model": _match_result.get("synthesis_model", _mr.role_scalar("synthesis_model_default")),
                             "error": _match_result.get("error"),
                         }
                     if not _smart_result.get("error") and _smart_result.get("formatted_text"):
@@ -15054,12 +15047,12 @@ async def send_message_stream(
                     # Gemini Flash: $0.075/1M in, $0.3/1M out
                     _search_cost = Decimal(str(round(_in_tok * 0.075 / 1_000_000 + _out_tok * 0.3 / 1_000_000, 6)))
                 await _save_and_update_session(
-                    sid, result.text, model_used="gemini-flash", intent=intent,
+                    sid, result.text, model_used=_mr.role_scalar("gemini_search_model"), intent=intent,
                     cost=_search_cost, sources=result.citations,
                     response_duration_sec=_response_duration_sec(),
                     **_artifact_chain_kwargs)
                 _duration_sec = _response_duration_sec()
-                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-flash', 'cost': str(_search_cost), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _mr.role_scalar('gemini_search_model'), 'cost': str(_search_cost), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
                 return
 
             elif intent_result.gemini_mode == "deep_research":
@@ -15067,7 +15060,7 @@ async def send_message_stream(
                 dr_svc = DeepResearchService()
                 if not dr_svc.is_available():
                     # API 키 없으면 Claude 폴백
-                    intent_result.model = "claude-sonnet"
+                    intent_result.model = _mr.role_scalar("default_chat_model")
                     intent_result.use_gemini_direct = False
                 else:
                     try:
@@ -15123,16 +15116,16 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'research_complete', 'interaction_id': final_interaction_id, 'cost': str(cost_usd)})}\n\n"
 
                         await _save_and_update_session(
-                            sid, report_text, model_used="gemini-deep-research", intent=intent,
+                            sid, report_text, model_used=_mr.role_scalar("gemini_deep_research_model"), intent=intent,
                             cost=Decimal(str(cost_usd)), sources=final_citations,
                             response_duration_sec=_response_duration_sec(),
                             **_artifact_chain_kwargs)
                         _duration_sec = _response_duration_sec()
-                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': 'gemini-deep-research', 'cost': str(cost_usd), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'intent': intent, 'model': _mr.role_scalar('gemini_deep_research_model'), 'cost': str(cost_usd), 'duration_sec': _duration_sec, 'duration_ms': int(round(_duration_sec * 1000))})}\n\n"
                         return
                     except Exception as e:
                         logger.warning(f"gemini_deep_research_failed: {e}")
-                        intent_result.model = "claude-sonnet"
+                        intent_result.model = _mr.role_scalar("default_chat_model")
                         intent_result.use_gemini_direct = False
 
         # 8. 도구 목록 (Anthropic Tool Use 포맷)
@@ -15158,7 +15151,7 @@ async def send_message_stream(
             else (intent_result.model or "")
         ).lower()
         if (
-            _effective_model_for_tools.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.3-codex"))
+            _effective_model_for_tools.startswith(tuple(_mr.role_list("tool_gate_model_prefixes")))
             and not tools_for_api
         ):
             _codex_tools = _registry.get_eager_tools() or _registry.get_tools("all") or []
@@ -15204,7 +15197,7 @@ async def send_message_stream(
                 try:
                     full_response = ""
                     _captured_sdk_sid: Optional[str] = None
-                    model_used = _DEFAULT_PREMIUM_CLAUDE
+                    model_used = _mr.role_scalar("premium_claude_default")
                     cost_usd = Decimal("0")
                     tools_called: list = []
                     _sdk_system_prompt = system_prompt
@@ -15219,11 +15212,11 @@ async def send_message_stream(
                         _compiled_sdk_prompt = await PromptCompiler().compile(
                             workspace_name=_normalized_project or workspace_name,
                             intent=intent,
-                            model=_selected_model_id or _DEFAULT_PREMIUM_CLAUDE,
+                            model=_selected_model_id or _mr.role_scalar("premium_claude_default"),
                             session_id=str(session_id),
                             role=_session_role_key or "",
                             selected_model_id=_selected_model_id or (model_override or ""),
-                            execution_model_id=_DEFAULT_PREMIUM_CLAUDE,
+                            execution_model_id=_mr.role_scalar("premium_claude_default"),
                             base_system_prompt=system_prompt,
                         )
                         _sdk_system_prompt = _compiled_sdk_prompt.system_prompt
@@ -15231,7 +15224,7 @@ async def send_message_stream(
                         _sdk_prov["model_reconciliation"] = observe_compilation(
                             request_override=_reconciliation_request_override,
                             session_selected=_reconciliation_session_selected,
-                            compiled_model=_DEFAULT_PREMIUM_CLAUDE,
+                            compiled_model=_mr.role_scalar("premium_claude_default"),
                             intent_override=_reconciliation_intent_override,
                         )
                         logger.info(
@@ -15250,7 +15243,7 @@ async def send_message_stream(
                                     session_id=str(session_id),
                                     execution_id=_execution_id_str,
                                     intent=intent,
-                                    model=_selected_model_id or _DEFAULT_PREMIUM_CLAUDE,
+                                    model=_selected_model_id or _mr.role_scalar("premium_claude_default"),
                                     compiled_prompt=_compiled_sdk_prompt,
                                     server_ledger=_turn_server_ledger,
                                 )

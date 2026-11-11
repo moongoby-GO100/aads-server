@@ -27,6 +27,7 @@ from app.core.auth_provider import (
 )
 
 logger = logging.getLogger(__name__)
+from app.services import model_roles as _mr  # noqa: E402
 
 # AADS(2026-09-06): Gemini/DeepSeek 폴백 제거 — CLI 모델(Claude)로 대체 (CEO 지시)
 _DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -42,21 +43,28 @@ _DASHSCOPE_ENABLED = os.getenv("AADS_DASHSCOPE_ENABLED", "0") == "1"
 class DashScopeDisabled(RuntimeError):
     """DashScope 경로가 꺼져 있음 — 호출자는 다음 폴백으로 넘어간다."""
 # AADS-LLM-AUTH: DB(llm_fallback_chains) 우선, 환경변수 폴백
-_BG_FALLBACK_MODELS_ENV = [
-    m.strip()
-    for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
-    ).split(",")
-    if m.strip()
-]
+async def _bg_fallback_models_env() -> list:
+    env_value = os.getenv("LLM_BG_FALLBACK_MODELS", "")
+    if env_value.strip():
+        return [m.strip() for m in env_value.split(",") if m.strip()]
+    return await _mr.role_list_async("bg_fallback_models")
 # AADS-204(2026-09-18): 배경 LLM 1순위를 Groq 무료 모델로 시도했으나(종전 qwen-turbo 는
 # DashScope 계정 연체로 전량 실패), Groq 도 2026-09-28 부터 계속 실패했다 — 7일 2,496콜 중
 # 94.9% bg_primary_failed. 실제 처리는 매번 haiku 폴백이 했고 Groq 시도는 지연만 더했다.
 # AADS-BG-LLM-DEAD-PRIMARY-REMOVAL(2026-10-02): 기본 1순위를 claude-haiku 로 직행시킨다.
 # 되돌릴 때는 LLM_BG_PRIMARY_MODEL=groq-gpt-oss-120b 설정 후
 # `docker exec aads-server bash /app/scripts/reload-api.sh`.
-_BG_HAIKU_MODEL = "claude-haiku-4-5-20251001"
-_BG_PRIMARY_MODEL = os.getenv("LLM_BG_PRIMARY_MODEL", _BG_HAIKU_MODEL)
+# LLM_BG_PRIMARY_MODEL 환경변수가 비어 있으면 DB 역할 표(bg_haiku_model)를 따른다.
+_BG_PRIMARY_MODEL = os.getenv("LLM_BG_PRIMARY_MODEL", "")
+
+
+async def _bg_haiku_model() -> str:
+    # async 경로 전용: 이벤트 루프를 막지 않고 DB 역할 표를 읽는다.
+    return await _mr.role_scalar_async("bg_haiku_model")
+
+
+async def _bg_primary_model() -> str:
+    return _BG_PRIMARY_MODEL or await _bg_haiku_model()
 _BG_PRIMARY_BREAKER_THRESHOLD = 3  # 비-Claude 1순위 연속 실패 N회 → 서킷 오픈
 _BG_PRIMARY_COOLDOWN_SEC = 600.0
 _CLAUDE_RETRY_BASE_SEC = 2.0
@@ -246,7 +254,7 @@ async def _try_user_key_claude(
 
 # ── 공개 함수 ────────────────────────────────────────────────────────
 
-def get_client(model_hint: str = "claude-haiku") -> AsyncAnthropic:
+def get_client(model_hint: Optional[str] = None) -> AsyncAnthropic:
     """Anthropic API 직접 클라이언트 반환 (auth_provider 경유)."""
     return create_anthropic_client()
 
@@ -296,7 +304,7 @@ def _get_error_headers(exc: Exception) -> Optional[dict]:
 
 async def call_llm_with_fallback(
     prompt: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: Optional[str] = None,
     max_tokens: int = 256,
     system: Optional[str] = None,
     tenant_id: Optional[str] = None,
@@ -323,6 +331,7 @@ async def call_llm_with_fallback(
 
     Returns: 응답 텍스트 또는 None (전부 실패 시)
     """
+    model = model or await _bg_haiku_model()
     images = _normalize_images(images)
 
     if tenant_id:
@@ -345,7 +354,7 @@ async def call_llm_with_fallback(
             logger.warning("litellm_bg_error: model=%s error=%s", model, str(e)[:80])
             from app.core.llm_fallback_engine import get_bg_fallback_models
             _fb_models = await get_bg_fallback_models()
-            for _fb_model in (_fb_models or _BG_FALLBACK_MODELS_ENV):
+            for _fb_model in (_fb_models or await _bg_fallback_models_env()):
                 if _fb_model == model:
                     continue
                 try:
@@ -491,7 +500,7 @@ async def call_llm_with_fallback(
     if _lc.get("key"):
         from app.core.llm_fallback_engine import get_bg_fallback_models as _get_fb
         _fb_list = await _get_fb()
-        for _fb_model in (_fb_list or _BG_FALLBACK_MODELS_ENV):
+        for _fb_model in (_fb_list or await _bg_fallback_models_env()):
             try:
                 _text = await _call_litellm(prompt, _fb_model, max_tokens, system, images)
                 if _text:
@@ -527,7 +536,7 @@ async def call_background_llm(
 
         await check_tenant_usage_limit(tenant_id, operation="background_llm", projected_calls=1)
     t0 = time.time()
-    _primary = _BG_PRIMARY_MODEL
+    _primary = await _bg_primary_model()
 
     if _primary.startswith("claude-"):
         result = await call_llm_with_fallback(
@@ -548,7 +557,7 @@ async def call_background_llm(
             "background", _primary, False,
             error_code="bg_primary_failed", tenant_id=tenant_id,
         )
-        if _primary == _BG_HAIKU_MODEL:
+        if _primary == await _bg_haiku_model():
             return ""
     elif time.monotonic() >= _bg_primary_skip_until:
         # qwen* 로 지정한 경우에만 DashScope 직접 경로를 탄다.
@@ -581,7 +590,7 @@ async def call_background_llm(
     fallback = await call_llm_with_fallback(
         prompt=prompt,
         system=system or None,
-        model=_BG_HAIKU_MODEL,
+        model=await _bg_haiku_model(),
         max_tokens=max_tokens,
         tenant_id=tenant_id,
     )
@@ -621,12 +630,12 @@ async def _notify_bg_llm_alert(streak: int, model: str = "") -> None:
     try:
         from app.services.telegram_bot import get_telegram_bot
         bot = get_telegram_bot()
-        _model = model or _BG_PRIMARY_MODEL
+        _model = model or await _bg_primary_model()
         if bot and bot.is_ready:
             await bot.send_message(
                 f"\U0001f6a8 *배경 LLM 1순위 연속 실패 ({streak}회)*\n"
                 f"model={_model} 이 {streak}회 연속 실패했습니다.\n"
-                f"claude-haiku 폴백 중, 600초간 1순위 시도 중단 — 프로바이더 상태 확인 필요. (AADS-204)"
+                f"경량 기본 모델로 폴백 중, 600초간 1순위 시도 중단 — 프로바이더 상태 확인 필요. (AADS-204)"
             )
     except Exception as e:
         logger.debug("bg_llm_alert_failed: %s", str(e)[:80])

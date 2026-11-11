@@ -27,21 +27,26 @@ def test_codex_to_claude_equivalent_gpt6_maps_to_opus_55():
     assert _codex_to_claude_equivalent("codex:gpt-6-sol") == "claude-opus-5-5"
 
 
+def _seed_map_list(role: str) -> dict:
+    from app.services.model_roles_seed import ROLE_SEED
+
+    out: dict = {}
+    for item_key, model_id, _p, _a in ROLE_SEED[role]:
+        out.setdefault(item_key, []).append(model_id)
+    return out
+
+
 def test_cross_fallback_map_never_targets_opus_5():
-    chain = _find_dict_assign(_chat_tree(), "_FALLBACK_CHAIN_429")
+    chain = _seed_map_list("chat_fallback_chain_429")
     assert "claude-opus-5-5" in chain
     for key, targets in chain.items():
         assert "claude-opus-5" not in targets, f"{key} still falls back to claude-opus-5"
 
 
 def test_default_premium_constant_is_opus_55():
-    for node in _chat_tree().body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "_DEFAULT_PREMIUM_CLAUDE" for t in node.targets
-        ):
-            assert ast.literal_eval(node.value) == "claude-opus-5-5"
-            return
-    raise AssertionError("_DEFAULT_PREMIUM_CLAUDE not defined")
+    from app.services.model_roles_seed import ROLE_SEED
+
+    assert [r[1] for r in ROLE_SEED["premium_claude_default"]] == ["claude-opus-5-5"]
 
 
 def test_direct_execution_path_has_no_hardcoded_opus_5():
@@ -50,13 +55,15 @@ def test_direct_execution_path_has_no_hardcoded_opus_5():
     end = src.index("if sdk_success:", start)
     block = src[start:end]
     assert '"claude-opus-5"' not in block
-    assert "model_used = _DEFAULT_PREMIUM_CLAUDE" in block
-    assert "execution_model_id=_DEFAULT_PREMIUM_CLAUDE" in block
+    assert 'model_used = _mr.role_scalar("premium_claude_default")' in block
+    assert 'execution_model_id=_mr.role_scalar("premium_claude_default")' in block
     assert "model=model_used" in block
 
 
 def test_timeout_map_has_opus_55_same_as_opus_5():
-    tmo = _find_dict_assign(_chat_tree(), "_MODEL_TIMEOUT_OVERRIDES")
+    from app.services.model_roles_seed import ROLE_SEED
+
+    tmo = {k: a["v"] for k, _m, _p, a in ROLE_SEED["chat_model_timeout_overrides"]}
     assert tmo["claude-opus-5-5"] == tmo["claude-opus-5"]
 
 

@@ -46,6 +46,7 @@ from scripts.claude_model_contract import (  # noqa: E402
 )
 
 logger = logging.getLogger(__name__)
+from app.services import model_roles as _mr  # noqa: E402
 
 settings = Settings()
 
@@ -514,38 +515,16 @@ def _bind_tool_session_input(
 
 _INTENT_POLICY_CACHE_TTL_SECONDS = 300
 _INTENT_POLICY_CACHE: Dict[str, Any] = {"expires_at": 0.0, "policies": {}}
-_INTENT_POLICY_MODEL_ALIASES = {
-    "claude-fable-5-1": "claude-fable-5-1",
-    "claude-fable-5.1": "claude-fable-5-1",
-    "claude-fable-5": "claude-fable-5",
-    "claude-sonnet-4-6": "claude-sonnet",
-    "claude-sonnet-4-5": "claude-sonnet",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "claude-sonnet-5-5": "claude-sonnet-5-5",
-    "claude-haiku-4-5": "claude-haiku",
-    "claude-haiku-4-5-20251001": "claude-haiku",
-    "claude-opus-5-5": "claude-opus",
-    "claude-opus-5": "claude-opus-5",
-    "claude-opus-4-7": "claude-opus",
-    "claude-opus-4-6": "claude-opus",
-    "claude-opus-4-5": "claude-opus",
-    "claude-opus-46": "claude-opus",
-}
-_INTENT_POLICY_CLAUDE_RANK = {
-    "claude-haiku": 0,
-    "claude-sonnet": 1,
-    "claude-sonnet-5": 2,
-    "claude-sonnet-5-5": 2,
-    "claude-opus": 3,
-    "claude-fable-5": 4,
-    "claude-fable-5-1": 5,
-}
-_INTENT_POLICY_RANK_MODEL = {
-    rank: model for model, rank in _INTENT_POLICY_CLAUDE_RANK.items()
-}
+_INTENT_POLICY_MODEL_ALIASES = _mr.live_map("intent_policy_model_aliases")
+_INTENT_POLICY_CLAUDE_RANK = _mr.live_value_map("intent_policy_claude_rank")
+_INTENT_POLICY_RANK_MODEL = _mr.LiveMap(
+    lambda: {rank: model for model, rank in _INTENT_POLICY_CLAUDE_RANK.items()}, "intent_policy_rank_model"
+)
 # 상한형 라우팅 섀도 전용. live 경로(_INTENT_POLICY_CLAUDE_RANK)에 claude-opus-5 를 넣으면
 # 플래그와 무관하게 실서빙 강등이 양방향으로 바뀌므로, 섀도 계산에서만 rank 3 으로 취급한다.
-_CEILING_SHADOW_RANK = {**_INTENT_POLICY_CLAUDE_RANK, "claude-opus-5": 3}
+_CEILING_SHADOW_RANK = _mr.LiveMap(
+    lambda: {**_INTENT_POLICY_CLAUDE_RANK, **_mr.role_value_map("ceiling_shadow_rank_extra")}, "ceiling_shadow_rank"
+)
 _CEILING_LIVE_SOURCES = frozenset({"auto_reaction_default"})
 _HAIKU_FALLBACK_INTENTS = {"greeting", "casual"}
 _SONNET_INTENTS = {
@@ -618,9 +597,9 @@ def _load_relay_shared_secret() -> str:
 def _codex_to_claude_equivalent(model: Any) -> str:
     """Codex 모델을 같은 급의 Claude 모델로 대응시킨다."""
     m = str(model or "").lower()
-    if "astra" in m or "gpt-6" in m:
-        return "claude-opus-5-5"
-    return os.getenv("AADS_CODEX_BYPASS_MODEL", "claude-sonnet-5-5")
+    if any(marker in m for marker in _mr.role_list("codex_premium_markers")):
+        return _mr.role_scalar("codex_premium_claude_equivalent")
+    return os.getenv("AADS_CODEX_BYPASS_MODEL", _mr.role_scalar("codex_bypass_claude_model"))
 
 
 _CODEX_QUOTA_CACHE: Dict[str, Any] = {"ts": 0.0, "blocked": False, "detail": ""}
@@ -747,6 +726,7 @@ async def _codex_quota_exhausted() -> Tuple[bool, str]:
 
 async def _get_codex_cli_fallback_model_from_db() -> str:
     """Return the configured Codex fallback model instead of hard-coding a runtime downgrade."""
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     configured_models: list[str] = []
     try:
         try:
@@ -785,11 +765,12 @@ async def _get_codex_cli_fallback_model_from_db() -> str:
         if value in _CODEX_MODELS:
             return value
 
-    legacy_model = os.getenv("AADS_CODEX_LEGACY_FALLBACK_MODEL", "gpt-5.5").strip()
-    return legacy_model if legacy_model in _CODEX_MODELS else "gpt-5.5"
+    _legacy_default = _mr.role_scalar("codex_legacy_fallback_model")
+    legacy_model = os.getenv("AADS_CODEX_LEGACY_FALLBACK_MODEL", _legacy_default).strip()
+    return legacy_model if legacy_model in _CODEX_MODELS else _legacy_default
 
 
-_AUTO_ROUTED_DB_DEFAULT_MODELS = {"auto-default-llm", "qwen-turbo"}
+_AUTO_ROUTED_DB_DEFAULT_MODELS = _mr.live_set("auto_routed_db_default_models")
 
 
 def invalidate_intent_policy_cache() -> None:
@@ -895,15 +876,10 @@ def _resolve_intent_policy_cascade_model(
 
 
 def _resolve_legacy_intent_cascade_model(current_model: str, intent: str) -> Optional[str]:
-    if intent in _HAIKU_FALLBACK_INTENTS and current_model in (
-        "claude-sonnet",
-        "claude-opus",
-        "claude-fable-5",
-        "claude-fable-5-1",
-    ):
-        return "claude-haiku"
-    if intent in _SONNET_INTENTS and current_model in ("claude-opus", "claude-fable-5", "claude-fable-5-1"):
-        return "claude-sonnet"
+    if intent in _HAIKU_FALLBACK_INTENTS and current_model in _mr.role_list("intent_cascade_haiku_sources"):
+        return _mr.role_scalar("light_chat_model")
+    if intent in _SONNET_INTENTS and current_model in _mr.role_list("intent_cascade_sonnet_sources"):
+        return _mr.role_scalar("default_chat_model")
     return None
 
 
@@ -1151,6 +1127,7 @@ async def _resolve_governed_intent_model(
     current_model: str,
     session_id: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str]]:
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     from app.core.feature_flags import get_flag
 
     db_primary = await get_flag("intent_policies_db_primary", default=False)
@@ -1161,9 +1138,9 @@ async def _resolve_governed_intent_model(
     db_model = _resolve_intent_policy_cascade_model(current_model, intent_policy)
 
     legacy_reason = "legacy no change"
-    if legacy_model == "claude-haiku":
+    if legacy_model == _mr.role_scalar("light_chat_model"):
         legacy_reason = "fallback simple intent"
-    elif legacy_model == "claude-sonnet":
+    elif legacy_model == _mr.role_scalar("default_chat_model"):
         legacy_reason = "fallback medium intent"
 
     db_reason = "db policy missing"
@@ -1248,108 +1225,12 @@ async def _relay_clear_aads_session_for_oauth_fallback(session_id: Optional[str]
 _EXTENDED_THINKING_ENABLED = os.getenv("EXTENDED_THINKING_ENABLED", "true").lower() == "true"
 
 # 모델별 비용 (per 1M tokens, USD)
-_COST_MAP = {
-    "claude-opus":            (4.0,  20.0),   # 최신 Opus 5.5 공식 가격
-    "claude-opus-5-5":        (4.0,  20.0),   # Opus 5.5 공식 가격
-    "claude-opus-46":         (5.0,  25.0),   # Opus 4.6 실제 가격
-    "claude-sonnet":          (3.0,  15.0),
-    "claude-haiku":           (1.0,   5.0),   # Haiku 4.5 실제 가격
-    "claude-sonnet-5":        (2.0,  10.0),
-    "claude-sonnet-5-5":      (2.0,  10.0),
-    "claude-fable-5":         (10.0, 50.0),
-    "claude-fable-5-1":       (10.0, 50.0),
-    "gemini-flash":           (0.075, 0.3),
-    "gemini-flash-lite":      (0.01,  0.04),
-    "gemini-pro":             (1.25,  5.0),
-    "gemini-3-flash-preview": (0.5,   3.0),   # 2026-03-12 공식 가격
-    "gemini-3.1-flash-lite-preview": (0.25, 1.5),  # 최고 효율 (thinking 포함)
-    "gemini-3.1-pro-preview": (2.0,  12.0),
-    "gemini-2.5-flash":       (0.15,  0.6),   # thinking 별도 $3.50 (여기선 non-thinking만)
-    "gemini-2.5-flash-lite":  (0.04,  0.1),
-    # Groq (무료 — 비용 0)
-    "groq-gpt-oss-120b":     (0.15,  0.60),
-    "groq-gpt-oss-20b":      (0.075, 0.30),
-    "groq-qwen3.8-27b":      (0.80,  4.00),
-    # OpenAI (LiteLLM 경유)
-    "gpt-4o":                (2.50,  10.0),
-    "gpt-4o-mini":           (0.15,   0.6),
-    "gpt-5":                 (5.0,   15.0),
-    "gpt-5-mini":            (0.50,   2.0),
-    "o3":                    (2.0,    8.0),
-    "o3-mini":               (1.10,   4.40),
-    "o3-pro":                (20.0,  80.0),
-    "gpt-6-astra":           (10.0,  50.0),
-    "gpt-6-sol":             (2.0,   10.0),
-    "gpt-6-luna":            (0.10,   0.50),
-    # Codex CLI (ChatGPT Plus OAuth)
-    "gpt-5.4":               (2.50,  15.0),
-    "gpt-5.4-mini":          (0.75,   4.50),
-    "gpt-5.3-codex":         (1.75,  14.0),
-    # DeepSeek
-    "deepseek-flash":        (0.30,  1.20),
-    "deepseek-v4-pro":       (1.32,  3.96),
-    # OpenRouter
-    "openrouter-grok-4-fast":    (0.20,  0.20),   # Grok 4.1 Fast, 2M ctx
-    "openrouter-deepseek-v3":    (0.26,  0.26),   # DeepSeek V3.2
-    "openrouter-mistral-small":  (0.15,  0.15),   # Mistral Small
-    "openrouter-nemotron-free":  (0.0,   0.0),    # Nemotron 3 Super (무료)
-    "openrouter-minimax-m2":     (0.30,  0.30),   # MiniMax M2.7
-    "openrouter-grok-4.7":       (1.60,  4.80),
-    # Alibaba/Qwen (DashScope via LiteLLM)
-    "qwen3-235b":              (0.60,  2.40),
-    "qwen3-235b-instruct":     (0.60,  2.40),
-    "qwen3-235b-thinking":     (0.60,  2.40),
-    "qwen3-next-80b":          (0.30,  1.20),
-    "qwen3-max":               (0.40,  1.20),
-    "qwen3-32b":               (0.08,  0.32),
-    "qwen3-30b-a3b":           (0.07,  0.28),
-    "qwen3-14b":               (0.04,  0.16),
-    "qwen3-8b":                (0.02,  0.08),
-    "qwen3-coder-plus":        (0.35,  1.40),
-    "qwen3-coder-flash":       (0.07,  0.28),
-    "qwen3-coder-480b":        (1.20,  4.80),
-    "qwen3.5-plus":            (0.40,  1.20),
-    "qwen3.5-flash":           (0.07,  0.28),
-    "qwen-max":                (0.40,  1.20),
-    "qwen-max-latest":         (0.40,  1.20),
-    "qwen-plus":               (0.08,  0.32),
-    "qwen-plus-latest":        (0.08,  0.32),
-    "qwen-turbo":              (0.02,  0.06),
-    "qwen-turbo-latest":       (0.02,  0.06),
-    "qwen-flash":              (0.01,  0.03),
-    "qwen-coder-plus":         (0.35,  1.40),
-    "qwen2.5-72b-instruct":    (0.30,  0.90),
-    "qwq-plus":                (0.60,  2.40),
-    # Alibaba/Qwen 멀티모달 (Vision/Omni)
-    "qwen-vl-max":             (0.40,  1.20),
-    "qwen-vl-plus":            (0.08,  0.32),
-    "qwen3-vl-plus":           (0.35,  1.40),
-    "qwen3-vl-235b":           (0.60,  2.40),
-    "qwen-omni-turbo":         (0.02,  0.06),
-    # DashScope DeepSeek (Alibaba 호스팅)
-    "dashscope-deepseek-v3.2": (0.28,  0.42),
-    # Kimi (Moonshot AI, LiteLLM 경유)
-    "kimi-k2.5":               (0.60,  2.40),
-    "kimi-k2":                 (0.60,  2.40),
-    "kimi-latest":             (0.02,  0.06),
-    "kimi-128k":               (0.06,  0.24),
-    "kimi-8k":                 (0.02,  0.06),
-    # MiniMax (TokenPlan, LiteLLM 경유)
-    "minimax-m2.7":            (0.50,  2.00),
-    "minimax-m2.5":            (0.30,  1.20),
-}
+_COST_MAP = _mr.live_value_map("model_cost_per_mtok")
 
 # LiteLLM alias → Anthropic model ID
-_ANTHROPIC_MODEL_ID = dict(AADS_MODEL_IDS, **{"claude-fable-5.1": "claude-fable-5-1"})
+_ANTHROPIC_MODEL_ID = _mr.LiveMap(lambda: dict(AADS_MODEL_IDS, **_mr.role_map("anthropic_model_id_extra")), "anthropic_model_id")
 
-_ANTHROPIC_THINKING_ALIASES = {
-    "claude-fable-5",
-    "claude-fable-5-1",
-    "claude-opus",
-    "claude-sonnet",
-    "claude-sonnet-5",
-    "claude-sonnet-5-5",
-}
+_ANTHROPIC_THINKING_ALIASES = _mr.live_set("anthropic_thinking_aliases")
 
 
 def _to_anthropic_runtime_alias(model: str) -> str:
@@ -1367,47 +1248,16 @@ def _drop_tool_choice_for_thinking(api_kwargs: Dict[str, Any], thinking_config: 
     return False
 
 # Gemini 모델 (LiteLLM 경유) — 대시보드 ModelSelector id와 동기화 필수 (누락 시 Claude로 폴백됨)
-_GEMINI_MODELS = {
-    "gemini-flash",
-    "gemini-flash-lite",
-    "gemini-pro",
-    "gemini-3-flash-preview",
-    "gemini-3.8-flash",
-    "gemini-3.8-live",
-    "gemini-3.8-live-extended-thinking",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash-image",
-    "gemma-3-27b-it",
-}
+_GEMINI_MODELS = _mr.live_set("gemini_models")
 
 # Gemini Thinking 모델 — reasoning_effort=low + 높은 max_tokens 필요
-_GEMINI_THINKING_MODELS = {
-    "gemini-pro",
-    "gemini-flash",
-    "gemini-3-flash-preview",
-    "gemini-3.8-flash",
-    "gemini-3.8-live-extended-thinking",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-}
+_GEMINI_THINKING_MODELS = _mr.live_set("gemini_thinking_models")
 
 # Groq 모델 (LiteLLM 경유, 무료)
-_GROQ_MODELS = {"groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b"}
+_GROQ_MODELS = _mr.live_set("groq_models")
 # OpenAI 모델 (LiteLLM/OpenAI-compatible 경유)
-_OPENAI_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5-mini", "o3", "o3-mini", "o3-pro"}
-_OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5", "o3", "o3-mini", "o3-pro"}
+_OPENAI_MODELS = _mr.live_set("openai_models")
+_OPENAI_REASONING_MODELS = _mr.live_set("openai_reasoning_models")
 # OpenAI 직결 경로는 LiteLLM 프록시와 달리 파라미터를 번역해 주지 않는다.
 # 2026-09-19 실측: gpt-5.6-sol 채팅이 매 턴 HTTP 400 으로 죽고 "[... 실행 불가 →
 # Codex CLI 전환]" 배너만 남았다. 세 제약이 동시에 걸려 있었다.
@@ -1425,74 +1275,26 @@ _OPENAI_REASONING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-
 #   reasoning_effort="none" → 400 (low/medium/high/xhigh 만 허용)
 # gpt-6-sol 과 달리 'none' 이 없으므로 도구 턴을 Chat Completions 로 살릴 방법이
 # 없다. gpt-6-astra 와 같은 처리(Responses API 필요)로 묶는다.
-_OPENAI_NO_CUSTOM_SAMPLING_MODELS = {"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+_OPENAI_NO_CUSTOM_SAMPLING_MODELS = _mr.live_set("openai_no_custom_sampling_models")
 _OPENAI_DIRECT_MAX_TOOLS = 128
-_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra"}
+_OPENAI_RESPONSES_TOOL_REQUIRED_MODELS = _mr.live_set("openai_responses_tool_required_models")
 
 # Codex CLI 모델 (ChatGPT Plus OAuth, relay /codex-stream 경유)
-_CODEX_MODELS = {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"}
-_CODEX_MODEL_DISPLAY = {
-    "gpt-6-astra": "GPT-6 Astra (Codex CLI)",
-    "gpt-6.1-sol": "GPT-6.1 Sol (Codex CLI)",
-    "gpt-6-sol": "GPT-6 Sol (Codex CLI)",
-    "gpt-6-luna": "GPT-6 Luna (Codex CLI)",
-    "gpt-5.6-sol": "GPT-5.6 Sol (Codex CLI)",
-    "gpt-5.6-terra": "GPT-5.6 Terra (Codex CLI)",
-    "gpt-5.6-luna": "GPT-5.6 Luna (Codex CLI)",
-    "gpt-5.5": "GPT-5.5 (Codex CLI)",
-    "gpt-5.4": "GPT-5.4 (Codex CLI)",
-    "gpt-5.4-mini": "GPT-5.4 Mini (Codex CLI)",
-    "gpt-5.3-codex": "GPT-5.3 Codex (Codex CLI)",
-}
-_CODEX_MODEL_ALIASES = {
-    "codex:gpt-6-astra": "gpt-6-astra",
-    "gpt-6 astra (codex cli)": "gpt-6-astra",
-    "codex:gpt-6.1-sol": "gpt-6.1-sol",
-    "gpt-6.1 sol (codex cli)": "gpt-6.1-sol",
-    "codex:gpt-6-sol": "gpt-6-sol",
-    "gpt-6 sol (codex cli)": "gpt-6-sol",
-    "codex:gpt-6-luna": "gpt-6-luna",
-    "gpt-6 luna (codex cli)": "gpt-6-luna",
-    "codex:gpt-5.6-sol": "gpt-5.6-sol",
-    "gpt-5.6 sol (codex cli)": "gpt-5.6-sol",
-    "codex:gpt-5.6-terra": "gpt-5.6-terra",
-    "gpt-5.6 terra (codex cli)": "gpt-5.6-terra",
-    "codex:gpt-5.6-luna": "gpt-5.6-luna",
-    "gpt-5.6 luna (codex cli)": "gpt-5.6-luna",
-    "codex:gpt-5.5": "gpt-5.5",
-    "gpt-5.5 (codex cli)": "gpt-5.5",
-    "codex:gpt-5.4": "gpt-5.4",
-    "gpt-5.4 (codex cli)": "gpt-5.4",
-    "codex:gpt-5.4-mini": "gpt-5.4-mini",
-    "gpt-5.4 mini (codex cli)": "gpt-5.4-mini",
-    "codex:gpt-5.3-codex": "gpt-5.3-codex",
-    "gpt-5.3 codex (codex cli)": "gpt-5.3-codex",
-}
+_CODEX_MODELS = _mr.live_set("codex_models")
+_CODEX_MODEL_DISPLAY = _mr.live_map("codex_model_display")
+_CODEX_MODEL_ALIASES = _mr.live_map("codex_model_aliases")
 
 # Antigravity CLI 모델 (Google Pro OAuth, relay /antigravity-stream 경유 — `agy models` 실측 13종)
-_ANTIGRAVITY_CLI_MODEL_LABELS = {
-    "gemini-4-argon-high": "Gemini 4 Argon High",
-    "gemini-4-argon-medium": "Gemini 4 Argon Medium",
-    "gemini-4-argon-low": "Gemini 4 Argon Low",
-    "gemini-3.8-flash-high": "Gemini 3.8 Flash High",
-    "gemini-3.8-flash-medium": "Gemini 3.8 Flash Medium",
-    "gemini-3.8-flash-low": "Gemini 3.8 Flash Low",
-    "claude-opus-5-5-high": "Claude Opus 5.5 High",
-    "claude-opus-5-5-medium": "Claude Opus 5.5 Medium",
-    "claude-opus-5-5-low": "Claude Opus 5.5 Low",
-    "claude-sonnet-5-5-high": "Claude Sonnet 5.5 High",
-    "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 Medium",
-    "claude-sonnet-5-5-low": "Claude Sonnet 5.5 Low",
-    "gpt-oss-120b-medium": "GPT-OSS 120B Medium",
-}
+_ANTIGRAVITY_CLI_MODEL_LABELS = _mr.live_map("antigravity_cli_model_labels")
 # 정확 일치로만 판정한다. LiteLLM 용 _GEMINI_MODELS("gemini-3.8-flash" 등 접미사 없는 id)와 겹치면 안 된다.
-_ANTIGRAVITY_MODELS = {"antigravity", "antigravity-pro", "antigravity-flash"} | set(_ANTIGRAVITY_CLI_MODEL_LABELS)
-_ANTIGRAVITY_MODEL_DISPLAY = {
-    "antigravity": "Antigravity (Gemini 3.8 Flash Medium)",
-    "antigravity-pro": "Antigravity Pro (Gemini 4 Argon High)",
-    "antigravity-flash": "Antigravity Flash (Gemini 3.8 Flash Medium)",
-    **{model_id: f"{label} (Antigravity CLI)" for model_id, label in _ANTIGRAVITY_CLI_MODEL_LABELS.items()},
-}
+_ANTIGRAVITY_MODELS = _mr.live_union(_mr.live_set("antigravity_alias_models"), _ANTIGRAVITY_CLI_MODEL_LABELS)
+_ANTIGRAVITY_MODEL_DISPLAY = _mr.LiveMap(
+    lambda: {
+        **_mr.role_map("antigravity_alias_display"),
+        **{model_id: f"{label} (Antigravity CLI)" for model_id, label in _ANTIGRAVITY_CLI_MODEL_LABELS.items()},
+    },
+    "antigravity_model_display",
+)
 
 
 def _canonical_codex_model_id(model: Any) -> str:
@@ -1500,19 +1302,9 @@ def _canonical_codex_model_id(model: Any) -> str:
     return _CODEX_MODEL_ALIASES.get(value.lower(), value)
 
 # DeepSeek 모델 (LiteLLM 경유)
-_DEEPSEEK_COMPATIBILITY_ALIASES = {
-    "deepseek-chat": "deepseek-flash",
-    "deepseek-v4-flash": "deepseek-flash",
-    "deepseek-reasoner": "deepseek-v4-pro",
-}
-_DEEPSEEK_LITELLM_RUNTIME_ALIASES = {
-    "deepseek-flash": "deepseek-flash",
-    "deepseek-v4-pro": "deepseek-v4-pro",
-    "deepseek-chat": "deepseek-flash",
-    "deepseek-v4-flash": "deepseek-flash",
-    "deepseek-reasoner": "deepseek-v4-pro",
-}
-_DEEPSEEK_MODELS = {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
+_DEEPSEEK_COMPATIBILITY_ALIASES = _mr.live_map("deepseek_compat_aliases")
+_DEEPSEEK_LITELLM_RUNTIME_ALIASES = _mr.live_map("deepseek_litellm_runtime_aliases")
+_DEEPSEEK_MODELS = _mr.live_set("deepseek_models")
 
 
 def _canonical_deepseek_model_id(model: str) -> str:
@@ -1524,74 +1316,24 @@ def _litellm_deepseek_model_id(model: str) -> str:
     return _DEEPSEEK_LITELLM_RUNTIME_ALIASES.get(model, model)
 
 # OpenRouter 모델 (LiteLLM 경유, openrouter/ prefix)
-_OPENROUTER_MODELS = {
-    "openrouter-grok-4-fast",
-    "openrouter-deepseek-v3",
-    "openrouter-mistral-small",
-    "openrouter-nemotron-free",
-    "openrouter-minimax-m2",
-    "openrouter-grok-4.7",
-    "openrouter-kimi-k3",
-    "openrouter-minimax-m3",
-    "openrouter-qwen3.8-max",
-}
+_OPENROUTER_MODELS = _mr.live_set("openrouter_models")
 
 # Kimi 모델 (Moonshot AI, LiteLLM 경유)
-_KIMI_MODELS = {"kimi-k3", "kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-latest", "kimi-128k", "kimi-8k"}
+_KIMI_MODELS = _mr.live_set("kimi_models")
 
 # MiniMax 모델 (LiteLLM 경유)
-_MINIMAX_MODELS = {"minimax-m3", "minimax-m2.7", "minimax-m2.5"}
+_MINIMAX_MODELS = _mr.live_set("minimax_models")
 
-_MISTRAL_MODELS = {"mistral-medium-latest", "mistral-small-latest", "mistral-large-latest"}
+_MISTRAL_MODELS = _mr.live_set("mistral_models")
 
 # Alibaba/Qwen 모델 (LiteLLM 경유, DashScope)
-_ALIBABA_MODELS = {
-    # Qwen3 플래그십
-    "qwen3-235b",
-    "qwen3-235b-instruct",
-    "qwen3-235b-thinking",
-    "qwen3-next-80b",
-    "qwen3-max",
-    "qwen3-32b",
-    "qwen3-30b-a3b",
-    "qwen3-14b",
-    "qwen3-8b",
-    # Qwen3 코더
-    "qwen3-coder-plus",
-    "qwen3-coder-flash",
-    "qwen3-coder-480b",
-    # Qwen3.5
-    "qwen3.5-plus",
-    "qwen3.5-flash",
-    "qwen3.6-plus",
-    "qwen3.7-plus",
-    "qwen3.7-max",
-    "qwen3.8-max",
-    # Qwen (안정 릴리스)
-    "qwen-max",
-    "qwen-max-latest",
-    "qwen-plus",
-    "qwen-plus-latest",
-    "qwen-turbo",
-    "qwen-turbo-latest",
-    "qwen-flash",
-    "qwen-coder-plus",
-    # Qwen2.5
-    "qwen2.5-72b-instruct",
-    # 추론
-    "qwq-plus",
-    # 멀티모달 (Vision/Omni)
-    "qwen-vl-max",
-    "qwen-vl-plus",
-    "qwen3-vl-plus",
-    "qwen3-vl-235b",
-    "qwen-omni-turbo",
-    # DashScope DeepSeek (Alibaba 호스팅)
-    "dashscope-deepseek-v3.2",
-}
+_ALIBABA_MODELS = _mr.live_set("alibaba_models")
 
 # LiteLLM OpenAI 호환 모델 (Gemini + Groq + DeepSeek + OpenRouter + Alibaba)
-_LITELLM_OPENAI_MODELS = _GEMINI_MODELS | _GROQ_MODELS | _DEEPSEEK_MODELS | _OPENROUTER_MODELS | _ALIBABA_MODELS | _KIMI_MODELS | _MINIMAX_MODELS | _MISTRAL_MODELS | _OPENAI_MODELS | _CODEX_MODELS | _ANTIGRAVITY_MODELS
+_LITELLM_OPENAI_MODELS = _mr.live_union(
+    _GEMINI_MODELS, _GROQ_MODELS, _DEEPSEEK_MODELS, _OPENROUTER_MODELS, _ALIBABA_MODELS, _KIMI_MODELS,
+    _MINIMAX_MODELS, _MISTRAL_MODELS, _OPENAI_MODELS, _CODEX_MODELS, _ANTIGRAVITY_MODELS,
+)
 
 _OPENAI_COMPATIBLE_DIRECT_PROVIDERS = {"openai", "groq", "openrouter", "qwen", "kimi", "minimax", "mistral"}
 _DIRECT_PROVIDER_BASE_URLS = {
@@ -2083,10 +1825,10 @@ async def _stream_pc_ollama_provider(
 
 def _fallback_for_unavailable_model_legacy(model: str, available_models: set[str]) -> str:
     groups = [
-        [candidate for candidate in ("claude-sonnet", "claude-haiku", "claude-opus", "claude-opus-46") if candidate in available_models],
-        [candidate for candidate in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5") if candidate in available_models],
-        [candidate for candidate in ("qwen-turbo", "qwen-flash", "qwen-plus", "qwen-max") if candidate in available_models],
-        [candidate for candidate in ("groq-compound", "minimax-m2.7", "kimi-latest") if candidate in available_models],
+        [candidate for candidate in _mr.role_list("legacy_unavailable_fallback_group_1") if candidate in available_models],
+        [candidate for candidate in _mr.role_list("legacy_unavailable_fallback_group_2") if candidate in available_models],
+        [candidate for candidate in _mr.role_list("legacy_unavailable_fallback_group_3") if candidate in available_models],
+        [candidate for candidate in _mr.role_list("legacy_unavailable_fallback_group_4") if candidate in available_models],
     ]
     for candidates in groups:
         if candidates:
@@ -2539,6 +2281,7 @@ async def call_stream(
       input_tokens: int
       output_tokens: int
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     global _anthropic, _LITELLM_API_KEY, LITELLM_API_KEY
 
     # 본인 키가 없는 가입 사용자는 여기서 멈춘다. 아래 라우팅은 전부 회사 계정을 쓴다.
@@ -2592,8 +2335,8 @@ async def call_stream(
             logger.info("empty_model_fallback: using DB default → '%s'", _db_default)
             model = _db_default
         else:
-            logger.warning("empty_model_fallback: DB lookup failed → 'claude-sonnet'")
-            model = "claude-sonnet"
+            model = _mr.role_scalar("default_chat_model")
+            logger.warning("empty_model_fallback: DB lookup failed → '%s'", model)
     _qualified_provider, _qualified_model = _split_provider_qualified_model(str(model))
     _provider_pinned = bool(_qualified_provider and not _db_default_applied)
     if _qualified_provider:
@@ -2776,8 +2519,9 @@ async def call_stream(
         route_metadata = _route_metadata({**registered_row, "metadata": configured_metadata})
     model_is_known_runtime = bool(runtime_available_models) and _is_model_runtime_available(model, runtime_available_models)
     if not _provider_pinned and not registered_row and not route_metadata and not model_is_known_runtime:
-        logger.warning(f"unknown_model_fallback: '{model}' → 'claude-sonnet'")
-        model = "claude-sonnet"
+        _unknown_model = model
+        model = _mr.role_scalar("default_chat_model")
+        logger.warning(f"unknown_model_fallback: '{_unknown_model}' → '{model}'")
         resolved_model, resolved_row = await _resolve_registered_model_alias(model)
         if resolved_model:
             model = resolved_model
@@ -2785,7 +2529,7 @@ async def call_stream(
         route_metadata = _route_metadata(registered_row)
 
     # 자기 모델 질문 오답 방지: 실제 라우트 id + 제조사를 시스템 프롬프트에 명시
-    _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in ("qwen", "deepseek-v3")) and model in _ALIBABA_MODELS else \
+    _maker = "Alibaba (알리바바)" if any(q in model.lower() for q in _mr.role_list("alibaba_maker_markers")) and model in _ALIBABA_MODELS else \
              "DeepSeek (딥시크)" if model.startswith("deepseek-") else \
              "Google (구글)" if "gemini" in model.lower() else \
              "Moonshot AI (문샷)" if "kimi" in model.lower() else \
@@ -2921,15 +2665,7 @@ async def call_stream(
                 content = _codex_error_content if _cx_blocked else f"provider=codex model={model}: {_codex_error_content}"
                 yield {**_codex_original_error, "type": "error", "content": content}
                 return
-            _CODEX_FB = {
-                "gpt-5.6-sol": [
-                    "claude-fable-5-1",
-                    "claude-opus",
-                ],
-                "gpt-5.5": ["claude-fable-5-1", "claude-opus"],
-                "gpt-5.4": ["claude-sonnet", "claude-opus"],
-                "gpt-5.4-mini": ["claude-haiku", "claude-sonnet"],
-            }
+            _CODEX_FB = _mr.live_map_list("codex_failure_fallback_chain")
             try:
                 _has_model_chain = bool(await _per_model_fallback_rows(model))
             except Exception:
@@ -3018,31 +2754,9 @@ async def call_stream(
             s for s in (["2", "1"] if _CLAUDE_RELAY_NAVER_FIRST else ["1", "2"])
             if s not in _off_slots
         ]
-    _MODEL_DOWNGRADE = {
-        "claude-fable-5-1": ["claude-fable-5-1", "claude-fable-5", "claude-opus", "claude-sonnet"],
-        "claude-fable-5": ["claude-fable-5", "claude-opus", "claude-sonnet"],
-        "claude-opus": ["claude-opus"],
-        "claude-sonnet-5": ["claude-sonnet-5", "claude-sonnet"],
-        "claude-sonnet-5-5": ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet"],
-        "claude-sonnet": ["claude-sonnet"],
-        "claude-haiku": ["claude-haiku"],
-    }
-    _SAMEGRADE_FALLBACK = {
-        "claude-fable-5-1": ["gpt-5.6-sol", "claude-opus"],
-        "claude-fable-5": ["gpt-5.6-sol", "claude-opus"],
-        "claude-opus": ["gpt-5.6-sol"],
-        "claude-sonnet-5": ["claude-sonnet", "gpt-5.5"],
-        "claude-sonnet-5-5": ["claude-sonnet-5", "gpt-5.5"],
-        "claude-sonnet": ["gpt-5.5"],
-        "claude-haiku": ["gpt-5.4-mini"],
-    }
-    _GEMINI_SAMEGRADE = {
-        "gemini-3.1-pro-preview": "claude-opus",
-        "gemini-2.5-pro": "claude-opus",
-        "gemini-2.5-flash": "claude-sonnet",
-        "gemini-3.1-flash-lite-preview": "claude-haiku",
-        "gemini-2.0-flash": "claude-haiku",
-    }
+    _MODEL_DOWNGRADE = _mr.live_map_list("claude_slot_downgrade_chain")
+    _SAMEGRADE_FALLBACK = _mr.live_map_list("claude_samegrade_fallback")
+    _GEMINI_SAMEGRADE = _mr.live_map("gemini_samegrade_fallback")
     # CLI Relay 비활성화 환경(CLAUDE_CLI_ENABLED=false, server5 등) → LiteLLM 직접 라우팅
     if not _CLAUDE_CLI_ENABLED and (model not in _GEMINI_MODELS and model in _ANTHROPIC_MODEL_ID):
         async for event in _stream_litellm(model, system_prompt, messages, tools=tools, session_id=session_id):
@@ -3396,13 +3110,14 @@ async def call_stream(
                 continue
 
         if (
-            _normalize_intent_policy_model(_original_model) in ("claude-opus",)
+            _normalize_intent_policy_model(_original_model) in _mr.role_list("intent_last_resort_trigger_models")
             and not _samegrade_success
             and not _pinned_no_switch
         ):
-            logger.warning(f"all_samegrade_failed: {_original_model} → last_resort claude-sonnet")
+            _last_resort_model = _mr.role_scalar("default_chat_model")
+            logger.warning(f"all_samegrade_failed: {_original_model} → last_resort {_last_resort_model}")
             try:
-                async for event in _stream_with_slots("claude-sonnet"):
+                async for event in _stream_with_slots(_last_resort_model):
                     yield event
                 return
             except Exception as e:
@@ -3456,7 +3171,7 @@ async def call_stream(
                 break
             yield event
         if _had_error:
-            _fallback_model = _GEMINI_SAMEGRADE.get(model, "claude-sonnet")
+            _fallback_model = _GEMINI_SAMEGRADE.get(model, _mr.role_scalar("default_chat_model"))
             _fallback_intent = IntentResult(
                 intent=intent_result.intent,
                 model=_fallback_model,
@@ -3567,7 +3282,7 @@ async def call_stream(
                 _cf_kind = _classify_claude_auth_error(event.get("content", ""))
                 _cf_error_content = event.get("content", "")
                 logger.warning(
-                    "codex_fallback: %s failed (%s), falling back to claude-fable-5-1",
+                    "codex_fallback: %s failed (%s), falling back to the configured fallback model",
                     model, "Codex 인증 실패(재로그인 필요)" if _cf_kind != "error" else "error",
                 )
                 break
@@ -3581,11 +3296,11 @@ async def call_stream(
             yield {"type": "delta", "content": f"\n\n[{_cf_label} → Claude Fable 5.1 전환]\n\n"}
             _fallback_intent = IntentResult(
                 intent=intent_result.intent,
-                model="claude-fable-5-1",
+                model=_mr.role_scalar("codex_failure_fallback_model"),
                 use_tools=intent_result.use_tools,
                 tool_group=intent_result.tool_group,
             )
-            async for event in _stream_anthropic(_fallback_intent, "claude-fable-5-1", system_prompt, messages, tools, session_id=session_id):
+            async for event in _stream_anthropic(_fallback_intent, _mr.role_scalar("codex_failure_fallback_model"), system_prompt, messages, tools, session_id=session_id):
                 yield event
         return
 
@@ -3917,7 +3632,7 @@ def _prepare_openai_chat_request(
     body: Dict[str, Any], model: str, *, direct: bool, requested_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply the documented GPT-6 Sol Chat Completions parameter rules."""
-    if model != "gpt-6-sol":
+    if model != _mr.role_scalar("openai_sol_chat_model"):
         if direct and model in _OPENAI_REASONING_MODELS:
             body["max_completion_tokens"] = body.pop("max_tokens")
         return body
@@ -3951,6 +3666,7 @@ async def _stream_litellm_openai(
     """Gemini 등 비-Claude 모델 → LiteLLM /chat/completions (OpenAI 호환).
     멀티턴 Agentic Loop + 병렬 도구 실행 지원 (AADS-202).
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     route_base_url = (base_url or LITELLM_BASE_URL).rstrip("/")
     route_api_key = api_key or LITELLM_API_KEY
     route_display_model = display_model or model
@@ -3970,16 +3686,7 @@ async def _stream_litellm_openai(
     # Thinking/reasoning 모델: reasoning_effort=low로 사고 토큰 절감 + max_tokens 확대
     is_thinking = model in _GEMINI_THINKING_MODELS or model in _OPENAI_REASONING_MODELS
     # 모델별 max_tokens 제한 (제공사 한도 초과 방지)
-    _MODEL_MAX_TOKENS = {
-        "deepseek-flash": 8192, "deepseek-v4-flash": 8192, "deepseek-v4-pro": 8192,
-        "deepseek-chat": 8192, "deepseek-reasoner": 8192,
-        "groq-gpt-oss-120b": 65536, "groq-gpt-oss-20b": 65536,
-        "groq-qwen3.8-27b": 16384,
-        "kimi-k2": 8192, "kimi-k2.5": 8192, "kimi-k2.6": 8192, "kimi-k3": 32768, "kimi-latest": 8192,
-        "kimi-128k": 8192, "kimi-8k": 8192,
-        "minimax-m3": 32768, "minimax-m2.7": 16384, "minimax-m2.5": 16384,
-        "gpt-6-astra": 128000, "gpt-6-sol": 128000, "gpt-6-luna": 128000,
-    }
+    _MODEL_MAX_TOKENS = _mr.live_value_map("model_max_tokens")
     _default_max = _MAX_TOKENS_GEMINI_THINKING if is_thinking else _MAX_TOKENS_GEMINI
     max_tokens = _MODEL_MAX_TOKENS.get(model, _default_max)
     extra_params: Dict[str, Any] = {}
@@ -3987,7 +3694,7 @@ async def _stream_litellm_openai(
         extra_params["reasoning_effort"] = "low"
     # DeepSeek V4 Pro/Flash: thinking 활성 시 content가 비고 reasoning_content만 내려오는
     # 케이스가 있어 채팅 본문 안정성을 위해 기본 채팅 경로에서는 thinking을 끈다.
-    if model in {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"}:
+    if model in _mr.role_list("deepseek_thinking_disabled_models"):
         extra_params["extra_body"] = {"thinking": {"type": "disabled"}}
     # Qwen3 계열: thinking 모드 비활성화 → 도구 호출 우선 (thinking 활성 시 도구 무시됨)
     if "qwen3" in model.lower() and "thinking" not in model.lower():
@@ -4277,8 +3984,9 @@ async def _stream_claude_sonnet_fallback(
     session_id: Optional[str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Gemini/LiteLLM 실패 시 Claude Sonnet으로 폴백 스트리밍 (Tier1: CLI Relay)."""
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     async for event in _stream_cli_relay(
-        "claude-sonnet", system_prompt, messages, tools=tools, session_id=session_id
+        _mr.role_scalar("default_chat_model"), system_prompt, messages, tools=tools, session_id=session_id
     ):
         yield event
 
@@ -5954,6 +5662,7 @@ async def _run_agent_sdk_with_key(
 
     user_message가 list이면 content block 배열 (이미지 포함) → SDK prompt에 그대로 전달.
     """
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     from claude_agent_sdk import query as sdk_query, ClaudeAgentOptions
 
     # MCP config: 컨테이너 내부에서 직접 브릿지 실행
@@ -6142,7 +5851,7 @@ async def _run_agent_sdk_with_key(
     # total_cost 는 함수 머리에서 0.0 으로 초기화되고 ResultMessage 가 보고값으로 덮는다.
     # 비용 값과 cost_source 는 같은 판정(_sdk_cost_reported) 하나로 정한다 (AADS-LLM-M9-COST-BASIS).
     _sdk_cost_reported = bool(total_cost)
-    cost = total_cost if _sdk_cost_reported else float(_estimate_cost("claude-sonnet", in_tokens, out_tokens))
+    cost = total_cost if _sdk_cost_reported else float(_estimate_cost(_mr.role_scalar("default_chat_model"), in_tokens, out_tokens))
     # Agent SDK 경로: 헤더 없지만 토큰 사용량은 기록
     _sdk_tokens = _ap_get_tokens()
     _sdk_token = _sdk_tokens[0] if _sdk_tokens else ""
@@ -6795,8 +6504,9 @@ async def _stream_anthropic(
     session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Anthropic SDK 직접 스트리밍 (Tool Use + Extended Thinking + Prompt Caching)."""
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     global _anthropic
-    model_id = _ANTHROPIC_MODEL_ID.get(model_alias, "claude-sonnet-4-6")
+    model_id = _ANTHROPIC_MODEL_ID.get(model_alias, _mr.role_scalar("anthropic_runtime_default_id"))
 
     # AADS-186E-2: Extended Thinking — Opus/Sonnet 4.6 Adaptive Thinking
     use_thinking = (

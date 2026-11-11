@@ -18,6 +18,7 @@ from app.services.loop_controller import (
 )
 
 logger = logging.getLogger("ohvis.loop_executor")
+from app.services import model_roles as _mr  # noqa: E402
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -41,13 +42,11 @@ def _loop_tenant_id(loop: dict) -> str | None:
 # 루프 실행용 최종 폴백 모델 체인 (LiteLLM 경유).
 # Claude OAuth 토큰 만료(401) / Gemini 크레딧 고갈 / DashScope 404가 동시에 발생하면
 # call_llm_with_fallback()이 None을 반환해 iteration이 100% 실패한다. (AADS-LOOP P0, 2026-07-30)
-_LOOP_FALLBACK_MODELS = [
-    m.strip()
-    for m in os.getenv(
-        "LLM_BG_FALLBACK_MODELS", "groq-llama-70b,groq-gpt-oss-120b,qwen-flash"
-    ).split(",")
-    if m.strip()
-]
+def _loop_fallback_models() -> list:
+    env_value = os.getenv("LLM_BG_FALLBACK_MODELS", "")
+    if env_value.strip():
+        return [m.strip() for m in env_value.split(",") if m.strip()]
+    return _mr.role_list("bg_fallback_models")
 
 
 async def _call_llm_resilient(
@@ -72,7 +71,7 @@ async def _call_llm_resilient(
 
     from app.core.anthropic_client import _call_litellm
 
-    for fb_model in _LOOP_FALLBACK_MODELS:
+    for fb_model in _loop_fallback_models():
         if fb_model == model:
             continue
         try:
@@ -127,6 +126,7 @@ async def _write_loop_result_to_chat(loop: dict, iteration_num: int, result: dic
 
 async def run_iteration(loop_id: int) -> dict:
     """단일 iteration 실행. 반환: {ok, loop_id, iteration, status, summary}"""
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     from app.core.db_pool import get_pool
     pool = get_pool()
     claimed = await pool.fetchval(
@@ -158,7 +158,7 @@ async def run_iteration(loop_id: int) -> dict:
         return {"ok": False, "error": reason, "action": action}
 
     iteration_num = (loop["current_iteration"] or 0) + 1
-    model_id = loop["execution_model_id"] or "claude-haiku-4-5-20251001"
+    model_id = loop["execution_model_id"] or _mr.role_scalar("bg_haiku_model")
     t0 = time.monotonic()
 
     try:
@@ -247,6 +247,7 @@ async def _execute_by_type(loop: dict, iteration_num: int) -> dict:
 
 
 async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     command = loop["original_command"]
     model_id = loop["execution_model_id"]
     success_cond = loop.get("success_condition") or {}
@@ -267,7 +268,7 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
 
     resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
-        model=model_id or "claude-haiku-4-5-20251001",
+        model=model_id or _mr.role_scalar("bg_haiku_model"),
         max_tokens=1000,
         system=system_prompt,
         tenant_id=_loop_tenant_id(loop),
@@ -314,6 +315,7 @@ async def _execute_monitor(loop: dict, iteration_num: int) -> dict:
 
 
 async def _execute_task(loop: dict, iteration_num: int) -> dict:
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     command = loop["original_command"]
     model_id = loop["execution_model_id"]
     last_result = loop.get("last_result") or {}
@@ -334,7 +336,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
 
     resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
-        model=model_id or "claude-haiku-4-5-20251001",
+        model=model_id or _mr.role_scalar("bg_haiku_model"),
         max_tokens=2000,
         system=system_prompt,
         tenant_id=_loop_tenant_id(loop),
@@ -365,6 +367,7 @@ async def _execute_task(loop: dict, iteration_num: int) -> dict:
 
 
 async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
+    await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
     parsed_intent = loop.get("parsed_intent") or {}
     task_list = parsed_intent.get("task_list", [])
 
@@ -389,7 +392,7 @@ async def _execute_sequential(loop: dict, iteration_num: int) -> dict:
 
     resp, used_model = await _call_llm_resilient(
         prompt=user_msg,
-        model=model_id or "claude-haiku-4-5-20251001",
+        model=model_id or _mr.role_scalar("bg_haiku_model"),
         max_tokens=2000,
         system=system_prompt,
         tenant_id=_loop_tenant_id(loop),

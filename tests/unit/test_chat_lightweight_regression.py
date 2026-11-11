@@ -111,10 +111,13 @@ def test_thinking_pipeline_connected():
 
 
 def test_codex_model_aliases_normalized():
+    # 코드 고정 목록은 DB 역할 표로 옮겼다 — 시드(=마이그레이션)에 세 모델이 있고 chat_service 가 그 역할을 읽는다.
+    from app.services.model_roles_seed import ROLE_SEED
+
     source = CHAT_SERVICE.read_text()
-    assert "gpt-5.5" in source
-    assert "gpt-5.4" in source
-    assert "gpt-5.3-codex" in source
+    seeded = {row[1] for row in ROLE_SEED["tool_gate_model_prefixes"]}
+    assert {"gpt-5.5", "gpt-5.4", "gpt-5.3-codex"} <= seeded
+    assert 'role_list("tool_gate_model_prefixes")' in source
 
 
 def test_autonomous_path_stores_structured_tool_events():
