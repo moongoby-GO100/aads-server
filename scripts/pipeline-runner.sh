@@ -2280,6 +2280,46 @@ normalize_claude_cli_model() {
     python3 "$CLAUDE_MODEL_CONTRACT" "${1:-}"
 }
 
+# Claude 실행 허용 스냅샷 (DB llm_models 의 anthropic is_executable 행).
+# 마지막 "성공" 결과만 파일에 보존한다: db_exec 실패·파싱 불가 출력은 기존 파일을 건드리지 않는다.
+# 성공 응답 [] 는 그대로 [] 로 교체(전부 차단, API 와 동일). 파일이 없을 때만 코드 폴백.
+CLAUDE_EXEC_SNAPSHOT_FILE="${CLAUDE_EXEC_SNAPSHOT_FILE:-/tmp/aads-claude-exec-snapshot.$$}"
+
+refresh_claude_execution_snapshot() {
+    local f="$CLAUDE_EXEC_SNAPSHOT_FILE" out normalized tmp
+    out=$(PGCONNECT_TIMEOUT=5 db_exec "SET statement_timeout = '5s';
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'model_id', model_id, 'execution_model_id',
+            COALESCE(NULLIF(execution_model_id, ''), metadata->>'execution_model_id', model_id)
+        )), '[]'::jsonb)
+        FROM llm_models WHERE provider = 'anthropic' AND is_executable = TRUE;" 2>/dev/null) || return 1
+    # 마지막 비어있지 않은 줄이 JSON 배열일 때만 성공으로 본다(psql 태그 잡음 허용).
+    normalized=$(printf '%s' "$out" | python3 -c '
+import json, sys
+lines = [l.strip() for l in sys.stdin.read().splitlines() if l.strip()]
+v = json.loads(lines[-1])
+if not isinstance(v, list):
+    sys.exit(1)
+print(json.dumps(v, separators=(",", ":")))' 2>/dev/null) || return 1
+    [[ -n "$normalized" ]] || return 1
+    tmp=$(mktemp "${f}.XXXXXX" 2>/dev/null) || return 1
+    if printf '%s\n' "$normalized" > "$tmp" && mv -f "$tmp" "$f"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# 스냅샷 파일 있음 → 그 기준 판정([] 면 차단). 없음 → 코드 폴백(stdin 비움).
+authorize_claude_model() {
+    local f="$CLAUDE_EXEC_SNAPSHOT_FILE"
+    if [[ -s "$f" ]]; then
+        python3 "$CLAUDE_MODEL_CONTRACT" --authorize "${1:-}" < "$f"
+    else
+        python3 "$CLAUDE_MODEL_CONTRACT" --authorize "${1:-}" < /dev/null
+    fi
+}
+
 # 모델 사이클이 전부 antigravity:* 이면 Anthropic 자격증명이 필요 없다(Google OAuth·relay 인증만 쓴다).
 # 하나라도 다른 모델이 있으면 필요하다. 빈 사이클도 필요한 쪽으로 본다.
 model_cycle_requires_anthropic_auth() {
@@ -6630,6 +6670,8 @@ run_job() {
     [[ "$job_model" == "litellm:" || -z "$job_model" ]] && { log "  EMPTY_MODEL job=$job_id — fallback to auto"; job_model="auto"; }
     job_model=$(normalize_runner_model "$job_model")
 
+    # Snapshot lives in CLAUDE_EXEC_SNAPSHOT_FILE (last success); [] denies all, no file = offline fallback.
+    local claude_execution_checked_at=-120
     local MODEL_CYCLE
     if [[ "$job_model" == "auto" ]]; then
         # worker_model 미지정 → DB에서 size별 모델 우선순위 조회
@@ -7067,7 +7109,12 @@ ${resume_brief}${safe_instruction}"
         else
             # AADS-242/AADS-Runner-Root: root/sudo 환경에서는 --dangerously-skip-permissions 자체가 CLI 보안 차단을 유발한다.
             local claude_cli_model
-            if ! claude_cli_model=$(normalize_claude_cli_model "$current_model"); then
+            # Refresh at most once per 120s; failure keeps the last successful snapshot file.
+            if (( SECONDS - claude_execution_checked_at >= 120 )); then
+                refresh_claude_execution_snapshot || log "CLAUDE_SNAPSHOT_REFRESH_FAILED job=$job_id — keeping last success/fallback"
+                claude_execution_checked_at=$SECONDS
+            fi
+            if ! claude_cli_model=$(authorize_claude_model "$current_model"); then
                 log "MODEL_CONTRACT_REJECTED job=$job_id requested=$current_model"
                 attempt=$((attempt + 1)); sleep 2; continue
             fi

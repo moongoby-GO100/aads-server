@@ -32,7 +32,8 @@ from app.services.goal_binding import (
     remediation_purpose,
 )
 from app.services.goal_link_policy import is_goal_project_allowed
-from scripts.claude_model_contract import resolve_model
+from scripts.claude_model_contract import resolve_relay_model as resolve_model
+from app.services.model_registry import resolve_executable_claude_model
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,12 @@ def _is_codex_model_allowed(model: str) -> bool:
     """Allow DB-configured current Codex GPT model ids without silently downgrading."""
     value = (model or "").strip()
     return value in _CODEX_AVAILABLE_MODELS or value.startswith("gpt-")
+
+
+async def _resolve_cli_model_allowed(model: str) -> str:
+    """Resolve model against DB-authorized models; empty model uses DB default."""
+    value = _normalize_claude_cli_model(model)
+    return await resolve_executable_claude_model(value)
 
 
 def _normalize_claude_cli_model(model: str) -> str:
@@ -1781,7 +1788,7 @@ class PipelineCJob:
                 # [Fix-D] continue_session 무관하게 항상 새 세션으로 실행
                 # '--session-id -c' 조합은 Claude CLI 오류 유발 → 플래그 제거
                 # 재지시 시 이전 컨텍스트는 instruction 텍스트에 포함됨
-                _cli_model = _normalize_claude_cli_model(self.model)
+                _cli_model = await _resolve_cli_model_allowed(self.model)
                 _model_flag = f" --model {shlex.quote(_cli_model)}" if _cli_model else ""
                 claude_cmd = (
                     f"claude -p --output-format text"
@@ -1890,7 +1897,7 @@ class PipelineCJob:
 
         # 항상 새 session-id 발급 ("Session ID already in use" 충돌 근본 방지)
         self.claude_session_id = str(uuid.uuid4())
-        _cli_model = _normalize_claude_cli_model(self.model)
+        _cli_model = await _resolve_cli_model_allowed(self.model)
         _model_flag = f" --model {shlex.quote(_cli_model)}" if _cli_model else ""
         # [Fix D-2] continue_session 분기 제거 - 항상 새 세션
         claude_cmd = (
@@ -2212,7 +2219,7 @@ class PipelineCJob:
 
         self._log("model_attempt", f"DB 모델 시도: {spec}")
         try:
-            self.model = _normalize_claude_cli_model(spec)
+            self.model = await resolve_executable_claude_model(_normalize_claude_cli_model(spec))
         except ValueError as exc:
             return {"error": str(exc), "output": ""}
         # Text-output runner has no provider model receipt. Keep this distinct

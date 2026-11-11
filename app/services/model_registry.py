@@ -84,6 +84,79 @@ def normalize_provider(provider: str) -> str:
 
 def invalidate_registry_cache() -> None:
     _cache.clear()
+    invalidate_claude_execution_cache()
+
+
+_CLAUDE_EXECUTION_TTL = 120.0
+_claude_execution_models: dict[str, str] | None = None
+_claude_execution_expires = 0.0
+_claude_execution_generation = 0
+_claude_execution_lock = asyncio.Lock()
+
+
+def invalidate_claude_execution_cache() -> None:
+    # Scope: THIS process only. Other workers/containers pick up DB changes when
+    # their own cache expires (<= _CLAUDE_EXECUTION_TTL = 120s), not instantly.
+    global _claude_execution_expires, _claude_execution_generation
+    _claude_execution_expires = 0.0
+    _claude_execution_generation += 1
+
+
+async def resolve_executable_claude_model(model: str = "") -> str:
+    from scripts.claude_model_contract import ALIASES, resolve_model, resolve_relay_model
+
+    global _claude_execution_models, _claude_execution_expires
+    model_str = (model or "").strip()
+    exact = resolve_relay_model(model_str) if model_str else ""
+    async with _claude_execution_lock:
+        if time.monotonic() >= _claude_execution_expires:
+            generation = _claude_execution_generation
+            try:
+                async with get_pool().acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT model_id, execution_model_id, metadata FROM llm_models "
+                        "WHERE provider = 'anthropic' AND is_executable = TRUE"
+                    )
+                models: dict[str, str] = {}
+                for record in rows:
+                    row = dict(record)
+                    model_id = str(row["model_id"])
+                    metadata = _coerce_json_object(row.get("metadata"))
+                    execution = row.get("execution_model_id") or metadata.get("execution_model_id") or model_id
+                    try:
+                        execution = resolve_relay_model(execution)
+                    except ValueError:
+                        logger.warning("model_registry.invalid_claude_execution_id model=%s", model_id)
+                        continue
+                    models[model_id] = execution
+                    models[ALIASES.get(model_id, model_id)] = execution
+                    models[execution] = execution
+                # DB lookup succeeded: the result is the sole authority, even when
+                # empty (everything blocked). No snapshot/code-fallback resurrection.
+                _claude_execution_models = models
+                if not models:
+                    logger.error("claude_execution_zero_rows — all Claude execution blocked per DB")
+            except Exception:
+                logger.warning("model_registry.claude_execution_lookup_failed", exc_info=True)
+            # Retry at most once per TTL; on DB failure the last success is retained.
+            _claude_execution_expires = (
+                time.monotonic() + _CLAUDE_EXECUTION_TTL
+                if generation == _claude_execution_generation else 0.0
+            )
+        if _claude_execution_models is None:
+            # Code allowlist is an offline fallback only, never a DB union.
+            return resolve_model(model_str or "claude-sonnet-5-5")
+        if not model_str:
+            if not _claude_execution_models:
+                raise ValueError("unsupported_claude_model: no executable anthropic models found in DB")
+            for candidate in ("claude-sonnet-5-5", "claude-sonnet", "sonnet"):
+                if candidate in _claude_execution_models:
+                    return _claude_execution_models[candidate]
+            return next(iter(_claude_execution_models.values()))
+        execution = _claude_execution_models.get(model_str) or _claude_execution_models.get(exact)
+        if execution is None:
+            raise ValueError("unsupported_claude_model: %s" % model_str)
+        return execution
 
 
 def _cache_get(key: str) -> Any:
@@ -2008,7 +2081,7 @@ async def _probe_claude_cli_relay(model: str) -> ProbeOutcome:
 
     async def _run() -> ProbeOutcome | None:
         async for ev in ms._stream_cli_relay_once(
-            model, "", [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}], oauth_slot="1"
+            model, "", [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}], oauth_slot="1", activation_probe=True
         ):
             kind = ev.get("type")
             if kind == "error":
@@ -3230,12 +3303,36 @@ async def sync_model_registry(*, triggered_by: str = "system", reason: str = "")
                     return {"ok": False, "skipped": "sync_in_progress", "models_synced": 0}
                 await asyncio.sleep(1.0)
             try:
-                return await _sync_model_registry_locked(triggered_by=triggered_by, reason=reason)
+                result = await _sync_model_registry_locked(triggered_by=triggered_by, reason=reason)
+                if result.get("ok"):
+                    invalidate_claude_execution_cache()
+                return result
             finally:
                 try:
                     await lock_conn.execute("SELECT pg_advisory_unlock($1)", _SYNC_LOCK_KEY)
                 except Exception:
                     logger.warning("model_registry_sync_unlock_failed")
+
+
+
+def _would_zero_anthropic_executable(current: Sequence[Mapping[str, Any]], model_rows: Iterable[Mapping[str, Any]]) -> bool:
+    """True when this sync would leave provider='anthropic' with no is_executable row.
+
+    current: presently executable anthropic rows (model_id, activation_source).
+    Mirrors the sync writes: synced rows take their new flag; executable rows
+    absent from the sync are retired unless activation_source='manual'.
+    """
+    if not current:
+        return False
+    synced = {
+        str(r["model_id"]): bool(r.get("is_executable", r.get("is_active", False)))
+        for r in model_rows if r.get("provider") == "anthropic"
+    }
+    if any(synced.values()):
+        return False
+    return not any(
+        str(c["model_id"]) not in synced and c.get("activation_source") == "manual" for c in current
+    )
 
 
 async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
@@ -3347,6 +3444,35 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
     )
 
     async with pool.acquire() as conn:
+        # Guard (sync auto path only; admin API deactivation is unaffected): one run
+        # must not take the last executable anthropic row to zero.
+        guard_anthropic = False
+        lookup_failed = False
+        try:
+            current_exec = await conn.fetch(
+                "SELECT model_id, activation_source FROM llm_models "
+                "WHERE provider = 'anthropic' AND is_executable = TRUE"
+            )
+            guard_anthropic = _would_zero_anthropic_executable([dict(r) for r in current_exec], model_rows)
+        except Exception:
+            lookup_failed = True
+            guard_anthropic = True
+            logger.error("model_registry.anthropic_guard_lookup_failed", exc_info=True)
+        if guard_anthropic:
+            if lookup_failed:
+                logger.error(
+                    "model_registry.sync_anthropic_guard_lookup_failed_fail_closed — "
+                    "anthropic is_executable downgrades and retirement NOT applied this run",
+                )
+            else:
+                keep = {str(r["model_id"]) for r in current_exec}
+                logger.error(
+                    "model_registry.sync_would_zero_anthropic_executable — "
+                    "anthropic is_executable downgrades NOT applied this run (kept=%s)", sorted(keep),
+                )
+                for row in model_rows:
+                    if row.get("provider") == "anthropic" and str(row["model_id"]) in keep:
+                        row["is_executable"] = True
         try:
             async with conn.transaction():
                 for row in model_rows:
@@ -3357,6 +3483,11 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                     capabilities = _coerce_json_object(row.get("capabilities"))
                     pricing = _coerce_json_object(row.get("pricing"))
                     tier, fallback_group = _catalog_tier(row["provider"], row["model_id"])
+                    is_exec_val = (
+                        False
+                        if (lookup_failed and row["provider"] == "anthropic")
+                        else bool(row.get("is_executable", row.get("is_active", False)))
+                    )
                     await conn.execute(
                         """
                         INSERT INTO llm_models (
@@ -3408,7 +3539,10 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                             capabilities = EXCLUDED.capabilities,
                             pricing = EXCLUDED.pricing,
                             is_selectable = EXCLUDED.is_selectable,
-                            is_executable = EXCLUDED.is_executable,
+                            is_executable = CASE
+                                WHEN $26::boolean AND EXCLUDED.provider = 'anthropic' THEN llm_models.is_executable
+                                ELSE EXCLUDED.is_executable
+                            END,
                             tier = COALESCE(llm_models.tier, EXCLUDED.tier),
                             fallback_group = COALESCE(llm_models.fallback_group, EXCLUDED.fallback_group),
                             updated_at = NOW()
@@ -3435,9 +3569,10 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                         json.dumps(capabilities, default=_json_default),
                         json.dumps(pricing, default=_json_default),
                         bool(row.get("is_selectable", row.get("is_active", False))),
-                        bool(row.get("is_executable", row.get("is_active", False))),
+                        is_exec_val,
                         tier,
                         fallback_group,
+                        lookup_failed,
                     )
 
                 await conn.execute(
@@ -3456,9 +3591,12 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                     WHERE activation_source <> 'manual'
                       AND COALESCE(metadata->>'sync_token', '') <> $1
                       AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
+                      AND NOT ($4::boolean AND provider = 'anthropic' AND ($3::boolean OR is_executable = TRUE))
                     """,
                     sync_token,
                     preserve_codex_cli_rows,
+                    lookup_failed,
+                    guard_anthropic,
                 )
 
                 await append_key_audit_log(

@@ -1,11 +1,13 @@
 """Version-preserving Claude execution contract, shared by API, relay and runners.
 
 stdlib only; usable by the standalone host relay and remote shell runner.
-This allowlist describes accepted IDs, not account entitlement or availability.
+Relay validation is syntax-only; API execution authorization lives in the DB cache.
 """
 import json
+import re
 import sys
 
+# Protocol version only; catalog changes must never bump this value.
 CONTRACT_VERSION = 1
 AADS_MODEL_IDS = {
     "claude-sonnet": "claude-sonnet-5-5",
@@ -31,6 +33,7 @@ ALIASES = dict(AADS_MODEL_IDS, **{
     "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-4-5-20251001",
 })
+# Offline authorization fallback only when DB and last successful cache are unavailable.
 EXACT_MODEL_IDS = frozenset(AADS_MODEL_IDS.values()) | frozenset((
     "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
     "claude-sonnet-4-5", "claude-sonnet-4-5-20250929",
@@ -46,6 +49,39 @@ def resolve_model(model):
     if resolved not in EXACT_MODEL_IDS:
         raise ValueError("unsupported_claude_model: %s" % value)
     return resolved
+
+
+_MODEL_PATTERN = re.compile(r"claude-[a-z]+-[0-9]+(?:-[0-9]+)*", re.ASCII)
+
+
+def resolve_relay_model(model):
+    value = str(model or "")
+    resolved = ALIASES.get(value, value)
+    if resolved not in EXACT_MODEL_IDS and not _MODEL_PATTERN.fullmatch(resolved):
+        raise ValueError("unsupported_claude_model: %s" % value)
+    return resolved
+
+
+def resolve_authorized_model(model, rows):
+    """Standalone runner authorization against a successful DB snapshot.
+
+    None means DB unavailable with no last success -> offline code fallback.
+    A successful snapshot is authoritative, EMPTY included (denies everything).
+    Sync-side guards, not this function, prevent an accidental all-off catalog.
+    """
+    if rows is None:
+        return resolve_model(model)  # Offline fallback only.
+    exact = resolve_relay_model(model)
+    for row in rows:
+        model_id = str(row.get("model_id") or "")
+        try:
+            canonical = resolve_relay_model(model_id)
+            execution = resolve_relay_model(row.get("execution_model_id") or model_id)
+        except ValueError:
+            continue
+        if model == model_id or exact in (canonical, execution):
+            return execution
+    raise ValueError("unsupported_claude_model: %s" % model)
 
 
 def runtime_alias(model):
@@ -65,7 +101,7 @@ def session_key(session_id, slot=None, model=None):
         return ""
     slot = str(slot or "")
     key = "%s@%s" % (session_id, slot) if slot not in ("", "0", "none", "proxy") else session_id
-    return "%s@%s" % (key, resolve_model(model)) if model else key
+    return "%s@%s" % (key, resolve_relay_model(model)) if model else key
 
 
 class ModelObservation:
@@ -106,7 +142,20 @@ if __name__ == "__main__":
         print(json.dumps({"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS)}))
     else:
         try:
-            print(resolve_model(sys.argv[1] if len(sys.argv) == 2 else ""))
+            if len(sys.argv) == 3 and sys.argv[1] == "--authorize":
+                lines = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+                try:
+                    # Last non-empty line: tolerate stray psql tags before the JSON.
+                    snapshot = json.loads(lines[-1]) if lines else None
+                except ValueError:
+                    print("claude_snapshot_unparseable: using offline fallback", file=sys.stderr)
+                    snapshot = None
+                if snapshot is not None and not isinstance(snapshot, list):
+                    print("claude_snapshot_not_array: using offline fallback", file=sys.stderr)
+                    snapshot = None
+                print(resolve_authorized_model(sys.argv[2], snapshot))
+            else:
+                print(resolve_relay_model(sys.argv[1] if len(sys.argv) == 2 else ""))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             sys.exit(2)

@@ -32,6 +32,7 @@ from app.core.llm_key_provider import get_api_key as _get_db_key, get_provider_k
 from app.services.client_env import interrupt_env_lines  # noqa: E402
 from app.services.model_registry import get_executable_model_ids as _get_registry_executable_model_ids  # noqa: E402
 from app.services.model_registry import list_registered_models as _list_registered_models  # noqa: E402
+from app.services.model_registry import resolve_executable_claude_model  # noqa: E402
 from app.services.model_registry import normalize_provider as _normalize_registry_provider  # noqa: E402
 from app.services.intent_router import IntentResult  # noqa: E402
 from app.services import chat_interrupt_lifecycle as _interrupt_lifecycle  # noqa: E402
@@ -40,7 +41,7 @@ from app.services import session_effort as _session_effort  # noqa: E402
 from app.services.model_switch_banner import build_switch_banner as _build_switch_banner  # noqa: E402
 from app.services.model_switch_banner import classify_failure_reason as _classify_failure_reason  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
-    AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_model,
+    AADS_MODEL_IDS, CONTRACT_VERSION, ModelObservation, resolve_relay_model as resolve_model,
     runtime_alias, session_key,
 )
 
@@ -4303,6 +4304,7 @@ async def _stream_cli_relay_once(
     session_id: Optional[str] = None,
     oauth_slot: Optional[str] = None,
     force_oauth_refresh: bool = False,
+    activation_probe: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """CLI Relay 서버(host.docker.internal:8199)를 통한 스트리밍.
 
@@ -4310,7 +4312,7 @@ async def _stream_cli_relay_once(
     NDJSON 응답을 파싱하여 AADS SSE 이벤트로 변환.
     """
     try:
-        sdk_model = resolve_model(model)
+        sdk_model = resolve_model(model) if activation_probe else await resolve_executable_claude_model(model)
     except ValueError as exc:
         yield {"type": "error", "content": str(exc), "error_type": "unsupported_claude_model"}
         return

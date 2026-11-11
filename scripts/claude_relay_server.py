@@ -48,7 +48,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 from scripts import account_login  # noqa: E402
 from scripts.claude_model_contract import (  # noqa: E402
-    CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_model, session_key,
+    CONTRACT_VERSION, EXACT_MODEL_IDS, ModelObservation, resolve_relay_model as resolve_model, session_key,
 )
 from app.core.claude_oauth_credentials import (  # noqa: E402
     SUBSCRIPTION_INACTIVE,
@@ -3527,7 +3527,7 @@ async def handle_health(request):
         current_oauth = ""
     health = {"status": "ok", "port": PORT, "sessions": len(_session_map),
               "current_oauth": current_oauth,
-              "claude_model_contract": {"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS)},
+              "claude_model_contract": {"version": CONTRACT_VERSION, "models": sorted(EXACT_MODEL_IDS), "source": "pattern+fallback"},
               "auth_mode": "direct_oauth" if _DIRECT_OAUTH_ENABLED else "litellm_proxy",
               "claude_cmd_mode": _resolve_cli_command("claude").get("mode", "unknown"),
               "codex_cmd_mode": _resolve_cli_command("codex").get("mode", "unknown"),
