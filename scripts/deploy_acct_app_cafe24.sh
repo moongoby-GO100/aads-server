@@ -28,7 +28,9 @@
 # purge problem is a WARNING plus edge_purge in the result JSON, never a failed release; purge_everything is
 # never used (same zone as the newtalk.kr shop).
 # The previous container is NEVER stopped or removed. Docker mutations are only allowed on acct-app-candidate-r<N>
-# names (docker_mut); a before/after snapshot proves every other container is unchanged.
+# names (docker_mut); a before/after snapshot proves every other container is unchanged. Exception: on the success
+# path, prune_stopped_candidates directly calls docker rm without -f (bypassing docker_mut); targets are strictly
+# restricted by prune_targets to naming rule matching, stopped candidates excluding NEW and PREV.
 #
 # Exit codes: 2 bad args/SHA | 3 already running | 4 release worktree unavailable/dirty/HEAD mismatch
 #   5 release content rejected (not pushed, marker/migration/secret check) | 6 image build/reuse/dependency gate
@@ -1159,6 +1161,14 @@ prune_stopped_candidates() { # success path only; never fails the release; no -f
     while IFS= read -r line; do [[ -n $line ]] && lines+=("$line"); done <<<"$out"
     while IFS= read -r name; do [[ -n $name ]] && names+=("$name"); done < <(prune_targets "$KEEP_STOPPED_CANDIDATES" "$NEW_CONTAINER" "$PREV_CONTAINER" "${lines[@]+"${lines[@]}"}")
     for name in "${names[@]+"${names[@]}"}"; do
+        if ! owned_name "$name"; then
+            say "WARNING: stopped-candidate prune refusing unowned candidate name: $name"
+            continue
+        fi
+        if [[ $name == "$PREV_CONTAINER" || $name == "$NEW_CONTAINER" ]]; then
+            say "WARNING: stopped-candidate prune refusing previous or new container: $name"
+            continue
+        fi
         if rdocker rm "$name" >/dev/null 2>&1; then removed=$((removed + 1)); else failed=$((failed + 1)); say "WARNING: could not remove stopped candidate $name"; fi
     done
     if (( removed + failed == 0 )); then say "stopped-candidate prune: nothing to remove (keeping up to $KEEP_STOPPED_CANDIDATES)"; return 0; fi

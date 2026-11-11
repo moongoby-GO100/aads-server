@@ -2105,6 +2105,33 @@ def test_prune_not_called_when_release_fails(box):
     assert not [x for x in box.log() if x.startswith("CMD docker rm") and "r1" in x.split()[-1][-3:]]
 
 
+def test_prune_stopped_candidates_double_check_refuses_unowned_and_prev_containers(box):
+    cmd = f'''
+set -- --call
+source "{box.harness}"
+RUN_ID=1
+PREV_CONTAINER="acct-app-candidate-r8"
+NEW_CONTAINER="acct-app-candidate-r9"
+prune_targets() {{
+    echo "unrelated-container"
+    echo "acct-app-candidate-r8"
+    echo "acct-app-candidate-r9"
+    echo "acct-app-candidate-r1"
+}}
+prune_stopped_candidates
+'''
+    p = subprocess.run(["bash", "-c", cmd], env=box.env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert "WARNING: stopped-candidate prune refusing unowned candidate name: unrelated-container" in p.stdout
+    assert "WARNING: stopped-candidate prune refusing previous or new container: acct-app-candidate-r8" in p.stdout
+    assert "WARNING: stopped-candidate prune refusing previous or new container: acct-app-candidate-r9" in p.stdout
+    rm_calls = [x for x in box.log() if x.startswith("CMD docker rm")]
+    assert "CMD docker rm unrelated-container" not in rm_calls
+    assert "CMD docker rm acct-app-candidate-r8" not in rm_calls
+    assert "CMD docker rm acct-app-candidate-r9" not in rm_calls
+    assert rm_calls == ["CMD docker rm acct-app-candidate-r1"]
+
+
 def test_no_free_port_exits_8_and_reports_stopped_count(box):
     with open(box.fake / "cands", "w") as f:
         f.write(f"acct-app-candidate-r1|true|8111|{R8_IMAGE}|\n")
