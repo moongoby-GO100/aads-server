@@ -118,7 +118,37 @@ def long_term_care_item(month: str, health_amount: int | None) -> dict[str, Any]
     )
 
 
-def compute_statutory_items(month: str, taxable_pay: Any, family: Any = None) -> dict[str, dict[str, Any]]:
+SHORT_TIME_THRESHOLD_HOURS = 60.0
+_SHORT_TIME_BASIS = "국민연금법 시행령 제2조·국민건강보험법 시행령 제9조"
+
+
+def is_short_time(monthly_scheduled_hours: float | None) -> bool:
+    """월 소정근로시간이 60시간 미만인가. None·음수·NaN 은 판정하지 않는다(현행 동작)."""
+    try:
+        hours = float(monthly_scheduled_hours) if monthly_scheduled_hours is not None else None
+    except (TypeError, ValueError):
+        return False
+    return hours is not None and 0 <= hours < SHORT_TIME_THRESHOLD_HOURS
+
+
+def _short_time_exclusion_items(hours: float) -> dict[str, dict[str, Any]]:
+    note = f"월 소정근로 약 {hours:.1f}시간({SHORT_TIME_THRESHOLD_HOURS:g}시간 미만) — 가입 제외 ({_SHORT_TIME_BASIS})"
+    return {code: _item(code, 0, note) for code in ("national_pension", "health_insurance", "long_term_care")}
+
+
+def _short_time_employment_note(item: dict[str, Any], hours: float) -> dict[str, Any]:
+    out = dict(item)
+    out["calc_note"] = (
+        f"{item['calc_note']} / 월 소정근로 약 {hours:.1f}시간({SHORT_TIME_THRESHOLD_HOURS:g}시간 미만)이나 "
+        "3개월 이상 계속 근로 시 적용 — 확인 필요(고용보험법 시행령 제3조 단서)"
+    )
+    out["needs_input"] = True
+    return out
+
+
+def compute_statutory_items(
+    month: str, taxable_pay: Any, family: Any = None, monthly_scheduled_hours: float | None = None,
+) -> dict[str, dict[str, Any]]:
     """급여월·과세급여·공제대상가족 수로 4대보험 4항목 + 소득세 2항목을 계산해 code → 항목으로 낸다."""
     month = str(month or "").strip()
     taxable = max(_int(taxable_pay), 0)
@@ -166,6 +196,11 @@ def compute_statutory_items(month: str, taxable_pay: Any, family: Any = None) ->
             "employment_insurance", _floor10(taxable * ppm // _PPM), f"과세급여 {taxable:,}원 × {ppm / 10_000:g}%, 10원 미만 절사",
         )
 
+    if is_short_time(monthly_scheduled_hours):
+        hours = float(monthly_scheduled_hours)
+        result.update(_short_time_exclusion_items(hours))
+        result["employment_insurance"] = _short_time_employment_note(result["employment_insurance"], hours)
+
     result.update(income_tax_items(month, taxable, family))
     return result
 
@@ -212,13 +247,15 @@ def income_tax_items(month: str, taxable_pay: Any, family: Any = None) -> dict[s
     return {"income_tax": income, "local_income_tax": local_item}
 
 
-def build_deduction_basis(month: str, taxable_pay: Any, family: Any = None) -> dict[str, Any]:
+def build_deduction_basis(
+    month: str, taxable_pay: Any, family: Any = None, monthly_scheduled_hours: float | None = None,
+) -> dict[str, Any]:
     """자동 산정에 쓴 입력값. 과세급여가 바뀌었는지, 어떤 요율이었는지 나중에 대조할 수 있게 명세에 남긴다."""
     month = str(month or "").strip()
     bounds = pension_bounds(month)
     health_limits = health_bounds(month)
     found = income_tax_table_for(month) if _MONTH_RE.fullmatch(month) else None
-    return {
+    basis = {
         "payroll_month": month,
         "taxable_pay": max(_int(taxable_pay), 0),
         "rates_ppm": {code: _lookup_rate(code, month) for code in _RATES},
@@ -227,6 +264,12 @@ def build_deduction_basis(month: str, taxable_pay: Any, family: Any = None) -> d
         "income_tax_table": found[0] if found else None,
         "tax_family_count": _family_count(family),
     }
+    if is_short_time(monthly_scheduled_hours):
+        basis["short_time_exclusion"] = {
+            "monthly_scheduled_hours": round(float(monthly_scheduled_hours), 2),
+            "threshold": SHORT_TIME_THRESHOLD_HOURS,
+        }
+    return basis
 
 
 def _prior_auto_amount(code: str, previous_basis: dict[str, Any] | None, legacy: dict[str, dict[str, Any]]) -> int | None:
@@ -267,6 +310,7 @@ def apply_statutory_deductions(
     previous_basis: dict[str, Any] | None = None,
     totals: dict[str, Any] | None = None,
     tax_family_count: Any = None,
+    monthly_scheduled_hours: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """공제 항목에 4대보험·소득세를 항목 단위로 채운다. (새 항목 목록, deduction_basis).
 
@@ -281,7 +325,8 @@ def apply_statutory_deductions(
       보험 합계만 있으면 나눌 근거가 없어 자동 산정이 대체하고 대체한 값을 deduction_basis.replaced_totals 에 남긴다.
     """
     items = [dict(item) for item in (deduction_items or [])]
-    fresh = compute_statutory_items(month, taxable_pay, tax_family_count)
+    fresh = compute_statutory_items(month, taxable_pay, tax_family_count, monthly_scheduled_hours)
+    short_time = is_short_time(monthly_scheduled_hours)
     legacy: dict[str, dict[str, Any]] = {}
     if previous_basis and previous_basis.get("payroll_month") and not isinstance(previous_basis.get("auto_amounts"), dict):
         legacy = compute_statutory_items(previous_basis["payroll_month"], previous_basis.get("taxable_pay"),
@@ -349,7 +394,8 @@ def apply_statutory_deductions(
     if other_total and not any(i.get("code") == "other" for i in others):
         others.append({"code": "other", "label": "기타 공제", "amount": other_total, "source": SOURCE_MANUAL})
 
-    if "long_term_care" not in kept:
+    if "long_term_care" not in kept and not short_time:
+        # 단시간근로(가입 제외)면 fresh 의 장기요양 0원(가입 제외 안내)을 그대로 쓴다 — 건강보험이 수동이어도 기준이 되지 않는다.
         # 장기요양은 실제 적용하는 건강보험료 기준 — 건강보험이 관리자 수정값이면 그 값으로 계산한다.
         # 기준은 대표 건강보험 항목(자동이면 fresh, 수동이면 그 금액)뿐이다. '건강보험 정산' 같은 extras 는
         # 보험료 확정액이 아닌 별도 정산이라 장기요양 기준에 넣지 않는다.
@@ -357,7 +403,7 @@ def apply_statutory_deductions(
         fresh["long_term_care"] = long_term_care_item(month, _int(health.get("amount")) if health else (
             None if fresh["health_insurance"].get("needs_input") else fresh["health_insurance"]["amount"]))
     merged = [kept.get(code) or fresh[code] for code in REQUIRED_FOUR_INSURANCE_CODES]
-    basis = build_deduction_basis(month, taxable_pay, tax_family_count)
+    basis = build_deduction_basis(month, taxable_pay, tax_family_count, monthly_scheduled_hours)
     basis["auto_amounts"] = {item["code"]: _int(item.get("amount")) for item in merged if item.get("source") == SOURCE_AUTO}
     pending_tax = {item["code"]: _int(item.get("amount")) for item in merged
                    if item["code"] in TAX_CODES and item.get("needs_input") and _int(item.get("amount")) != 0}

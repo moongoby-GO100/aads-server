@@ -10332,7 +10332,19 @@ def _payroll_lock_email(row: dict[str, Any]) -> str:
     return str(row.get("employee_email") or "").strip().lower()
 
 
-def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[str, Any] | None) -> None:
+def _monthly_scheduled_hours(employment: dict[str, Any] | None) -> float | None:
+    """계약 weekly_hours("주 10시간 30분")에서 월 소정근로시간(주휴 제외)을 구한다. 계약이 없거나 읽을 수 없으면 None."""
+    text = str(((employment or {}).get("weekly_hours")) or "")
+    match = re.search(r"주\s*(\d+)시간(?:\s*(\d+)분)?", text)
+    if not match:
+        return None
+    weekly = float(match.group(1)) + float(match.group(2) or 0) / 60
+    return weekly * 365 / 7 / 12
+
+
+def _apply_statutory_payroll_deductions(
+    statement: dict[str, Any], target: dict[str, Any] | None, monthly_scheduled_hours: float | None = None,
+) -> None:
     """four_insurance 명세의 4대보험·소득세 항목을 항목 단위로 채우고 합계·실수령액을 다시 맞춘다(제자리 수정).
 
     프리랜서(3.3%)·기타 구분은 건드리지 않는다. 관리자가 고친 항목은 보존하고 자동 항목만 현재 과세급여로 재계산한다."""
@@ -10360,6 +10372,7 @@ def _apply_statutory_payroll_deductions(statement: dict[str, Any], target: dict[
         previous_basis=(target or {}).get("deduction_basis") or None,
         totals=entered,
         tax_family_count=statement.get("tax_family_count"),
+        monthly_scheduled_hours=monthly_scheduled_hours,
     )
     try:
         items = normalize_payroll_items({"deduction_items": [*items, *settlement_items]})["deduction_items"]
@@ -10412,6 +10425,7 @@ def _save_payroll_record(
         else None
     )
     plan = _payroll_defaults_from_employment(derived)
+    scheduled_hours = _monthly_scheduled_hours((derived or {}).get("employment"))
     payload = _payroll_payload_with_items(payload)
     payload, defaults_applied, deviation = _apply_payroll_contract_defaults(payload, plan)
     # 4대보험 근로자는 자동 항목을 저장 직전에 다시 계산하므로, 요청에 실려 온 이전 공제 합계로 지급액 초과를
@@ -10507,11 +10521,11 @@ def _save_payroll_record(
         probe = {**baseline, "deduction_basis": existing["deduction_basis"]} if existing.get("deduction_basis") else baseline
         if not _payroll_changes(existing, probe):
             return existing, False
-        _apply_statutory_payroll_deductions(baseline, target)
+        _apply_statutory_payroll_deductions(baseline, target, scheduled_hours)
         _apply_held_amounts(baseline, rows, target=target, fact_row=_chain_fact_row(rows, _payroll_root(baseline)), enforce=False)
         if not _payroll_changes(existing, baseline):
             return existing, False
-    _apply_statutory_payroll_deductions(statement, target)
+    _apply_statutory_payroll_deductions(statement, target, scheduled_hours)
     if has_settlement:
         _assert_settlement_fits(statement)
     _apply_held_amounts(
