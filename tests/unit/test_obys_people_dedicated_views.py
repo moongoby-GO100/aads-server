@@ -187,7 +187,7 @@ state.payrollDetailKey='record:p1';renderPeopleV41(configs.payroll);assert(page.
 state.route='attendance';configs.attendance.data=[liveRow({id:'a1',raw:{work_date:'2026-09-30',start_at:'09:00',end_at:'18:00',worked_minutes:480,status:'approved'},display:{직원:'직원A',일자:'2026-09-30'}},configs.attendance)];
 for(const tab of ['today','employees','detail','schedule','stats']){
  state.peopleTab=tab;renderPeopleV41(configs.attendance);
- {const tbl=page.innerHTML.split('<table').slice(1).join('<table');assert(!/<t[hd] class="(num|center)"/.test(tbl),'근태 표에 급여 정렬 class 없음: '+tab);}
+ {const tbl=page.innerHTML.split('<table').slice(1).join('<table');assert(!/<t[hd] class="(num|center)">(직원|일자|지점)</.test(tbl),'근태 표 직원·일자·지점 열은 왼쪽 정렬(class 없음): '+tab);}
  assert(!page.innerHTML.includes('업무별 상세 탐색'));assert(!page.innerHTML.includes('핵심 관점'));
  assert(!page.innerHTML.includes('undefined'));
  if(tab==='stats')assert(page.innerHTML.includes('8시간 0분'));

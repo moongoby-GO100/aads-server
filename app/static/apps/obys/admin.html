@@ -105,6 +105,24 @@
     @media(max-width:1050px){.people-screen .toolbar:has(>label),.people-screen form.toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:600px){.people-screen .toolbar:has(>label),.people-screen form.toolbar{grid-template-columns:1fr}.people-screen .empty{padding:24px}}
     .source-status[hidden]{display:none}
+    /* 근태 화면 전용(.attendance-screen): 급여·직원 화면에는 적용되지 않는다 */
+    .attendance-screen{font-size:14px;line-height:1.5}
+    .attendance-screen .table-wrap{overflow-x:auto;max-width:100%}
+    .attendance-screen th{padding:10px 12px;font-size:13px;font-weight:700;color:#475467;line-height:1.5;text-align:left;vertical-align:middle;word-break:keep-all;white-space:nowrap}
+    .attendance-screen td{padding:10px 12px;font-size:14px;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+    .attendance-screen tr[data-row]{height:44px}
+    .attendance-screen th.num,.attendance-screen td.num{text-align:right;white-space:nowrap}
+    .attendance-screen th.center,.attendance-screen td.center{text-align:center}
+    .attendance-screen .metric small{font-size:13px;line-height:1.5}
+    .attendance-screen .metric strong{font-size:22px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+    .attendance-screen .metric span{font-size:12px;line-height:1.5}
+    .attendance-screen .source-status{font-size:12px;line-height:1.5}
+    .attendance-screen .work-tab{font-size:13px}
+    .attendance-screen label,.attendance-screen .empty,.attendance-screen p,.attendance-screen li{font-size:14px;line-height:1.5}
+    .attendance-screen .field,.attendance-screen input,.attendance-screen select{font-size:14px;min-width:0;max-width:100%}
+    .attendance-screen .table-wrap table:not(#weeklyRoster) td .btn{min-height:44px;height:auto;line-height:1.4;font-size:13px}
+    @media(max-width:480px){.attendance-screen .metric strong{font-size:18px}}
+    @media(max-width:600px){.attendance-screen .table-wrap table:not(#weeklyRoster){min-width:0;width:100%}.attendance-screen .table-wrap table:not(#weeklyRoster) thead{display:none}.attendance-screen .table-wrap table:not(#weeklyRoster) tbody tr{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:12px;border-bottom:1px solid var(--line);min-height:44px}.attendance-screen .table-wrap table:not(#weeklyRoster) td{display:block;padding:0;border:0;text-align:left;white-space:normal}.attendance-screen .table-wrap table:not(#weeklyRoster) td:first-child{grid-column:1/-1}.attendance-screen .table-wrap table:not(#weeklyRoster) td.num{text-align:left}.attendance-screen .table-wrap table:not(#weeklyRoster) td.center{text-align:right}.attendance-screen .table-wrap table:not(#weeklyRoster) td .btn{width:100%;min-height:44px}}
     .people-screen .toolbar.payroll-toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px}.payroll-toolbar .btn,.payroll-toolbar .field,.payroll-list .btn,.payroll-tabs .work-tab,.payroll-note .btn{min-height:44px}.payroll-tabs{max-width:100%;overflow:auto;margin:0 0 12px}.payroll-tabs .work-tab{white-space:nowrap}.payroll-note{margin:0 0 10px;color:#b42318;font-size:11px}
     .payroll-list td.c-name .btn{font-weight:800}
     @media(max-width:600px){.table-wrap.payroll-list table{min-width:0;width:100%}.payroll-screen .payroll-list td.num,.payroll-screen .payroll-list td.center{text-align:left;white-space:normal}.payroll-screen .payroll-list td.c-state{text-align:right}.payroll-list thead{display:none}.payroll-list tbody tr{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:12px;border-bottom:1px solid var(--line)}.payroll-list td{display:block;padding:0;border:0}.payroll-list td.c-branch,.payroll-list td.c-work,.payroll-list td.c-gross{display:none}.payroll-list td.c-name{grid-column:1}.payroll-list td.c-state{grid-column:2;text-align:right}.payroll-list td.c-net{grid-column:1;font-weight:800}.payroll-list td.c-act{grid-column:1/-1}.payroll-list td.c-act .btn{width:100%}.payroll-toolbar .field{min-width:0}}
@@ -443,7 +461,7 @@
       const tab=state.peopleTab||"today", month=payroll?(state.payrollMonth||payrollLatestMonthV41(all)||kstDateV41().slice(0,7)):(state.peopleMonth||kstDateV41().slice(0,7));
       const raw=row=>row.__live?.raw||{}, person=row=>row["직원"]||"이름 미등록";
       const section=(title,body)=>`<section class="section"><div class="section-head"><h2>${title}</h2></div>${body}</section>`;
-      const colCls=k=>payroll?payrollColClassV41(k):"",clsAttr=k=>colCls(k)?` class="${colCls(k)}"`:"";const table=(rows,columns,extra)=>rows.length?`<div class="table-wrap"><table><thead><tr>${columns.map(k=>`<th${clsAttr(k)}>${esc(k)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr><td><button class="btn" data-person="${esc(identity(row))}">${esc(row[columns[0]]??"미집계")}</button></td>${columns.slice(1).map(k=>`<td${clsAttr(k)}>${esc(row[k]??"미집계")}${extra?extra(row,k):""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`:'<div class="empty">조회 조건에 해당하는 직원 자료가 없습니다.</div>';
+      const attendanceColClassV41=name=>{const k=String(name||"");if(/^(직원|지점|일자|근태번호)$/.test(k))return "";if(k==="상태"||/이상유형|버튼|처리/.test(k))return "center";return /(시간|연장|휴게|건수|분$)/.test(k)?"num":""};const colCls=k=>payroll?payrollColClassV41(k):"",cellCls=k=>colCls(k)||(state.route==="attendance"?attendanceColClassV41(k):""),clsAttr=k=>cellCls(k)?` class="${cellCls(k)}"`:"";const table=(rows,columns,extra)=>rows.length?`<div class="table-wrap"><table><thead><tr>${columns.map(k=>`<th${clsAttr(k)}>${esc(k)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr><td><button class="btn" data-person="${esc(identity(row))}">${esc(row[columns[0]]??"미집계")}</button></td>${columns.slice(1).map(k=>`<td${clsAttr(k)}>${esc(row[k]??"미집계")}${extra?extra(row,k):""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`:'<div class="empty">조회 조건에 해당하는 직원 자료가 없습니다.</div>';
       const identity=row=>{const r=raw(row);return String(row.__live?.employee_key||r.employee_id||("record:"+row.__live?.id))};
       const schedulePeople=state.workSchedules?.month?.rows||[];
       const approvedPeople=state.peopleEmployees?.[state.businessId]||state.scheduleEmployees?.[state.businessId]||[],approvedKey=e=>{const email=String(e.email||e.employee_email||"").toLowerCase(),row=all.find(r=>String(raw(r).employee_email||"").toLowerCase()===email&&email)||all.find(r=>e.id&&raw(r).employee_id===e.id);if(row)return identity(row);const viaSchedule=schedulePeople.find(s=>s.employee_email===email)?.employee_key;if(viaSchedule)return viaSchedule;const nm=String(e.name||e.employee_name||"").trim(),sameName=nm?[...new Set(all.filter(r=>String(raw(r).employee_name||"").trim()===nm).map(identity))]:[];return sameName.length===1&&approvedPeople.filter(x=>String(x.name||x.employee_name||"").trim()===nm).length===1?sameName[0]:("employee:"+state.businessId+":"+email)};
@@ -537,7 +555,7 @@
         const fresh=document.getElementById("payrollNewStatement");if(fresh)fresh.onclick=()=>{payrollSetEmployeeV41("",true);state.payrollDetailKey="__new__";state.payrollPanelAction="";renderPageV41();document.getElementById("payrollEditor")?.scrollIntoView?.({block:"start"})};
       }
     }
-    function renderPageV41(){page.className="page"+(["employees","attendance","payroll"].includes(state.route)?" people-screen":"")+(state.route==="payroll"?" payroll-screen":"");
+    function renderPageV41(){page.className="page"+(["employees","attendance","payroll"].includes(state.route)?" people-screen":"")+(state.route==="payroll"?" payroll-screen":"")+(state.route==="attendance"?" attendance-screen":"");
       if(!state.workspaceReady||!state.businessesLoaded){page.innerHTML='<div class="empty">세션과 사업자를 확인하고 있습니다.</div>';return}
       if(!canReadRouteV41(state.route)){state.route="home";history.replaceState(null,"","#home")}
       const c=configs[state.route]||configs.home,info=routeInfo(state.route),data=filteredRows(c);
