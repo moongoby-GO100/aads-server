@@ -156,20 +156,20 @@ def test_people_renderer_executes_payroll_and_all_attendance_tabs(tmp_path):
     prefixes = ("function escapeHtml(", "function metricHtml(", "function payrollMoneyV41(",
                 "function payrollDisplayV41(", "function attendanceStatusV41(",
                 "function attendanceReviewV41(", "function attendanceMinutesV41(",
-                "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function filteredRows(c)",
+                "function displayDateV41(", "function attendanceTimeV41(", "function attendanceDisplayV41(", "function liveRow(", "function employmentMatchV41(", "function filteredRows(c)",
                 "function peopleWorkLinksV41(", "function peopleMonthBoundsV41(", "function activeMonthV41(",
                 "function workSchedulePanelV41(", "function payrollLatestMonthV41(", "function payrollMonthRowsV41(",
                 "function payrollDetailRowV41(", "function payrollPayloadV41(", "function payrollNumV41(",
                 "function payrollDeductionTotalV41(", "function payrollContractIdV41(", "function payrollUnsplitV41(", "function payrollPaymentCheckV41(",
                 "function payrollFlagsV41(", "function payrollSummaryV41(", "function payrollSummaryHtmlV41(",
-                "function payrollBasisHtmlV41(", "function payrollRowNoteV41(", "function payrollLinkCacheV41(")
+                "function payrollBasisHtmlV41(", "function payrollColClassV41(", "function payrollPayoutV41(", "function payrollPayoutBadgeV41(", "function payrollPayoutOpenCountV41(", "function payrollPayoutPanelV41(", "function payrollRowNoteV41(", "function payrollLinkCacheV41(")
     helpers = "\n".join(next(line.strip() for line in html.splitlines() if line.strip().startswith(prefix)) for prefix in prefixes)
     renderer = "function renderPeopleV41(c){" + html.split("function renderPeopleV41(c){", 1)[1].split("function renderPageV41(){", 1)[0]
     script = tmp_path / "people-render.cjs"
     script.write_text('''const assert=require('node:assert/strict');
 const state={route:'payroll',peopleMonth:'2026-09',readRole:'member',status:'전체 상태',selected:{},search:''};
 const configs={payroll:{title:'급여 현황',columns:['직원','총지급액','공제','실수령','상태'],hierarchy:[]},attendance:{title:'근태 현황',columns:['직원','일자','지점','근무시간','상태'],hierarchy:[]}};
-const element={};const elements={};const document={getElementById:id=>elements[id]||(elements[id]={addEventListener(){}})};
+const window={};const element={};const elements={};const document={getElementById:id=>elements[id]||(elements[id]={addEventListener(){}})};
 function bindWorkSchedulesV41(){};
 const page={innerHTML:'',querySelectorAll:()=>[]};
 const kstDateV41=()=>'2026-09-30';function renderPageV41(){};function loadLiveRoute(){};function openDetailV41(){};
@@ -177,10 +177,15 @@ const kstDateV41=()=>'2026-09-30';function renderPageV41(){};function loadLiveRo
 configs.payroll.data=[liveRow({id:'p1',raw:{payroll_month:'2026-09',gross_pay:3000000,total_deductions:300000,net_pay:2700000,status:'draft'},display:{직원:'직원A'}},configs.payroll)];
 renderPeopleV41(configs.payroll);
 for(const value of ['3,000,000원','300,000원','2,700,000원','초안','id="payrollSummary"','총지급 합계'])assert(page.innerHTML.includes(value),value);
+// 가독성: 급여 목록 금액 머리글·칸은 num, 상태는 center, 직원은 클래스 없음
+for(const k of ['총지급액','공제','실수령'])assert(page.innerHTML.includes('<th class="num">'+k+'</th>'),'th '+k);
+assert(page.innerHTML.includes('<td class="num">3,000,000원'));assert(page.innerHTML.includes('<td class="num">2,700,000원'));
+assert(page.innerHTML.includes('<th class="center">상태</th>'));assert(page.innerHTML.includes('<th>직원</th>'));
 state.payrollDetailKey='record:p1';renderPeopleV41(configs.payroll);assert(page.innerHTML.includes('급여명세 상세'));assert(page.innerHTML.includes('id="payrollBasis"'));assert(page.innerHTML.includes('계약 미연결'));
 state.route='attendance';configs.attendance.data=[liveRow({id:'a1',raw:{work_date:'2026-09-30',start_at:'09:00',end_at:'18:00',worked_minutes:480,status:'approved'},display:{직원:'직원A',일자:'2026-09-30'}},configs.attendance)];
 for(const tab of ['today','employees','detail','schedule','stats']){
  state.peopleTab=tab;renderPeopleV41(configs.attendance);
+ {const tbl=page.innerHTML.split('<table').slice(1).join('<table');assert(!/<t[hd] class="(num|center)"/.test(tbl),'근태 표에 급여 정렬 class 없음: '+tab);}
  assert(!page.innerHTML.includes('업무별 상세 탐색'));assert(!page.innerHTML.includes('핵심 관점'));
  assert(!page.innerHTML.includes('undefined'));
  if(tab==='stats')assert(page.innerHTML.includes('8시간 0분'));

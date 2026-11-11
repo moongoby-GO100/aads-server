@@ -36,7 +36,7 @@ def test_attendance_mapping_and_api_execute():
         'function attendanceStatusV41(', 'function attendanceReviewV41(',
         'function attendanceMinutesV41(', 'function displayDateV41(', 'function attendanceTimeV41(', 'function attendanceDisplayV41(',
         'async function attendanceLoadV41(', 'async function peopleLoadV41(', 'async function loadWorkSchedulesV41(', 'function liveRow(',
-        'async function loadLiveRoute(', 'function filteredRows(',
+        'async function loadLiveRoute(', 'function employmentMatchV41(', 'function filteredRows(',
     ])
     code = '''const assert=require('node:assert/strict');
 const state={readRole:'admin',route:'attendance',businessId:'b',dateFrom:'2026-10-01',dateTo:'2026-10-23',requestId:0,status:'전체 상태',selected:{},tab:'records'};
