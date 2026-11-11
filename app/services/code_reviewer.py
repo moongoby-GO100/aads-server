@@ -1232,20 +1232,25 @@ def _signature_key(symbol: str) -> str:
 
 def _diff_symbol_scopes(
     file_diff: str,
-) -> tuple[list[tuple[str, Optional[str]]], list[tuple[str, Optional[str]]]]:
-    """Track old/new class stacks independently; a hunk gap invalidates scope."""
-    stacks: list[list[tuple[int, str]]] = [[], []]
-    records: tuple[list[tuple[str, Optional[str]]], list[tuple[str, Optional[str]]]] = ([], [])
+) -> tuple[list[tuple[str, Optional[str], bool]], list[tuple[str, Optional[str], bool]]]:
+    """Track old/new scope stacks independently; a hunk gap invalidates scope."""
+    stacks: list[list[tuple[int, str, str]]] = [[], []]
+    records: tuple[list[tuple[str, Optional[str], bool]], list[tuple[str, Optional[str], bool]]] = ([], [])
     for line in file_diff.splitlines():
         hunk = _HUNK_HEADER_RE.match(line)
         if hunk:
             stacks = [[], []]
             context = line[hunk.end():].lstrip()
-            hint = re.match(r"class[ \t]+([A-Za-z_][A-Za-z0-9_]*)", context)
-            if hint:
+            hint_cls = re.match(r"class[ \t]+([A-Za-z_][A-Za-z0-9_]*)", context)
+            if hint_cls:
                 # git's section heading omits indentation: use only a direct
                 # method (indent > 0) until an explicit declaration takes over.
-                stacks = [[(0, hint.group(1))], [(0, hint.group(1))]]
+                stacks = [[(0, "class", hint_cls.group(1))], [(0, "class", hint_cls.group(1))]]
+            else:
+                hint_fn = re.match(r"(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)", context)
+                if hint_fn:
+                    fn_indent = 4 if re.search(r"\(\s*(?:self|cls)\b", context) else 0
+                    stacks = [[(fn_indent, "def", hint_fn.group(1))], [(fn_indent, "def", hint_fn.group(1))]]
             continue
         if line.startswith(("---", "+++", "diff ", "index ", "\\")):
             continue
@@ -1261,15 +1266,22 @@ def _diff_symbol_scopes(
             stack = stacks[side]
             while stack and indent <= stack[-1][0]:
                 stack.pop()
-            scope = stack[-1][1] if stack else None
+            class_scope = next((name for _, kind, name in reversed(stack) if kind == "class"), None)
             if line[0] in "-+":
-                records[side].extend(
-                    (_signature_key(symbol), scope)
-                    for symbol in _DELETED_SYMBOL_RE.findall("-" + content)
-                )
+                for symbol in _DELETED_SYMBOL_RE.findall("-" + content):
+                    sig_key = _signature_key(symbol)
+                    symbol_name = sig_key.split()[-1]
+                    has_enclosing_func = any(
+                        kind == "def" and name != symbol_name for _, kind, name in stack
+                    )
+                    records[side].append((sig_key, class_scope, has_enclosing_func))
             cls = re.match(r"class[ \t]+([A-Za-z_][A-Za-z0-9_]*)", stripped)
             if cls:
-                stack.append((indent, cls.group(1)))
+                stack.append((indent, "class", cls.group(1)))
+            else:
+                fn = re.match(r"(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+                if fn:
+                    stack.append((indent, "def", fn.group(1)))
     return records
 
 
@@ -1352,6 +1364,7 @@ def _removed_preservation_symbol_records(
     if moves and notes_out is not None:
         notes_out["preservation_moved_symbols"] = list(moves.values())
     removed: list[_RemovedSymbol] = []
+    exempted_locals: list[str] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
         deleted_lines = _deleted_symbol_lines(file_diff)
         deletions = [symbol for symbol, _ in deleted_lines]
@@ -1363,8 +1376,8 @@ def _removed_preservation_symbol_records(
             )
         )
         deleted_scopes, added_scopes = _diff_symbol_scopes(file_diff)
-        scoped_deleted_counts = Counter(deleted_scopes)
-        scoped_added_counts = Counter(added_scopes)
+        scoped_deleted_counts = Counter((sym, sc) for sym, sc, _ in deleted_scopes)
+        scoped_added_counts = Counter((sym, sc) for sym, sc, _ in added_scopes)
         deleted_counts = Counter(_signature_key(s) for s in deletions)
         added_counts = Counter(_signature_key(s) for s in additions)
         header = _DIFF_HEADER_PATH_RE.match(file_diff)
@@ -1392,7 +1405,13 @@ def _removed_preservation_symbol_records(
             declaration = re.fullmatch(
                 r"(?:async[ \t]+def|def|class)[ \t]+[A-Za-z_][A-Za-z0-9_]*", symbol
             )
-            scope = deleted_scopes[index][1]
+            scope = None
+            has_enclosing_func = False
+            if index < len(deleted_scopes):
+                _, scope, has_enclosing_func = deleted_scopes[index]
+            if declaration and has_enclosing_func:
+                exempted_locals.append(raw_symbol)
+                continue
             if scope is not None:
                 matched = (
                     scoped_deleted_counts[(symbol, scope)]
@@ -1420,6 +1439,9 @@ def _removed_preservation_symbol_records(
                 removed.append(
                     _RemovedSymbol(raw_symbol, header.group(2) if header else None, old_line)
                 )
+    if exempted_locals and notes_out is not None:
+        existing = notes_out.get("preservation_exempted_local_symbols", [])
+        notes_out["preservation_exempted_local_symbols"] = existing + exempted_locals
     return removed
 
 
@@ -2137,7 +2159,7 @@ def _precheck_preservation_gate(
     if truncated_tail_diff:
         unverified_symbols, _ = _split_exempt_private_symbols(
             truncated_tail_diff,
-            _removed_preservation_symbols(truncated_tail_diff, project),
+            _removed_preservation_symbols(truncated_tail_diff, project, exemption_notes),
             project,
         )
         if unverified_symbols:
