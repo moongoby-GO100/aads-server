@@ -50,10 +50,41 @@ def test_manifest_identity_failure_is_closed(monkeypatch):
         update.official_release()
 
 
+def _pin_main(monkeypatch, pinned):
+    monkeypatch.setattr(update, "command", lambda argv, **kw: "b" * 40)
+    monkeypatch.setattr(update, "pinned_artifact", lambda source: (pinned, "c" * 64))
+
+
 def test_pending_candidate_blocks_new_release(monkeypatch):
+    # 이전 후보가 main 고정값과 다르면(아직 들어가지 않음) 새 후보를 만들지 않는다.
     monkeypatch.setattr(update, "state", lambda: {"version": "2.1.281", "phase": "pushed"})
+    _pin_main(monkeypatch, "2.1.280")
     with pytest.raises(update.Deferred, match="previous CLI candidate"):
         update.prepare("2.1.282", "a" * 64, 233_000_000)
+
+
+def test_pinned_incomplete_candidate_is_superseded_by_newer_patch(monkeypatch, capsys):
+    # main 에 이미 고정된 이전 후보(2.1.285 pushed)는 같은 차선의 새 공식판으로 대체된다.
+    monkeypatch.setattr(update, "state", lambda: {"version": "2.1.285", "phase": "pushed"})
+    _pin_main(monkeypatch, "2.1.285")
+
+    class Reached(Exception):
+        pass
+
+    def stop(*args):
+        raise Reached
+
+    monkeypatch.setattr(update, "verified_binary", stop)
+    with pytest.raises(Reached):
+        update.prepare("2.1.322", "a" * 64, 233_000_000)
+    assert '"phase": "superseded"' in capsys.readouterr().out
+
+
+def test_superseding_never_crosses_minor_lane(monkeypatch):
+    monkeypatch.setattr(update, "state", lambda: {"version": "2.1.285", "phase": "pushed"})
+    _pin_main(monkeypatch, "2.1.285")
+    with pytest.raises(update.Deferred, match="previous CLI candidate"):
+        update.prepare("2.2.0", "a" * 64, 233_000_000)
 
 
 def test_already_pinned_requires_effective_runtime_convergence(monkeypatch):

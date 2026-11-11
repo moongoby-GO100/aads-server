@@ -142,12 +142,20 @@ def save_state(value: dict) -> None:
 
 def prepare(version: str, checksum: str, size: int) -> dict:
     prior = state()
-    if prior and prior.get("phase") != "complete" and prior.get("version") != version:
-        raise Deferred("previous CLI candidate has not completed certification")
     command(["git", "fetch", "origin", "main"], cwd=ROOT, timeout=90)
     base = command(["git", "rev-parse", "origin/main"], cwd=ROOT)
     source = command(["git", "show", "origin/main:Dockerfile"], cwd=ROOT)
     current, old_sha = pinned_artifact(source)
+    if prior and prior.get("phase") != "complete" and prior.get("version") != version:
+        # 2026-11-11: 2.1.285 가 pushed 에서 멈춘 채(러너 2.1.280) 공식 최신이 2.1.322 로
+        # 올라가자, 이 검사가 6주 동안 모든 갱신을 막았다(Fable 5.2 는 2.1.290+ 필요).
+        # 이미 main 에 고정된 이전 후보는 같은 patch 차선의 새 후보로 대체한다. 새 후보가
+        # 배포·5분 감시·정확 모델 smoke·러너 수렴을 처음부터 다시 통과해야 complete 가 된다.
+        # main 에 들어가지 않은 후보(고정값이 다름)는 여전히 막는다.
+        if not (prior.get("version") == current and same_patch_lane(current, version)):
+            raise Deferred("previous CLI candidate has not completed certification")
+        print(json.dumps({"phase": "superseded", "previous": prior.get("version"),
+                          "previous_phase": prior.get("phase"), "next": version}))
     if not same_patch_lane(current, version):
         raise Deferred(f"major/minor transition or downgrade requires review: {current} -> {version}")
     if current == version:
