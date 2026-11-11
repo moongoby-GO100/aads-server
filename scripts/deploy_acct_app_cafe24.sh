@@ -62,6 +62,7 @@ PG_USER="${ACCT_PG_USER:-}"
 PG_BACKUP_DIR="${ACCT_PG_BACKUP_DIR-/root/acct-release-backups}"
 APACHE_SITE="${ACCT_APACHE_SITE:-/etc/apache2/sites-available/00-zz-fb.newtalk.kr.conf}"
 APACHE_BACKUP_DIR="${ACCT_APACHE_BACKUP_DIR-/root/fb-cutover-backups}"
+KEEP_STOPPED_CANDIDATES="${ACCT_KEEP_STOPPED_CANDIDATES:-5}"   # stopped candidates (highest r<N> first) kept by the post-release prune
 PREV_CONTAINER="${ACCT_PREV_CONTAINER:-}"   # empty -> discover_state picks it from the apache upstream port
 PREV_AUTODETECT=false
 R8_IMAGE_ID="sha256:71e5e811c220efbe9bc527f36836e0cdc9638794ec01a6b1bbd5256ea5e8150e"
@@ -1115,6 +1116,56 @@ pick_port() { # first free port in 8112..8199: not used by any acct-app-candidat
     return 1
 }
 
+port_pool_stats() { # prints "<free> <stopped> <running>" from CAND_LINES (reservation count only; no network probe)
+    local p line used=" " free=0 stopped=0 running=0
+    for line in "${CAND_LINES[@]}"; do
+        used+="$(cut -d'|' -f3 <<<"$line") "
+        if [[ $(cut -d'|' -f2 <<<"$line") == true ]]; then running=$((running + 1)); else stopped=$((stopped + 1)); fi
+    done
+    for p in $(seq 8112 8199); do
+        [[ $used == *" $p "* || $p == "$OLD_PORT" ]] || free=$((free + 1))
+    done
+    echo "$free $stopped $running"
+}
+
+check_port_pool() { # die 8 when no reservable port is left; warn at 10 or fewer
+    local free stopped running
+    read -r free stopped running <<<"$(port_pool_stats)"
+    if (( free == 0 )); then
+        die 8 "no free candidate port in 8112..8199: stopped candidate ${stopped} containers occupy ports (정지 candidate ${stopped}개가 포트를 점유 — 정리 필요; stopped=${stopped} running=${running}); production untouched"
+    fi
+    if (( free <= 10 )); then
+        say "WARNING: only ${free} candidate ports left in 8112..8199 (stopped=${stopped} running=${running}); stopped candidates are pruned after a successful release"
+    fi
+}
+
+prune_targets() { # prune_targets <keep> <new> <prev> <line>...: names of stopped candidates to remove (keeps the <keep> highest r<N>)
+    local keep=$1 new=$2 prev=$3 line name n
+    shift 3
+    for line in "$@"; do
+        name="${line%%|*}"
+        [[ $name =~ $CANDIDATE_RE ]] || continue
+        [[ $(cut -d'|' -f2 <<<"$line") == false ]] || continue
+        [[ $name == "$new" || $name == "$prev" ]] && continue
+        n="${name##*-r}"
+        echo "$n $name"
+    done | sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2
+}
+
+prune_stopped_candidates() { # success path only; never fails the release; no -f, no image removal
+    local out lines=() line name removed=0 failed=0 names=()
+    [[ $KEEP_STOPPED_CANDIDATES =~ ^[0-9]+$ ]] || { say "WARNING: invalid ACCT_KEEP_STOPPED_CANDIDATES; stopped-candidate prune skipped"; return 0; }
+    out="$(rscript list_candidates R_LIST_CANDIDATES)" || { say "WARNING: cannot list candidates; stopped-candidate prune skipped"; return 0; }
+    while IFS= read -r line; do [[ -n $line ]] && lines+=("$line"); done <<<"$out"
+    while IFS= read -r name; do [[ -n $name ]] && names+=("$name"); done < <(prune_targets "$KEEP_STOPPED_CANDIDATES" "$NEW_CONTAINER" "$PREV_CONTAINER" "${lines[@]+"${lines[@]}"}")
+    for name in "${names[@]+"${names[@]}"}"; do
+        if rdocker rm "$name" >/dev/null 2>&1; then removed=$((removed + 1)); else failed=$((failed + 1)); say "WARNING: could not remove stopped candidate $name"; fi
+    done
+    if (( removed + failed == 0 )); then say "stopped-candidate prune: nothing to remove (keeping up to $KEEP_STOPPED_CANDIDATES)"; return 0; fi
+    say "stopped-candidate prune: removed $removed (failed $failed): ${names[*]}"
+    return 0
+}
+
 direct_get_body() { rcmd curl -s -m 8 "$1"; }
 direct_get_code() { rcmd curl -s -m 8 -o /dev/null -w '%{http_code}' "$1"; }
 
@@ -1138,6 +1189,7 @@ candidate_ocr_ok() { # candidate_ocr_ok <container>: tesseract has the kor and e
 
 start_candidate() {
     local waited=0 st
+    check_port_pool
     pick_port || die 8 "no free candidate port in 8112..8199"
     need_budget $((MONITOR_SECONDS + RECOVERY_RESERVE + HEALTH_WAIT_SECONDS + 60)) "candidate start"
     CANDIDATE_CREATED=1
@@ -1457,6 +1509,7 @@ main_deploy() {
         die 12 "container ${existing%%|*} for this release already exists but is not the active upstream; use rollback/remove it deliberately"
     fi
 
+    check_port_pool   # fail before build/migration when no candidate port is reservable
     ensure_image
     run_migrations
     start_candidate
@@ -1471,6 +1524,7 @@ main_deploy() {
     check_unrelated_unchanged || say "WARNING: other containers changed during the release (not by this script): $UNRELATED_CHANGED"
     COMPLETED=1
     emit_result switched
+    prune_stopped_candidates || say "WARNING: stopped-candidate prune failed (release result unaffected)"
     say "done: fb served by $NEW_CONTAINER (port $NEW_PORT, image $IMAGE_TAG); previous $PREV_CONTAINER kept running for rollback"
 }
 

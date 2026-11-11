@@ -2064,3 +2064,64 @@ def test_scan_allows_drop_not_null_but_still_rejects_other_drops(tmp_path):
     assert subprocess.run(['bash', '-c', scan + '\nmigration_scan "$1"', 'x', str(ok)]).returncode == 0
     res = subprocess.run(['bash', '-c', scan + '\nmigration_scan "$1"', 'x', str(bad)], capture_output=True, text=True)
     assert res.returncode != 0 and "DROP" in res.stdout
+
+
+# ---- stopped candidate prune / port pool -------------------------------------------------------
+def _cand_line(n, running, port=None):
+    return f"acct-app-candidate-r{n}|{'true' if running else 'false'}|{port or 8100 + n % 80}|img|"
+
+
+def test_prune_targets_keep_five_highest_stopped_and_never_running_new_or_prev(box):
+    lines = [_cand_line(n, False) for n in range(1, 11)]
+    lines += [_cand_line(20, True), _cand_line(21, True), _cand_line(22, True)]
+    # NEW and PREV are running in practice; a stopped PREV must still be spared
+    lines.append(_cand_line(0, False))
+    p = box.run("--call", "prune_targets", "5", "acct-app-candidate-r22", "acct-app-candidate-r0", *lines)
+    assert p.returncode == 0, p.stderr
+    got = p.stdout.split()
+    assert got == [f"acct-app-candidate-r{n}" for n in (5, 4, 3, 2, 1)]
+    assert not {"acct-app-candidate-r20", "acct-app-candidate-r21", "acct-app-candidate-r22", "acct-app-candidate-r0"} & set(got)
+
+
+def test_success_path_prunes_stopped_candidates_without_force_and_keeps_running(box):
+    cands = "".join(_cand_line(n, False, 8120 + n) + "\n" for n in range(1, 8))
+    with open(box.fake / "cands", "a") as f:
+        f.write(cands)
+    p = box.run()
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "stopped-candidate prune: removed 2" in p.stdout
+    rm = [x for x in box.log() if x.startswith("CMD docker rm")]
+    assert len(rm) == 2 and all(" -f" not in x for x in rm)
+    left = box.cands()
+    assert "acct-app-candidate-r8" in left and len(left) == 5 + 1 + 1
+
+
+def test_prune_not_called_when_release_fails(box):
+    with open(box.fake / "cands", "a") as f:
+        f.write("".join(_cand_line(n, False, 8120 + n) + "\n" for n in range(1, 8)))
+    p = box.run(env={"FAKE_PUB_FAIL_AFTER": "0", "FAKE_CAND_UNHEALTHY": "1"})
+    assert p.returncode != 0
+    assert "stopped-candidate prune" not in p.stdout
+    assert not [x for x in box.log() if x.startswith("CMD docker rm") and "r1" in x.split()[-1][-3:]]
+
+
+def test_no_free_port_exits_8_and_reports_stopped_count(box):
+    with open(box.fake / "cands", "w") as f:
+        f.write(f"acct-app-candidate-r1|true|8111|{R8_IMAGE}|\n")
+        for i, port in enumerate(range(8112, 8200)):
+            f.write(f"acct-app-candidate-r{i + 2}|{'false' if i % 4 else 'true'}|{port}|img|\n")
+    p = box.run()
+    assert p.returncode == 8, p.stdout + p.stderr
+    assert "정지 candidate 66개가 포트를 점유 — 정리 필요" in p.stderr
+    assert "running=" in p.stderr
+    assert box.builds() == 0
+
+
+def test_few_free_ports_only_warns(box):
+    with open(box.fake / "cands", "w") as f:
+        f.write(f"acct-app-candidate-r1|true|8111|{R8_IMAGE}|\n")
+        for i, port in enumerate(range(8112, 8195)):
+            f.write(f"acct-app-candidate-r{i + 2}|false|{port}|img|\n")
+    p = subprocess.run(["bash", "-c", f'source "{SCRIPT}"; OLD_PORT=8111; CAND_LINES=(); while IFS= read -r l; do CAND_LINES+=("$l"); done < "{box.fake}/cands"; RUN_ID=1; check_port_pool'],
+                       capture_output=True, text=True)
+    assert p.returncode == 0 and "WARNING: only 5 candidate ports left" in p.stdout
