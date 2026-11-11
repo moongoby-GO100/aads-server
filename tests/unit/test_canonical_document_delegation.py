@@ -157,6 +157,67 @@ def test_blocker_and_reject_and_incomplete():
     assert deleg.cross_review_problem([review("anthropic", "a"), legacy]) == "cross_review_unreliable"
 
 
+def test_cross_review_problem_verdict_filtering():
+    """(a) 두 회사 pass + 다른 모델 attempt_failed -> 통과
+    (b) 두 회사 pass + 다른 모델 blocked -> cross_review_blocked
+    (c) 알 수 없는 verdict('needs_changes') -> cross_review_unknown_verdict
+    (d) 기존 테스트 전부 유지."""
+    anthropic_pass = review("anthropic", "claude-opus-5-5", rid=1)
+    openai_pass = review("openai", "codex:gpt-6.1-sol", rid=2)
+    openai_failed = {
+        "id": 3,
+        "reviewer_provider": "openai",
+        "reviewer_model": "codex:gpt-6-astra",
+        "verdict": "attempt_failed",
+        "reason": "invalid review response: unverified[0].location: 40자 초과",
+    }
+
+    # (a) 두 회사 pass + 다른 모델 attempt_failed → 통과
+    assert deleg.cross_review_problem([anthropic_pass, openai_pass, openai_failed]) is None
+    conn = FakeConn(delegations=[delegation()], reviews=[anthropic_pass, openai_pass, openai_failed])
+    assert approve(conn)["approved"] is True
+
+    # pass 행의 issues 가 유효하지 않으면 cross_review_unreliable
+    prefix, body = openai_pass["reason"].split(REVIEW_MARKER)
+    bad_data = json.loads(body)
+    bad_data["issues"] = "문제 없음"
+    openai_bad_issues = dict(openai_pass, reason=prefix + REVIEW_MARKER + json.dumps(bad_data))
+    assert deleg.cross_review_problem([anthropic_pass, openai_bad_issues, openai_failed]) == "cross_review_unreliable"
+
+    # 한 회사가 attempt_failed 만 있으면 cross_review_incomplete
+    assert deleg.cross_review_problem([anthropic_pass, openai_failed]) == "cross_review_incomplete"
+    anthropic_failed = {
+        "id": 4,
+        "reviewer_provider": "anthropic",
+        "reviewer_model": "claude-haiku",
+        "verdict": "attempt_failed",
+        "reason": "invalid review response",
+    }
+    assert deleg.cross_review_problem([anthropic_failed, openai_pass]) == "cross_review_incomplete"
+
+    # (b) 두 회사 pass + 다른 모델 blocked → cross_review_blocked
+    openai_blocked = {
+        "id": 5,
+        "reviewer_provider": "openai",
+        "reviewer_model": "codex:gpt-6-blocked",
+        "verdict": "blocked",
+        "reason": "검수 차단됨",
+    }
+    assert deleg.cross_review_problem([anthropic_pass, openai_pass, openai_blocked]) == "cross_review_blocked"
+    assert deleg.cross_review_problem([anthropic_pass, openai_pass, openai_failed, openai_blocked]) == "cross_review_blocked"
+
+    # (c) 알 수 없는 verdict('needs_changes') → cross_review_unknown_verdict
+    openai_unknown = {
+        "id": 6,
+        "reviewer_provider": "openai",
+        "reviewer_model": "codex:gpt-6-unknown",
+        "verdict": "needs_changes",
+        "reason": "수정 필요",
+    }
+    assert deleg.cross_review_problem([anthropic_pass, openai_pass, openai_unknown]) == "cross_review_unknown_verdict"
+    assert deleg.cross_review_problem([anthropic_pass, openai_pass, openai_failed, openai_unknown]) == "cross_review_unknown_verdict"
+
+
 def test_expired_and_revoked_denied():
     assert approve(FakeConn(delegations=[delegation(expires=NOW - timedelta(days=1))]))["code"] == "delegation_missing"
     assert approve(FakeConn(delegations=[delegation(revoked=NOW)]))["code"] == "delegation_missing"

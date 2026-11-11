@@ -58,11 +58,18 @@ def cross_review_problem(rows: Any) -> Optional[str]:
     latest = cross._latest_by_model(list(rows or []))
     if any(r.get("verdict") == "reject" for r in latest.values()):
         return "cross_review_reject_present"
+    if any(r.get("verdict") == "blocked" for r in latest.values()):
+        return "cross_review_blocked"
+    if any(r.get("verdict") not in ("pass", "attempt_failed") for r in latest.values()):
+        return "cross_review_unknown_verdict"
     passed = {r.get("reviewer_provider") for r in latest.values() if r.get("verdict") == "pass"}
     if not REQUIRED_PROVIDERS <= passed:
         return "cross_review_incomplete"
     # 구조 데이터가 없는(옛 형식) 리뷰·잘린 리뷰·비유한 값은 지적 집계를 믿을 수 없으므로 통과로 보지 않는다.
+    # 단, 신뢰도 검사는 통과 판정(verdict=pass) 행에만 적용하며 형식 오류 등으로 실패한 시도(attempt_failed)는 무시한다.
     for row in latest.values():
+        if row.get("verdict") == "attempt_failed":
+            continue
         data, problem = auto.review_problem(row)
         if (problem in ("invalid", "legacy", "truncated", "non_finite")
                 or not isinstance((data or {}).get("issues"), list)):
