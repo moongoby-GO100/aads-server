@@ -149,7 +149,9 @@ def test_no_approve_tool_or_input_exposed():
     from app.services.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
-    assert not registry.get_tool("canonical_document_approve")
+    # 2026-11-11: 위임 승인 도구가 추가됐다. 등록 도구 자체에는 승인 입력이 없고, 승인 도구는 위임 전제임을 설명에 명시해야 한다.
+    approve = registry.get_tool("canonical_document_approve")
+    assert approve and "위임" in approve["description"]
     props = registry.get_tool("canonical_document_register")["input_schema"]["properties"]
     assert not any("approv" in p for p in props)
 

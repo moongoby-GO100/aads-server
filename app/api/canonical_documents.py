@@ -621,6 +621,35 @@ async def list_documents(project_key: str, q: str | None = Query(None, max_lengt
         return {"documents": documents}
 
 
+class DelegationInput(BaseModel):
+    grantee: str = Field(min_length=1, max_length=128)
+    goal_id: UUID | None = None
+    expires_days: int = Field(30, ge=1, le=365)
+
+
+@router.post("/approval-delegations", status_code=201)
+async def grant_approval_delegation(project_key: str, body: DelegationInput, context: dict = WRITE):
+    """사람 로그인 세션만 에이전트 승인 위임을 만든다(승인과 같은 _require_human_approver·approve 권한)."""
+    project = _project(project_key)
+    async with get_pool().acquire() as conn, conn.transaction():
+        _require_human_approver(context)
+        tenant, actor = await _authorize(conn, context, project, "approve")
+        from app.services.canonical_document_delegation import create_delegation
+        return await create_delegation(conn, tenant, project, body.grantee, actor, body.goal_id, body.expires_days)
+
+
+@router.delete("/approval-delegations/{delegation_id}")
+async def revoke_approval_delegation(project_key: str, delegation_id: UUID, context: dict = WRITE):
+    project = _project(project_key)
+    async with get_pool().acquire() as conn, conn.transaction():
+        _require_human_approver(context)
+        tenant, actor = await _authorize(conn, context, project, "approve")
+        from app.services.canonical_document_delegation import revoke_delegation
+        if not await revoke_delegation(conn, tenant, project, delegation_id, actor):
+            raise HTTPException(404, "delegation_not_found")
+        return {"revoked": True, "delegation_id": str(delegation_id)}
+
+
 @router.get("/review-queue")
 async def review_queue(project_key: str, context: dict = VIEW):
     from app.services.canonical_review_digest import fetch_review_queue
@@ -846,7 +875,8 @@ class DecisionInput(BaseModel):
     expected_generation: int = Field(ge=1)
 
 
-async def approve_revision_in_tx(conn: Any, tenant: str, project: str, head: Any, revision_id: Any, actor: str) -> dict:
+async def approve_revision_in_tx(conn: Any, tenant: str, project: str, head: Any, revision_id: Any, actor: str,
+                                 metadata: dict | None = None) -> dict:
     """승인 핵심(HTTP·자동승인 공용). 호출자가 head 를 FOR UPDATE 로 잠근 트랜잭션 안에서 부른다. 인증·generation 검사는 호출자 몫."""
     if str(head["approved_revision_id"]) == str(revision_id):
         return {"approved_revision_id": revision_id, "idempotent": True}
@@ -858,8 +888,14 @@ async def approve_revision_in_tx(conn: Any, tenant: str, project: str, head: Any
     if last != "review":
         raise HTTPException(409, "revision_not_in_review")
     await conn.execute("UPDATE project_document_heads SET approved_revision_id=$2,generation=generation+1,updated_at=now() WHERE id=$1", head["id"], revision_id)
-    await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
-                       "VALUES($1::uuid,$2,$3,$4,'approved',$5)", tenant, project, head["id"], revision_id, actor)
+    if metadata is None:
+        await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id) "
+                           "VALUES($1::uuid,$2,$3,$4,'approved',$5)", tenant, project, head["id"], revision_id, actor)
+    else:  # 위임 승인 감사: action 은 그대로 'approved' 라 기존 승인 집계가 깨지지 않는다.
+        import json as _json
+        await conn.execute("INSERT INTO project_document_events(tenant_id,project_key,head_id,revision_id,action,actor_id,metadata) "
+                           "VALUES($1::uuid,$2,$3,$4,'approved',$5,$6::jsonb)", tenant, project, head["id"], revision_id, actor,
+                           _json.dumps(metadata, ensure_ascii=False, default=str))
     return {"approved_revision_id": revision_id, "idempotent": False}
 
 

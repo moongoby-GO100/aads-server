@@ -1,18 +1,20 @@
 """채팅 도구 canonical_document_register / canonical_document_lookup / canonical_document_review 구현.
 
 - register: 정본 문서의 **초안 리비전**만 만든다. approve 경로는 호출하지 않고
-  approved_revision_id 도 바꾸지 않는다(승인은 POST .../approve 로만).
+  approved_revision_id 도 바꾸지 않는다.
 - 생성은 app.api.canonical_documents.create_revision_in_tx (라우트와 같은 코드) 를 직접 호출한다.
 - 판정·기록은 app.services.canonical_gate (shadow, fail-open) 를 거친다.
 - lookup: 읽기 전용(SELECT 만).
 - review: 최신 리비전을 초안→검토로만 넘긴다(PM·CEO 통합지시 세션 한정, 사유 10자 이상).
-  승인·보관·본문 수정 경로는 없다. 전환 규칙은 API mark_review 와 같은 review_revision_in_tx 를 쓴다.
+  전환 규칙은 API mark_review 와 같은 review_revision_in_tx 를 쓴다.
+- approve: 사람의 유효한 위임을 받은 grantee 세션만 공용 승인 핵심을 호출한다.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
+import secrets
 import unicodedata
 import uuid
 from typing import Any, Optional
@@ -31,6 +33,8 @@ TOOL_KEY_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DATE_IN_KEY_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}-?(?:0[1-9]|1[0-2])(?:-?(?:0[1-9]|[12]\d|3[01]))?(?!\d)")
 _VERSION_SEGMENT_RE = re.compile(r"(?:^|-)v\d+(?:-|$)")
 _LOOKUP_LIMIT = 20
+# Process-local presentation proof. A restart requires a fresh server lookup.
+_CARD_PROOF_KEY = secrets.token_bytes(32)
 
 _STATUS_SQL = (
     "SELECT action FROM project_document_events WHERE revision_id=$1 "
@@ -281,6 +285,67 @@ async def review_document(
     }
 
 
+APPROVE_REASON_MIN = 10
+
+
+async def approve_document_delegated(
+    *, tenant_id: str, session_id: str, inp: dict[str, Any], pool: Any = None,
+) -> dict[str, Any]:
+    """사람이 부여한 위임이 있는 세션만, 교차검수 통과 최신 판본을 승인한다. 막히면 code 로 사유를 돌려준다."""
+    from app.services import canonical_document_delegation as deleg
+
+    try:
+        project = docs._project(str(inp.get("project") or ""))
+    except HTTPException:
+        return _invalid("project 가 올바르지 않습니다")
+    key = str(inp.get("document_key") or "")
+    if not docs.KEY.fullmatch(key):
+        return _invalid("document_key 가 올바르지 않습니다")
+    try:
+        revision_id = uuid.UUID(str(inp.get("revision_id") or ""))
+        generation = inp.get("expected_generation")
+        if isinstance(generation, bool) or int(generation) < 1:
+            raise ValueError
+        generation = int(generation)
+    except (ValueError, TypeError):
+        return _invalid("revision_id(UUID)와 expected_generation(1 이상 정수)이 필요합니다")
+    reason = str(inp.get("reason") or "").strip()
+    if len(reason) < APPROVE_REASON_MIN:
+        return _invalid(f"reason(승인 사유)을 {APPROVE_REASON_MIN}자 이상 적어야 합니다")
+    if not session_id:
+        return {"approved": False, "code": "session_required", "message": "채팅 세션을 확인할 수 없습니다"}
+
+    actor = f"chat:{session_id}"
+    pool = pool or get_pool()
+    try:
+        async with pool.acquire() as conn:
+            from app.services.canonical_hierarchy_assignment import _session_scope
+            session = await _session_scope(conn, tenant_id, session_id)
+            if not session:
+                return {"approved": False, "code": "session_required", "message": "채팅 세션을 확인할 수 없습니다"}
+            async with conn.transaction():
+                head = await docs._head(conn, tenant_id, project, key, lock=True)
+                if not head:
+                    return {"approved": False, "code": "document_not_found", "message": "등록된 정본 문서가 없습니다"}
+                verdict = await deleg.evaluate_delegated_approval(
+                    conn, tenant_id, project, head, revision_id, generation, session_id, session["role_key"], lock_delegation=True)
+                if not verdict["ok"]:
+                    return {"approved": False, "code": verdict["code"], "project": project, "document_key": key}
+                info = verdict["delegation"]
+                result = await docs.approve_revision_in_tx(
+                    conn, tenant_id, project, head, revision_id, actor,
+                    metadata={"delegated": True, "delegation_id": info["delegation_id"],
+                              "granted_by": info["granted_by"], "grantee": info["grantee"], "reason": reason})
+    except HTTPException as exc:
+        code = exc.detail.get("code") if isinstance(exc.detail, dict) else str(exc.detail)
+        return {"approved": False, "code": code, "status": exc.status_code, "project": project, "document_key": key}
+    logger.info("canonical_document_approve project=%s key=%s revision=%s actor=%s delegation=%s",
+                project, key, revision_id, actor, info["delegation_id"])
+    return {"approved": True, "project": project, "document_key": key, "revision_id": str(revision_id),
+            "idempotent": result["idempotent"], "actor": actor, "delegation_id": info["delegation_id"],
+            "granted_by": info["granted_by"], "reason": reason}
+
+
 def _rdoc_warnings(title: str, content: str, is_new_document: bool) -> list[str]:
     """신규 문서의 한글 표시 제목·첫 제목(R-DOC). 기존 문서는 소급 지적하지 않고 차단도 하지 않는다."""
     if not is_new_document:
@@ -294,7 +359,7 @@ def _rdoc_warnings(title: str, content: str, is_new_document: bool) -> list[str]
     return found
 
 
-async def _document_summary(conn: Any, head: Any, project: str = "") -> dict[str, Any]:
+async def _document_summary(conn: Any, head: Any, project: str = "", *, session_id: str = "", session_role: str = "") -> dict[str, Any]:
     async def revision(revision_id: Any) -> Optional[dict[str, Any]]:
         if not revision_id:
             return None
@@ -327,7 +392,19 @@ async def _document_summary(conn: Any, head: Any, project: str = "") -> dict[str
             authoritative=bool(approved_revision),
         )
     if project and latest is not None:
-        summary["approval_card"] = approval_card(head, latest, project)
+        card = approval_card(head, latest, project)
+        if session_id:
+            from app.services.canonical_document_delegation import evaluate_delegated_approval
+            verdict = await evaluate_delegated_approval(
+                conn, str(head["tenant_id"]), project, head, latest["id"],
+                head["generation"], session_id, session_role)
+            if verdict["ok"]:
+                # This capability comes only from the current DB/session evaluation.
+                # Model/persisted cards still go through validated_approval_cards.
+                card.update(can_approve=True, approve_via="delegation",
+                            delegation_id=verdict["delegation"]["delegation_id"])
+                card["_delegation_proof"] = _card_proof(card)
+        summary["approval_card"] = card
     return summary
 
 
@@ -362,7 +439,7 @@ def approval_card(head: Any, latest: dict, project: str, *, can_approve: bool = 
     }
 
 
-async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = None) -> dict[str, Any]:
+async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = None, session_id: str = "") -> dict[str, Any]:
     """읽기 전용. document_key | query | file_path 중 하나로 등록 여부를 조회한다."""
     try:
         project = docs._project(str(inp.get("project") or ""))
@@ -376,11 +453,19 @@ async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = N
 
     pool = pool or get_pool()
     async with pool.acquire() as conn:
+        session_role = ""
+        if session_id:
+            from app.services.canonical_hierarchy_assignment import _session_scope
+            session = await _session_scope(conn, tenant_id, session_id)
+            if session:
+                session_role = session["role_key"]
+            else:
+                session_id = ""
         if key:
             head = await docs._head(conn, tenant_id, project, key)
             if not head:
                 return {"project": project, "document_key": key, "registered": False}
-            return {"project": project, "registered": True, **await _document_summary(conn, head, project)}
+            return {"project": project, "registered": True, **await _document_summary(conn, head, project, session_id=session_id, session_role=session_role)}
 
         if file_path:
             candidates = sorted({document_refs._norm(file_path), unicodedata.normalize("NFC", file_path)})
@@ -405,7 +490,7 @@ async def lookup_documents(*, tenant_id: str, inp: dict[str, Any], pool: Any = N
         if file_path and not rows:
             rows = await _heads_by_source_hash(conn, tenant_id, project, document_refs._norm(file_path))
             matched_by = "content_hash" if rows else None
-        documents = [await _document_summary(conn, row, project) for row in rows]
+        documents = [await _document_summary(conn, row, project, session_id=session_id, session_role=session_role) for row in rows]
         if matched_by:
             for document in documents:
                 document["matched_by"] = matched_by
@@ -440,11 +525,20 @@ CARD_MAX_BYTES = 4096
 CARDS_MAX_BYTES = 24576
 
 
+def _card_proof(card: dict) -> str:
+    import hmac
+    import json
+    body = {k: v for k, v in card.items() if k != "_delegation_proof"}
+    return hmac.new(_CARD_PROOF_KEY, json.dumps(body, sort_keys=True, ensure_ascii=False).encode(),
+                    hashlib.sha256).hexdigest()
+
+
 def validated_approval_cards(cards: Any) -> list[dict]:
     """Validate persisted presentation data; reconstruct every URL and action body.
 
-    Chat lookup has no human authorization context. Its cards always require an
-    authenticated refresh before enabling approval; stored capability is rejected.
+    Ordinary/model cards must have can_approve=False. Only an intact proof from
+    a server-side session evaluation can carry delegated presentation capability.
+    Execution always rechecks DB authorization inside the approval transaction.
     """
     import json
     from uuid import UUID
@@ -460,6 +554,19 @@ def validated_approval_cards(cards: Any) -> list[dict]:
             size = len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
             if size > CARD_MAX_BYTES or used + size > CARDS_MAX_BYTES:
                 continue
+            delegated_card = None
+            if card.get("can_approve") is True:
+                import hmac
+                proof = card.get("_delegation_proof")
+                if not isinstance(proof, str) or not hmac.compare_digest(proof, _card_proof(card)):
+                    continue
+                if card.get("approve_via") != "delegation":
+                    continue
+                UUID(card["delegation_id"])
+                delegated_card = card
+                card = {k: v for k, v in card.items()
+                        if k not in ("approve_via", "delegation_id", "_delegation_proof")}
+                card["can_approve"] = False
             UUID(card["tenant_id"])
             UUID(card["revision_id"])
             if not docs.KEY.fullmatch(card["document_key"]) or docs._project(card["project"]) != card["project"]:
@@ -481,7 +588,7 @@ def validated_approval_cards(cards: Any) -> list[dict]:
                  "version": card["version"], "status": card["status"]}, card["project"])
             if rebuilt != card:
                 continue
-            valid.append(rebuilt)
+            valid.append(delegated_card or rebuilt)
             used += size
         except (ValueError, TypeError, KeyError, HTTPException):
             continue

@@ -279,6 +279,7 @@ _DATABASE_TOOLS = frozenset({
     "canonical_document_register",
     "canonical_document_lookup",
     "canonical_document_review",
+    "canonical_document_approve",
     "mockup_review_submit",
     "skill_find",
     "skill_load",
@@ -1133,6 +1134,7 @@ class ToolExecutor:
             "canonical_document_register": self._canonical_document_register,
             "canonical_document_lookup":   self._canonical_document_lookup,
             "canonical_document_review":   self._canonical_document_review,
+            "canonical_document_approve":  self._canonical_document_approve,
             "skill_find":                  self._skill_find,
             "skill_load":                  self._skill_load,
             "skill_execute":               self._skill_execute,
@@ -1658,7 +1660,7 @@ class ToolExecutor:
         tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
         if not tenant_id:
             return _missing_tenant_id_result("canonical_document_lookup")
-        return await lookup_documents(tenant_id=tenant_id, inp=inp)
+        return await lookup_documents(tenant_id=tenant_id, inp=inp, session_id=session_id)
 
     async def _canonical_document_review(self, inp: Dict[str, Any]) -> Any:
         """Move the latest canonical revision draft -> review (PM / CEO-integrated sessions only)."""
@@ -1679,6 +1681,16 @@ class ToolExecutor:
             if document.get("approval_card"):
                 result["approval_card"] = document["approval_card"]
         return result
+
+    async def _canonical_document_approve(self, inp: Dict[str, Any]) -> Any:
+        """Delegated approval: only sessions holding a human-granted delegation, cross-review passed."""
+        from app.services.canonical_document_tools import approve_document_delegated
+
+        session_id = _resolve_bound_chat_session_id(inp.get("session_id", ""))
+        tenant_id = await resolve_bound_tenant_id(inp.get("tenant_id", ""), session_id)
+        if not tenant_id:
+            return _missing_tenant_id_result("canonical_document_approve")
+        return await approve_document_delegated(tenant_id=tenant_id, session_id=session_id, inp=inp)
 
     async def _skill_find(self, inp: Dict[str, Any]) -> Any:
         """Read-only search over registered skills."""
