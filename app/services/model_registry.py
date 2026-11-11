@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
 from typing import Any, Awaitable, Callable, Iterable, Mapping, NamedTuple, Sequence
 
 import asyncpg
@@ -1829,6 +1830,56 @@ class ProbeOutcome(NamedTuple):
     ok: bool
     error: str = ""
     transient: bool = False
+    retry_after: float | None = None  # 서버가 준 Retry-After(초). 없으면 None.
+
+
+_ACTIVATION_BACKOFF_BASE = timedelta(minutes=5)
+_ACTIVATION_BACKOFF_CAP = timedelta(hours=6)
+_ACTIVATION_RETRY_AFTER_CAP = timedelta(hours=24)
+
+
+def _parse_retry_after(value: Any, *, now: datetime | None = None) -> float | None:
+    """Retry-After 헤더를 초로 바꾼다. 숫자(초)와 HTTP-date 를 모두 받고, 음수·비정상 값은 무시한다."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
+    return seconds if 0 <= seconds < 10**7 else None
+
+
+def _probe_retry_due_at(probe: Mapping[str, Any]) -> datetime | None:
+    """실패한 probe 기록의 다음 재시도 시각. next_retry_at 이 없는 기존 기록은 at + 기존 주기로 복원한다."""
+    due = _parse_timestamp(probe.get("next_retry_at"))
+    if due is not None:
+        return due
+    failed_at = _parse_timestamp(probe.get("at"))
+    if failed_at is None:
+        return None
+    return failed_at + (_ACTIVATION_TRANSIENT_RETRY_AFTER if probe.get("transient") else _ACTIVATION_RETRY_AFTER)
+
+
+def _activation_next_retry(prior_probe: Mapping[str, Any], outcome: ProbeOutcome, now: datetime) -> tuple[int, datetime]:
+    """실패 판정의 (연속 일시 실패 횟수, 다음 재시도 시각). 일시 오류는 지수 backoff, Retry-After 가 더 길면 그것을 따른다.
+
+    영구 오류(401/403/404/400 등)는 기존 24시간 주기를 유지한다 — 유료 호출을 반복하지 않는다.
+    """
+    if not outcome.transient:
+        return 0, now + _ACTIVATION_RETRY_AFTER
+    prev = prior_probe.get("attempts") if prior_probe.get("status") == "failed" and prior_probe.get("transient") else 0
+    attempts = (int(prev) if isinstance(prev, (int, float)) else 0) + 1
+    wait = min(_ACTIVATION_BACKOFF_BASE * (2 ** min(attempts - 1, 10)), _ACTIVATION_BACKOFF_CAP)
+    if outcome.retry_after is not None:
+        wait = max(wait, min(timedelta(seconds=outcome.retry_after), _ACTIVATION_RETRY_AFTER_CAP))
+    return attempts, now + wait
 
 
 Prober = Callable[[Mapping[str, Any]], Awaitable[ProbeOutcome]]
@@ -1854,7 +1905,10 @@ def _probe_outcome_from_chat_response(response: httpx.Response) -> ProbeOutcome:
     except Exception:
         pass
     label = f"http_{status}" + (f":{code}" if _PROBE_ERROR_CODE_RE.fullmatch(code) else "")
-    return ProbeOutcome(False, label, status in {408, 409, 425, 429} or status >= 500)
+    return ProbeOutcome(
+        False, label, status in {408, 409, 425, 429} or status >= 500,
+        _parse_retry_after(response.headers.get("retry-after")),
+    )
 
 
 async def _probe_chat_completions(url: str, api_key: str, body: dict[str, Any]) -> ProbeOutcome:
@@ -1875,21 +1929,49 @@ async def _probe_anthropic_oauth(model: str) -> ProbeOutcome:
     tokens = await get_oauth_tokens_async()
     if not tokens:
         return ProbeOutcome(False, "no_oauth_token", False)
-    client = create_anthropic_client(token=tokens[0]).with_options(
-        timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS, max_retries=0
-    )
-    try:
-        await client.messages.create(
-            model=model,
-            max_tokens=_ACTIVATION_PROBE_MAX_TOKENS,
-            messages=[{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
+    # 계정별 rate limit 일 수 있으므로 429 일 때만 다음 가용 계정으로 최대 1회 더 시도한다(계정 2개 상한).
+    failures: list[ProbeOutcome] = []
+    for token in tokens[:2]:
+        client = create_anthropic_client(token=token).with_options(
+            timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS, max_retries=0
         )
-    except anthropic.APIStatusError as exc:
-        status = int(getattr(exc, "status_code", 0) or 0)
-        return ProbeOutcome(False, f"http_{status}", status in {408, 409, 425, 429} or status >= 500)
-    except anthropic.APIConnectionError as exc:
-        return ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True)
-    return ProbeOutcome(True)
+        try:
+            await asyncio.wait_for(client.messages.create(
+                model=model,
+                max_tokens=_ACTIVATION_PROBE_MAX_TOKENS,
+                messages=[{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
+            ), timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            failures.append(ProbeOutcome(False, "probe_timeout", True))
+            break
+        except anthropic.APIStatusError as exc:
+            status = int(getattr(exc, "status_code", 0) or 0)
+            headers = getattr(getattr(exc, "response", None), "headers", None)
+            retry_after = _parse_retry_after(headers.get("retry-after")) if headers is not None else None
+            failures.append(ProbeOutcome(
+                False, f"http_{status}", status in {408, 409, 425, 429} or status >= 500, retry_after
+            ))
+            if status == 429:
+                continue
+            break
+        except anthropic.APIConnectionError as exc:
+            failures.append(ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True))
+            break
+        else:
+            return ProbeOutcome(True)
+    return _aggregate_probe_failures(failures)
+
+
+def _aggregate_probe_failures(failures: Sequence[ProbeOutcome]) -> ProbeOutcome:
+    """계정별 실패를 하나로 합친다. 한 계정이라도 일시 실패면 일시 실패로 보고(영구 판정으로 24시간 막지 않는다),
+    Retry-After 는 가장 긴 값을 쓴다. 전부 영구 실패일 때만 영구로 기록한다."""
+    if not failures:
+        return ProbeOutcome(False, "no_oauth_token", False)
+    transient = [f for f in failures if f.transient]
+    if not transient:
+        return failures[-1]
+    waits = [f.retry_after for f in transient if f.retry_after is not None]
+    return ProbeOutcome(False, transient[0].error, True, max(waits) if waits else None)
 
 
 def _is_google_route(row: Mapping[str, Any]) -> bool:
@@ -2115,9 +2197,9 @@ async def apply_activation_probes(
                 _mark_activated(row)
                 continue
         if status == "failed":
-            wait = _ACTIVATION_TRANSIENT_RETRY_AFTER if prior_probe.get("transient") else _ACTIVATION_RETRY_AFTER
-            failed_at = _parse_timestamp(prior_probe.get("at"))
-            if failed_at is not None and now - failed_at < wait:
+            due_at = _probe_retry_due_at(prior_probe)
+            blocked = due_at is not None and now < due_at
+            if blocked:
                 _mark_review_required(row, str(prior_probe.get("error") or "probe_failed"))
                 continue
         if not meta.get("execution_backend") and provider not in {"anthropic", "litellm"}:
@@ -2138,19 +2220,33 @@ async def apply_activation_probes(
                 continue
             calls += 1
             try:
-                outcome = await asyncio.wait_for(prober(row), timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS + 5)
+                # OAuth may try two accounts. Its per-account wall timeout must
+                # finish and aggregate earlier Retry-After evidence before this guard.
+                account_count = 2 if provider == "anthropic" else 1
+                outcome = await asyncio.wait_for(
+                    prober(row), timeout=_ACTIVATION_PROBE_TIMEOUT_SECONDS * account_count + 5
+                )
             except asyncio.TimeoutError:
                 outcome = ProbeOutcome(False, "probe_timeout", True)
             except Exception as exc:
                 outcome = ProbeOutcome(False, f"probe_error:{type(exc).__name__}", True)
             meta = _row_meta(row)
-            meta["activation_probe"] = {
+            probe_record: dict[str, Any] = {
                 "status": "ok" if outcome.ok else "failed",
                 "at": now.isoformat(),
                 "error": outcome.error,
                 "transient": bool(outcome.transient),
                 "max_tokens": _ACTIVATION_PROBE_MAX_TOKENS,
             }
+            if not outcome.ok:
+                attempts, next_retry = _activation_next_retry(
+                    _coerce_json_object(meta.get("activation_probe")), outcome, now
+                )
+                probe_record["attempts"] = attempts
+                probe_record["next_retry_at"] = next_retry.isoformat()
+                if outcome.retry_after is not None:
+                    probe_record["retry_after_seconds"] = outcome.retry_after
+            meta["activation_probe"] = probe_record
             if outcome.ok:
                 _mark_activated(row, verified_at=now)
                 summary["activated"].append(label)
@@ -3010,7 +3106,61 @@ async def _fetch_activation_state(conn: asyncpg.Connection) -> dict[tuple[str, s
     return {(str(r["provider"]), str(r["model_id"])): dict(r) for r in rows or []}
 
 
+async def has_due_activation_retry(*, now: datetime | None = None) -> bool:
+    """일시 오류(429/timeout/5xx)로 검증 대기 중이고 next_retry_at 이 지난 발견 모델이 있는가.
+
+    스케줄러가 이것이 참일 때만 sync 를 돌려, 6시간 주기를 기다리지 않고 backoff 만큼만 기다려 재검증한다.
+    관리자가 끈 행·은퇴 행은 제외한다.
+    """
+    now = now or datetime.now(timezone.utc)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT metadata->'activation_probe' AS activation_probe
+            FROM llm_models
+            WHERE is_active = FALSE AND retired_at IS NULL
+              AND activation_source IS DISTINCT FROM 'manual'
+              AND metadata->'activation_probe'->>'status' = 'failed'
+              AND metadata->'activation_probe'->>'transient' = 'true'
+            """
+        )
+    for r in rows or []:
+        due = _probe_retry_due_at(_coerce_json_object(r["activation_probe"]))  # next_retry_at 없는 기존 기록 포함
+        if due is not None and due <= now:
+            return True
+    return False
+
+
+_SYNC_LOCK_KEY = 0x41414453_4D52  # 'AADS' 'MR' — registry sync 전용 advisory lock
+_SYNC_LOCK_WAIT_SECONDS = 300.0
+_sync_local_lock = asyncio.Lock()
+
+
 async def sync_model_registry(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
+    """registry sync 를 직렬화한다(프로세스 내 Lock + DB advisory lock).
+
+    정기·수동·재시도 sync 가 겹치면 같은 모델을 중복 probe 하고, 늦게 저장된 실패가 성공을 덮어쓸 수 있다.
+    락을 얻은 뒤에 activation_state 를 읽으므로 뒤 호출은 앞 호출의 결과를 보고 중복 probe 를 건너뛴다.
+    """
+    async with _sync_local_lock:
+        pool = get_pool()
+        async with pool.acquire() as lock_conn:
+            deadline = time.monotonic() + _SYNC_LOCK_WAIT_SECONDS
+            while not await lock_conn.fetchval("SELECT pg_try_advisory_lock($1)", _SYNC_LOCK_KEY):
+                if time.monotonic() >= deadline:
+                    return {"ok": False, "skipped": "sync_in_progress", "models_synced": 0}
+                await asyncio.sleep(1.0)
+            try:
+                return await _sync_model_registry_locked(triggered_by=triggered_by, reason=reason)
+            finally:
+                try:
+                    await lock_conn.execute("SELECT pg_advisory_unlock($1)", _SYNC_LOCK_KEY)
+                except Exception:
+                    logger.warning("model_registry_sync_unlock_failed")
+
+
+async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: str = "") -> dict[str, Any]:
     sync_token = uuid.uuid4().hex
     pool = get_pool()
     async with pool.acquire() as conn:

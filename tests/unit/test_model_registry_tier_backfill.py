@@ -45,6 +45,9 @@ class _TableConn:
     def transaction(self):
         return _Tx()
 
+    async def fetchval(self, query, *args):
+        return True  # sync 직렬화 advisory lock
+
     async def fetch(self, query, *args):
         return []
 

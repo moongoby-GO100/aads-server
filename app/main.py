@@ -610,6 +610,16 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("model_registry_periodic_sync_failed", error=str(e))
 
+        async def _run_activation_retry_sync():
+            """429/timeout/5xx 로 검증 대기 중인 모델의 backoff 가 끝났을 때만 sync 한다(없으면 호출 0)."""
+            try:
+                from app.services.model_registry import has_due_activation_retry, sync_model_registry
+
+                if await has_due_activation_retry():
+                    await sync_model_registry(triggered_by="scheduler", reason="activation_retry")
+            except Exception as e:
+                logger.warning("model_activation_retry_failed", error=str(e)[:200])
+
         # 한 단계가 멎으면 **오케스트레이션 전체가 멎는다.**
         #
         # 2026-09-17 실측. 23:49:21(UTC) 에 시작한 사이클이 담당 세션에 지시를
@@ -1350,6 +1360,15 @@ async def lifespan(app: FastAPI):
             "interval",
             hours=max(1, int(os.getenv("LLM_MODEL_REGISTRY_SYNC_HOURS", "6"))),
             id="llm_model_registry_sync",
+        )
+        scheduler.add_job(
+            _run_activation_retry_sync,
+            "interval",
+            minutes=max(5, int(os.getenv("LLM_MODEL_ACTIVATION_RETRY_CHECK_MINUTES", "10"))),
+            id="llm_model_activation_retry",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
         )
         # 매일 09:00 KST (= UTC 00:00)
         scheduler.add_job(_run_daily_summary, CronTrigger(hour=0, minute=0, timezone="UTC"), id="daily_summary")

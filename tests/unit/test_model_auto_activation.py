@@ -1,6 +1,7 @@
 """발견 모델 자동 활성화(실행 가능성 판정)·Anthropic 수집 폴백·회사별 신선도 노출 회귀 테스트."""
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -88,6 +89,7 @@ async def test_probe_failure_leaves_review_required_with_reason(provider, model_
     assert row["metadata"]["activation_review_reason"] == "http_404"
     assert row["metadata"]["activation_probe"] == {
         "status": "failed", "at": NOW.isoformat(), "error": "http_404", "transient": False, "max_tokens": 16,
+        "attempts": 0, "next_retry_at": (NOW + timedelta(hours=24)).isoformat(),  # 영구 오류는 24시간 주기
     }
 
 
@@ -503,6 +505,13 @@ class _ReportConn:
 @pytest.fixture
 def freshness_db(monkeypatch):
     rows, freshness = _freshness_inputs()
+
+    class _FrozenDatetime(datetime):  # 7일 창·stale 판정이 실제 시각에 의존해 시간이 지나면 깨지던 것을 고정한다
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz is None else NOW.astimezone(tz)
+
+    monkeypatch.setattr(model_registry, "datetime", _FrozenDatetime)
     model_registry.invalidate_registry_cache()
     monkeypatch.setattr(model_registry, "get_pool", lambda: _Pool(_ReportConn(rows)))
     monkeypatch.setattr(model_registry, "_fetch_key_rows", AsyncMock(return_value=_key_rows("kimi", "mystery")))
@@ -826,6 +835,10 @@ class _SyncConn:
     def transaction(self):
         return _SyncTx()
 
+    async def fetchval(self, query, *args):
+        assert "pg_try_advisory_lock" in query  # sync 직렬화 락
+        return True
+
     async def fetch(self, query, *args):
         if "activation_source = 'manual'" in query:
             return []
@@ -985,3 +998,297 @@ async def test_manual_active_gemini_alias_is_blocked_by_google_policy_and_restor
     assert saved["is_active"] is True and saved["is_executable"] is True
     assert saved["activation_source"] == "manual"
     assert saved["metadata"].get("deactivation_source") is None
+
+
+# ── 429 backoff / Retry-After / 영구 실패 분류 ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_429_records_exponential_backoff_and_retry_after_floor_then_activates():
+    row = _discovered("kimi", "kimi-429")
+    fail = _prober({"kimi-429": ProbeOutcome(False, "http_429", True)})
+    await model_registry.apply_activation_probes([row], {}, now=NOW, prober=fail)
+    p1 = row["metadata"]["activation_probe"]
+    assert p1["attempts"] == 1 and p1["transient"] is True
+    assert model_registry._parse_timestamp(p1["next_retry_at"]) == NOW + timedelta(minutes=5)
+
+    # backoff 안에서는 호출하지 않는다(중복 probe 방지).
+    prior = _prior("kimi-429", "kimi", activation_probe=p1)
+    again = _prober({})
+    r2 = _discovered("kimi", "kimi-429")
+    await model_registry.apply_activation_probes([r2], prior, now=NOW + timedelta(minutes=4), prober=again)
+    assert again.calls == [] and r2["is_active"] is False
+
+    # backoff 후 2차 실패: 10분 vs Retry-After 3600초 → 더 긴 쪽.
+    later = NOW + timedelta(minutes=6)
+    r3 = _discovered("kimi", "kimi-429")
+    fail2 = _prober({"kimi-429": ProbeOutcome(False, "http_429", True, 3600.0)})
+    await model_registry.apply_activation_probes([r3], prior, now=later, prober=fail2)
+    p2 = r3["metadata"]["activation_probe"]
+    assert p2["attempts"] == 2
+    assert model_registry._parse_timestamp(p2["next_retry_at"]) == later + timedelta(hours=1)
+
+    # 시각이 지나면 재검증 성공 → 활성화.
+    r4 = _discovered("kimi", "kimi-429")
+    ok = _prober({})
+    prior4 = _prior("kimi-429", "kimi", activation_probe=p2)
+    await model_registry.apply_activation_probes([r4], prior4, now=later + timedelta(hours=1, minutes=1), prober=ok)
+    assert ok.calls == [("kimi", "kimi-429")]
+    assert r4["is_active"] and r4["is_executable"]
+
+
+def test_backoff_is_capped_and_permanent_errors_use_24h():
+    prior = {"status": "failed", "transient": True, "attempts": 20}
+    attempts, due = model_registry._activation_next_retry(prior, ProbeOutcome(False, "http_429", True), NOW)
+    assert due == NOW + timedelta(hours=6) and attempts == 21
+    _, due = model_registry._activation_next_retry({}, ProbeOutcome(False, "http_429", True, 10**6), NOW)
+    assert due == NOW + timedelta(hours=24)
+    for err in ("http_401", "http_404"):
+        attempts, due = model_registry._activation_next_retry({}, ProbeOutcome(False, err, False), NOW)
+        assert attempts == 0 and due == NOW + timedelta(hours=24)
+    assert model_registry._parse_retry_after("-1") is None
+    assert model_registry._parse_retry_after("Wed, 21 Oct") is None
+    assert model_registry._parse_retry_after("30") == 30.0
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_does_not_demote_verified_or_manual_disabled_rows():
+    ok_row = _discovered("kimi", "kimi-verified")
+    off_row = _discovered("kimi", "kimi-admin-off")
+    prior = {}
+    prior.update(_prior("kimi-verified", "kimi", is_active=True, is_executable=True, activation_source="db",
+                        verification_status="verified", activation_probe={"status": "ok", "at": NOW.isoformat()}))
+    prior.update(_prior("kimi-admin-off", "kimi", activation_source="manual",
+                        activation_probe={"status": "ok", "at": NOW.isoformat()}))
+    probe = _prober({m: ProbeOutcome(False, "http_429", True) for m in ("kimi-verified", "kimi-admin-off")})
+    await model_registry.apply_activation_probes([ok_row, off_row], prior, now=NOW, prober=probe)
+    assert probe.calls == []
+    assert ok_row["is_active"] is True and off_row["is_active"] is False
+    assert off_row["metadata"]["manual_disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_single_oauth_account_preserves_retry_after_header(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, {"t1": (429, {"retry-after": "120"})})
+    out = await model_registry._probe_anthropic_oauth("claude-fable-5-2")
+    assert out == ProbeOutcome(False, "http_429", True, 120.0)
+    assert seen == [("t1", "claude-fable-5-2")]
+
+
+@pytest.mark.asyncio
+async def test_has_due_activation_retry_only_for_due_transient_failures(monkeypatch):
+    def rows(next_retry):
+        return [{"activation_probe": {"status": "failed", "transient": True, "next_retry_at": next_retry.isoformat()}}]
+
+    for offset, expected in ((timedelta(minutes=-1), True), (timedelta(minutes=30), False)):
+        conn = _ReportConn(rows(datetime.now(timezone.utc) + offset))
+        monkeypatch.setattr(model_registry, "get_pool", lambda c=conn: _Pool(c))
+        assert await model_registry.has_due_activation_retry() is expected
+
+
+# ── 재작업 라운드 1: 기존 기록 복구 · 동시 sync · 계정별 집계 · Retry-After 날짜 ──────────────
+
+def test_legacy_failed_probe_without_next_retry_at_is_due_after_transient_interval():
+    """운영의 Fable 5.2 기록(http_429, next_retry_at 없음)도 at + 1시간 뒤에는 재시도 대상이다."""
+    legacy = {"status": "failed", "at": NOW.isoformat(), "error": "http_429", "transient": True, "max_tokens": 16}
+    assert model_registry._probe_retry_due_at(legacy) == NOW + timedelta(hours=1)
+    assert model_registry._probe_retry_due_at({**legacy, "transient": False}) == NOW + timedelta(hours=24)
+    assert model_registry._probe_retry_due_at({"status": "failed"}) is None
+
+
+@pytest.mark.asyncio
+async def test_has_due_activation_retry_detects_legacy_record_without_next_retry_at(monkeypatch):
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    legacy = {"status": "failed", "at": old.isoformat(), "error": "http_429", "transient": True}
+    conn = _ReportConn([{"activation_probe": legacy}])
+    monkeypatch.setattr(model_registry, "get_pool", lambda: _Pool(conn))
+    assert await model_registry.has_due_activation_retry() is True
+    fresh = dict(legacy, at=datetime.now(timezone.utc).isoformat())
+    conn = _ReportConn([{"activation_probe": fresh}])
+    monkeypatch.setattr(model_registry, "get_pool", lambda: _Pool(conn))
+    assert await model_registry.has_due_activation_retry() is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_transient_failure_is_reprobed_and_activated_once_due():
+    legacy = {"status": "failed", "at": NOW.isoformat(), "error": "http_429", "transient": True}
+    prior = _prior("kimi-legacy", "kimi", activation_probe=legacy)
+    early = _discovered("kimi", "kimi-legacy")
+    skip = _prober({})
+    await model_registry.apply_activation_probes([early], prior, now=NOW + timedelta(minutes=30), prober=skip)
+    assert skip.calls == [] and early["is_active"] is False
+    due = _discovered("kimi", "kimi-legacy")
+    ok = _prober({})
+    await model_registry.apply_activation_probes([due], prior, now=NOW + timedelta(hours=1, minutes=1), prober=ok)
+    assert ok.calls == [("kimi", "kimi-legacy")] and due["is_active"] and due["is_executable"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_syncs_are_serialized_and_probe_each_model_once(monkeypatch):
+    conn = _SyncConn()
+
+    class _Acq:
+        async def __aenter__(self_inner):
+            return conn
+
+        async def __aexit__(self_inner, *exc):
+            return False
+
+    class _P:
+        def acquire(self_inner):
+            return _Acq()
+
+    template = _discovered("kimi", "kimi-race")
+
+    async def fake_discover(key_rows, **kwargs):
+        run = {"provider": "kimi", "status": "ok", "state": "ok", "count": 1, "model_source": "discovery",
+               "last_success_at": NOW.isoformat()}
+        return [dict(template, metadata=dict(template["metadata"]))], [run]
+
+    calls = []
+
+    async def slow_probe(row):
+        calls.append(row["model_id"])
+        await asyncio.sleep(0.05)  # 겹치면 두 번째 sync 가 같은 시점에 probe 를 시작할 수 있는 창
+        return ProbeOutcome(True)
+
+    monkeypatch.setattr(model_registry, "get_pool", lambda: _P())
+    monkeypatch.setattr(model_registry, "probe_model_execution", slow_probe)
+    monkeypatch.setattr(model_registry, "_fetch_key_rows", AsyncMock(return_value=_key_rows("kimi")))
+    monkeypatch.setattr(model_registry, "append_key_audit_log", AsyncMock())
+    monkeypatch.setattr(model_registry, "discover_provider_model_rows", fake_discover)
+    monkeypatch.setattr("app.services.ohvis_alert.notify", AsyncMock(return_value=True))
+
+    results = await asyncio.gather(*(model_registry.sync_model_registry(triggered_by="t", reason="r") for _ in range(3)))
+    assert all(r["ok"] for r in results)
+    assert calls == ["kimi-race"]  # 두 번째·세 번째 sync 는 첫 sync 의 성공 기록을 보고 probe 하지 않는다.
+    saved = conn.models[("kimi", "kimi-race")]
+    assert saved["is_active"] is True and saved["metadata"]["activation_probe"]["status"] == "ok"
+
+
+def test_parse_retry_after_accepts_http_date_and_rejects_garbage():
+    now = datetime(2026, 11, 11, 0, 0, 0, tzinfo=timezone.utc)
+    assert model_registry._parse_retry_after("Wed, 11 Nov 2026 00:02:00 GMT", now=now) == 120.0
+    assert model_registry._parse_retry_after("Tue, 10 Nov 2026 23:00:00 GMT", now=now) == 0.0  # 과거 → 즉시(backoff 가 하한)
+    assert model_registry._parse_retry_after("soon", now=now) is None
+    assert model_registry._parse_retry_after(None) is None
+
+
+def test_aggregate_probe_failures_keeps_transient_and_longest_retry_after():
+    agg = model_registry._aggregate_probe_failures
+    assert agg([ProbeOutcome(False, "http_429", True, 120.0), ProbeOutcome(False, "http_401", False)]) == \
+        ProbeOutcome(False, "http_429", True, 120.0)
+    assert agg([ProbeOutcome(False, "http_429", True, 60.0), ProbeOutcome(False, "http_429", True, 900.0)]) == \
+        ProbeOutcome(False, "http_429", True, 900.0)
+    assert agg([ProbeOutcome(False, "http_429", True, None), ProbeOutcome(False, "http_429", True, 30.0)]).retry_after == 30.0
+    assert agg([ProbeOutcome(False, "http_401", False), ProbeOutcome(False, "http_404", False)]) == \
+        ProbeOutcome(False, "http_404", False)
+    assert agg([]) == ProbeOutcome(False, "no_oauth_token", False)
+
+
+def _fake_anthropic(monkeypatch, per_token):
+    import anthropic
+    import httpx
+    from app.core import auth_provider
+
+    seen = []
+
+    class FakeClient:
+        def __init__(self, token):
+            self.token = token
+
+        def with_options(self, **_):
+            return self
+
+        @property
+        def messages(self):
+            return self
+
+        async def create(self, **kw):
+            seen.append((self.token, kw["model"]))
+            status, headers = per_token[self.token]
+            resp = httpx.Response(status, headers=headers, request=httpx.Request("POST", "https://x"))
+            cls = {429: anthropic.RateLimitError, 401: anthropic.AuthenticationError, 404: anthropic.NotFoundError}[status]
+            raise cls("err", response=resp, body=None)
+
+    async def tokens():
+        return list(per_token)
+
+    monkeypatch.setattr(auth_provider, "get_oauth_tokens_async", tokens)
+    monkeypatch.setattr(auth_provider, "create_anthropic_client", lambda token: FakeClient(token))
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_oauth_probe_429_then_401_stays_transient_with_first_retry_after(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, {"t1": (429, {"retry-after": "120"}), "t2": (401, {})})
+    out = await model_registry._probe_anthropic_oauth("claude-fable-5-2")
+    assert out == ProbeOutcome(False, "http_429", True, 120.0)
+    assert [m for _, m in seen] == ["claude-fable-5-2"] * 2
+
+
+@pytest.mark.asyncio
+async def test_oauth_probe_both_429_keeps_longest_wait_and_404_is_permanent(monkeypatch):
+    _fake_anthropic(monkeypatch, {"t1": (429, {"retry-after": "900"}), "t2": (429, {"retry-after": "60"})})
+    out = await model_registry._probe_anthropic_oauth("claude-fable-5-2")
+    assert out == ProbeOutcome(False, "http_429", True, 900.0)
+    _fake_anthropic(monkeypatch, {"t1": (404, {}), "t2": (401, {})})
+    out = await model_registry._probe_anthropic_oauth("claude-fable-5-2")
+    assert out.transient is False
+
+
+@pytest.mark.asyncio
+async def test_probe_model_execution_sends_row_execution_model_unchanged(monkeypatch):
+    """사용자가 고른 모델과 다른 모델로 조용히 치환하지 않는다 — probe 는 행의 execution_model_id 로 호출한다."""
+    captured = []
+
+    async def fake(model):
+        captured.append(model)
+        return ProbeOutcome(True)
+
+    monkeypatch.setattr(model_registry, "_probe_anthropic_oauth", fake)
+    row = _discovered("anthropic", "claude-fable-5-2")
+    await model_registry.probe_model_execution(row)
+    assert captured == [str(row.get("execution_model_id") or row["model_id"])]
+    assert "fable-5-2" in captured[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_result", ["timeout", "success"])
+async def test_slow_second_oauth_account_preserves_first_retry_after(monkeypatch, second_result):
+    """Scaled wall times reproduce 19s 429 + slow second account without a 25s outer cancellation."""
+    import anthropic
+    import httpx
+    from app.core import auth_provider
+
+    monkeypatch.setattr(model_registry, "_ACTIVATION_PROBE_TIMEOUT_SECONDS", 0.05)
+    seen = []
+
+    class Client:
+        def __init__(self, token):
+            self.token = token
+            self.messages = self
+
+        def with_options(self, **kwargs):
+            return self
+
+        async def create(self, **kwargs):
+            seen.append((self.token, kwargs["model"]))
+            if self.token == "one":
+                await asyncio.sleep(0.04)
+                response = httpx.Response(429, headers={"Retry-After": "3600"}, request=httpx.Request("POST", "https://fixture"))
+                raise anthropic.RateLimitError("limited", response=response, body=None)
+            await asyncio.sleep(0.03 if second_result == "success" else 1)
+            return object()
+
+    monkeypatch.setattr(auth_provider, "get_oauth_tokens_async", AsyncMock(return_value=["one", "two"]))
+    monkeypatch.setattr(auth_provider, "create_anthropic_client", lambda token: Client(token))
+    row = _discovered("anthropic", "claude-fable-5-2")
+    await model_registry.apply_activation_probes([row], {}, now=NOW)
+    assert seen == [("one", "claude-fable-5-2"), ("two", "claude-fable-5-2")]
+    if second_result == "success":
+        assert row["is_executable"] is True
+    else:
+        probe = row["metadata"]["activation_probe"]
+        assert probe["error"] == "http_429"
+        assert probe["next_retry_at"] == (NOW + timedelta(hours=1)).isoformat()
+        assert row["is_executable"] is False

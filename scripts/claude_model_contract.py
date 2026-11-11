@@ -18,9 +18,11 @@ AADS_MODEL_IDS = {
     "claude-haiku": "claude-haiku-4-5-20251001",
     "claude-fable-5": "claude-fable-5",
     "claude-fable-5-1": "claude-fable-5-1",
+    "claude-fable-5-2": "claude-fable-5-2",
 }
 ALIASES = dict(AADS_MODEL_IDS, **{
     "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5.2": "claude-fable-5-2",
     "claude-fable-latest": "claude-fable-5-1",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
     "opus": "claude-opus-5-5",
