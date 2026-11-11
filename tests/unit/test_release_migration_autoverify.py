@@ -186,3 +186,96 @@ def test_pending_migrations_remain_safe_with_escape_string_scanner():
              ROOT / "migrations/20261106_pipeline_jobs_model_default_null.sql"]
     assert all(path.is_file() for path in files)
     assert av.classify_files(files) == []
+
+
+def test_review_content_deterministic_checks_pass(tmp_path):
+    """review_content 결과를 doc_review_rubric.run_checks 에 넣었을 때 required_sections, paths_exist 통과."""
+    from app.services.doc_review_rubric import run_checks
+
+    p = tmp_path / "20990101_sample.sql"
+    p.write_text("CREATE TABLE IF NOT EXISTS sample_tbl (id serial primary key);\n")
+    down = tmp_path / "rollback" / "20990101_sample.down.sql"
+    down.parent.mkdir(parents=True, exist_ok=True)
+    down.write_text("DROP TABLE IF EXISTS sample_tbl;\n")
+
+    content = av.review_content([p], release_sha="abcdef123456")
+
+    empty_root = tmp_path / "empty_root"
+    empty_root.mkdir()
+    checks = run_checks("contract", "릴리스 마이그레이션 자동 검증 교차 검토", content, "contract", root=str(empty_root))
+
+    req = next(c for c in checks if c["id"] == "required_sections")
+    assert req["ok"] is True, req
+    assert "필수 절 모두 있음" in req["detail"]
+
+    paths = next(c for c in checks if c["id"] == "paths_exist")
+    assert paths["ok"] is True, paths
+    assert "저장소에 없음 0건" in paths["detail"]
+
+    # 검토 서버 기준(root 에 migrations/ 디렉터리가 이미 존재하는 환경)에서도 오탐 없이 통과
+    server_root = tmp_path / "server_root"
+    (server_root / "migrations").mkdir(parents=True)
+    server_checks = run_checks("contract", "릴리스 마이그레이션 자동 검증 교차 검토", content, "contract", root=str(server_root))
+    server_paths = next(c for c in server_checks if c["id"] == "paths_exist")
+    assert server_paths["ok"] is True, server_paths
+    assert "저장소에 없음 0건" in server_paths["detail"]
+
+
+def test_review_content_down_sql_present_and_absent(tmp_path):
+    """down.sql 이 있으면 본문 및 주의문구 포함, 없으면 '짝 파일 없음' 포함."""
+    # 1. down.sql 있는 경우
+    with_down = tmp_path / "20990101_with_down.sql"
+    with_down.write_text("CREATE TABLE IF NOT EXISTS tbl_a (id int);\n")
+    down_file = tmp_path / "rollback" / "20990101_with_down.down.sql"
+    down_file.parent.mkdir(parents=True, exist_ok=True)
+    down_file.write_text("-- 되돌림\nBEGIN;\nDROP TABLE IF EXISTS tbl_a;\nCOMMIT;\n")
+
+    content_with = av.review_content([with_down], release_sha="abcdef123456")
+    assert "DROP TABLE IF EXISTS tbl_a;" in content_with
+    assert "적용 후 생긴 행이 삭제되므로 실행 전 해당 표·열 데이터 백업(COPY/pg_dump -t) 필요, CEO 승인 사항" in content_with
+    assert "짝 파일 없음" not in content_with
+
+    # 2. down.sql 없는 경우
+    without_down = tmp_path / "20990102_no_down.sql"
+    without_down.write_text("CREATE TABLE IF NOT EXISTS tbl_b (id int);\n")
+
+    content_without = av.review_content([without_down], release_sha="abcdef123456")
+    assert "짝 파일 없음" in content_without
+
+
+def test_review_content_release_tree_existence_table(tmp_path):
+    """release 트리 존재 확인 표: 존재하는 파일은 '있음'과 sha256, 없는 경로는 '없음'."""
+    import hashlib
+    import subprocess
+
+    # 임시 git 저장소 초기화
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test-runner"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "runner@test.local"], check=True)
+
+    # 1) 커밋된 마이그레이션 파일 생성 및 커밋
+    mig_dir = repo / "migrations"
+    mig_dir.mkdir(parents=True)
+    committed_mig = mig_dir / "20990101_committed.sql"
+    committed_mig.write_text("CREATE TABLE IF NOT EXISTS committed_tbl (id int);\n")
+    subprocess.run(["git", "-C", str(repo), "add", "migrations/20990101_committed.sql"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add committed migration"], check=True)
+
+    head_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+    committed_sha256 = hashlib.sha256(committed_mig.read_bytes()).hexdigest()
+
+    # 2) 커밋되지 않은 마이그레이션 파일 (워킹 트리에만 생성)
+    uncommitted_mig = mig_dir / "20990102_uncommitted.sql"
+    uncommitted_mig.write_text("CREATE TABLE IF NOT EXISTS uncommitted_tbl (id int);\n")
+
+    content = av.review_content([committed_mig, uncommitted_mig], release_sha=head_sha)
+
+    # 커밋된 파일: '있음'과 sha256 확인
+    assert f"`{committed_sha256}`" in content
+    assert f"release:{head_sha[:12]}/migrations/20990101_committed.sql` | 있음" in content
+
+    # 커밋되지 않은 파일: '없음' 확인
+    assert f"release:{head_sha[:12]}/migrations/20990102_uncommitted.sql` | 없음" in content
+

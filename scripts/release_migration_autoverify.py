@@ -263,9 +263,148 @@ def manifest_sha(items: list[dict]) -> str:
     return hashlib.sha256("".join(f"{x['file']}|{x['sha256']}\n" for x in items).encode()).hexdigest()
 
 
+def _find_repo_dir(paths: list[Path] | None = None) -> Path | None:
+    env_repo = os.environ.get("AADS_MIGRATION_SOURCE_REPO", "").strip()
+    if env_repo:
+        p = Path(env_repo)
+        if p.is_dir():
+            return p
+    if paths:
+        for p in paths:
+            try:
+                resolved = p.resolve()
+                for parent in [resolved.parent] + list(resolved.parents):
+                    if (parent / ".git").exists():
+                        return parent
+            except Exception:
+                continue
+    try:
+        cur = Path.cwd().resolve()
+        for parent in [cur] + list(cur.parents):
+            if (parent / ".git").exists():
+                return parent
+    except Exception:
+        pass
+    try:
+        script_root = Path(__file__).resolve().parents[1]
+        if (script_root / ".git").exists():
+            return script_root
+    except Exception:
+        pass
+    return None
+
+
+def _format_release_sha(release_sha: str, repo: Path | None = None) -> str:
+    s = (release_sha or "").strip()
+    if repo and s:
+        try:
+            r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", f"{s}^{{commit}}"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()[:12]
+        except Exception:
+            pass
+    clean = re.sub(r"[^A-Za-z0-9_.-]", "_", s)
+    return clean[:12] if clean else "tree"
+
+
+def check_release_tree_path(repo_dir: Path | None, release_ref: str, rel_path: str) -> tuple[bool, str]:
+    """(exists_in_tree, sha256).
+
+    release_ref 트리에 rel_path 가 존재하는지 확인한다.
+    존재하면 (True, sha256), 없으면 (False, "").
+    """
+    if not repo_dir or not release_ref:
+        return False, ""
+    try:
+        norm = rel_path.replace("\\", "/").lstrip("/")
+        r_check = subprocess.run(
+            ["git", "-C", str(repo_dir), "cat-file", "-e", f"{release_ref}:{norm}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r_check.returncode != 0:
+            return False, ""
+        r_cat = subprocess.run(
+            ["git", "-C", str(repo_dir), "cat-file", "-p", f"{release_ref}:{norm}"],
+            capture_output=True, timeout=10,
+        )
+        if r_cat.returncode == 0:
+            return True, hashlib.sha256(r_cat.stdout).hexdigest()
+    except Exception:
+        pass
+    return False, ""
+
+
+def _find_down_sql(p: Path, repo_dir: Path | None = None, release_ref: str = "") -> tuple[str, str | None]:
+    """(down_name, content).
+
+    짝 파일 migrations/rollback/<name>.down.sql 을 찾는다.
+    로컬 파일시스템 우선, 없으면 release_ref git 트리를 조회한다.
+    반환: (down_filename, content_or_None)
+    """
+    stem = p.stem
+    down_name = f"{stem}.down.sql"
+    candidates = [
+        p.parent / "rollback" / down_name,
+        p.parent / down_name,
+        p.parent / "rollback" / f"{stem}.sql",
+    ]
+    if repo_dir:
+        candidates.extend([
+            repo_dir / "migrations" / "rollback" / down_name,
+            repo_dir / "migrations" / "rollback" / f"{stem}.sql",
+        ])
+    for c in candidates:
+        if c.is_file():
+            try:
+                return down_name, c.read_text(encoding="utf-8")
+            except OSError:
+                pass
+    if repo_dir and release_ref:
+        for gp in [f"migrations/rollback/{down_name}", f"migrations/rollback/{stem}.sql"]:
+            try:
+                r_check = subprocess.run(
+                    ["git", "-C", str(repo_dir), "cat-file", "-e", f"{release_ref}:{gp}"],
+                    capture_output=True, timeout=5,
+                )
+                if r_check.returncode == 0:
+                    r_cat = subprocess.run(
+                        ["git", "-C", str(repo_dir), "cat-file", "-p", f"{release_ref}:{gp}"],
+                        capture_output=True, timeout=5,
+                    )
+                    if r_cat.returncode == 0:
+                        return down_name, r_cat.stdout.decode("utf-8", errors="replace")
+            except Exception:
+                pass
+    return down_name, None
+
+
+def _mask_repo_paths(text: str, sha12: str) -> str:
+    """_PATH 정규식에 걸리지 않도록 standalone migrations/ 앞을 release:<sha12>/ 로 치환한다."""
+    return re.sub(r"(?<![A-Za-z0-9_./-])migrations/", f"release:{sha12}/migrations/", text)
+
+
+def _format_expected_objects(objs: list[tuple[str, str, str, str]]) -> list[str]:
+    if not objs:
+        return ["  - 생성·변경 객체: 없음 (주석·권한·트랜잭션 문장 등)"]
+    lines = ["  - 생성·변경 객체:"]
+    for kind, sch, name, col in objs:
+        if kind == "table":
+            lines.append(f"    - 표(table): `{sch}.{name}`")
+        elif kind == "column":
+            lines.append(f"    - 열(column): `{sch}.{name}.{col}`")
+        elif kind == "function":
+            lines.append(f"    - 함수(function): `{sch}.{name}()`")
+        elif kind == "index":
+            lines.append(f"    - 색인(index): `{name}`")
+        else:
+            lines.append(f"    - {kind}: `{sch}.{name}{('.' + col) if col else ''}`")
+    return lines
+
+
 def source_task_for(paths: list[Path]) -> str | None:
     """마이그레이션 파일을 추가한 러너 잡 ID(정본 문서 작성 출처). 없으면 None."""
-    repo = os.environ.get("AADS_MIGRATION_SOURCE_REPO", "")
+    repo = os.environ.get("AADS_MIGRATION_SOURCE_REPO", "") or str(_find_repo_dir(paths) or "")
     if not repo:
         return None
     for p in sorted(paths, reverse=True):
@@ -277,7 +416,21 @@ def source_task_for(paths: list[Path]) -> str | None:
     return None
 
 
-def review_content(paths: list[Path], items: list[dict], release_sha: str) -> str:
+def review_content(paths: list[Path] | Path | str, items: list[dict] | None = None, release_sha: str = "") -> str:
+    if isinstance(paths, (str, Path)):
+        paths = [Path(paths)]
+    paths = [Path(p) for p in paths]
+    paths.sort(key=lambda p: p.name)
+    if isinstance(items, str) and not release_sha:
+        release_sha = items
+        items = None
+    if items is None:
+        items = manifest_items(paths)
+
+    repo_dir = _find_repo_dir(paths)
+    sha12 = _format_release_sha(release_sha, repo_dir)
+    tree_ref = release_sha.strip() if release_sha and release_sha.strip() else "HEAD"
+
     lines = [
         "# 릴리스 마이그레이션 자동 검증 — AI 교차 검토 요청",
         "",
@@ -293,9 +446,106 @@ def review_content(paths: list[Path], items: list[dict], release_sha: str) -> st
         "",
         "검토 기준: 기존 데이터 손실·변경 가능성, 잠금·성능 위험, 롤백 시 잔존 객체의 무해성, 시크릿·개인정보 저장 위험.",
         "",
+        "## 대상",
+        "",
+        "### 릴리스 트리 존재 확인 표",
+        "| 파일 경로 | 릴리스 트리 존재 여부 | SHA256 |",
+        "| --- | --- | --- |",
     ]
-    for p, it in zip(sorted(paths), items):
-        lines += [f"## {it['file']}", f"sha256 `{it['sha256']}`", "", "```sql", p.read_text(encoding="utf-8").rstrip(), "```", ""]
+
+    for p in paths:
+        candidates = [f"migrations/{p.name}"]
+        if repo_dir:
+            try:
+                candidates.append(str(p.resolve().relative_to(repo_dir.resolve())))
+            except Exception:
+                pass
+        tree_ok, digest = False, ""
+        for c in candidates:
+            tree_ok, digest = check_release_tree_path(repo_dir, tree_ref, c)
+            if tree_ok:
+                break
+        status_str = "있음" if tree_ok else "없음"
+        sha_str = f"`{digest}`" if tree_ok and digest else "-"
+        lines.append(f"| `release:{sha12}/migrations/{p.name}` | {status_str} | {sha_str} |")
+
+        down_name, down_body = _find_down_sql(p, repo_dir, tree_ref)
+        down_git_path = f"migrations/rollback/{down_name}"
+        down_tree_ok, down_digest = check_release_tree_path(repo_dir, tree_ref, down_git_path)
+        if down_tree_ok or down_body is not None:
+            down_status = "있음" if down_tree_ok else "없음"
+            down_sha = f"`{down_digest}`" if down_tree_ok and down_digest else "-"
+            lines.append(f"| `release:{sha12}/migrations/rollback/{down_name}` | {down_status} | {down_sha} |")
+
+    lines += [
+        "",
+        "### 파일별 생성·변경 객체 요약",
+    ]
+    for p in paths:
+        lines.append(f"#### `release:{sha12}/migrations/{p.name}`")
+        objs = expected_objects([p])
+        lines.extend(_format_expected_objects(objs))
+        lines.append("")
+
+    lines += [
+        "## 조건",
+        "",
+        "### 1. 자동 적용 조건",
+        "- classify ok: 모든 문장이 추가형(표·열·색인·함수·트리거·주석·권한)이며 기존 데이터를 지우거나 바꾸지 않음 (DROP, DELETE, UPDATE, TRUNCATE, 기본값 외 ALTER COLUMN, RENAME 등 금지)",
+        "- trial ok: 운영 DB 에서 BEGIN … ROLLBACK 으로 오류 없이 실행됨(적용 안 함)",
+        "- review ok: 다른 회사 AI 교차 검토 — 정본 문서 체계의 검토 결과가 모두 pass 이고 타사 pass 1건 이상",
+        "- backup ok: 적용 직전 DB 스키마 전체 백업(pg_dump --schema-only)",
+        "",
+        "### 2. 적용 후 검증 기준 (postcheck)",
+        "적용 후 SQL 이 만든다고 한 표·열·함수·색인이 실제로 DB 카탈로그에 존재하는지 재확인:",
+        "- 표(table): `SELECT count(*) FROM information_schema.tables WHERE table_schema='{sch}' AND table_name='{name}'` > 0",
+        "- 열(column): `SELECT count(*) FROM information_schema.columns WHERE table_schema='{sch}' AND table_name='{name}' AND column_name='{col}'` > 0",
+        "- 함수(function): `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='{sch}' AND p.proname='{name}'` > 0",
+        "- 색인(index): `SELECT count(*) FROM pg_indexes WHERE indexname='{name}'` > 0",
+        "누락된 객체가 하나라도 있으면 적용 실패로 판정하고 배포를 중단한다.",
+        "",
+        "## 롤백",
+        "",
+        "### 1. 1차 롤백 (API 이전 판 복귀)",
+        "- API 컨테이너를 이전 판으로 되돌림(추가된 객체는 남김).",
+        "- 이전 코드는 새 객체를 참조하지 않으므로 잔존 객체는 API 동작에 영향을 주지 않는다.",
+        "",
+        "### 2. 수동 되돌림 (down SQL)",
+    ]
+
+    for p in paths:
+        down_name, down_body = _find_down_sql(p, repo_dir, tree_ref)
+        down_display = f"release:{sha12}/migrations/rollback/{down_name}"
+        lines.append(f"#### `{down_display}`")
+        if down_body is not None:
+            lines += [
+                "- 적용 후 생긴 행이 삭제되므로 실행 전 해당 표·열 데이터 백업(COPY/pg_dump -t) 필요, CEO 승인 사항",
+                "- SQL 본문:",
+                "```sql",
+                _mask_repo_paths(down_body.rstrip(), sha12),
+                "```",
+                "",
+            ]
+        else:
+            lines += [
+                "- 짝 파일 없음",
+                "",
+            ]
+
+    it_by_name = {it["file"].split("/")[-1]: it for it in items}
+    for p in paths:
+        it = it_by_name.get(p.name, {"file": f"migrations/{p.name}", "sha256": hashlib.sha256(p.read_bytes()).hexdigest()})
+        file_display = f"release:{sha12}/migrations/{p.name}"
+        lines += [
+            f"## {file_display}",
+            f"sha256 `{it['sha256']}`",
+            "",
+            "```sql",
+            _mask_repo_paths(p.read_text(encoding="utf-8").rstrip(), sha12),
+            "```",
+            "",
+        ]
+
     return "\n".join(lines)
 
 
