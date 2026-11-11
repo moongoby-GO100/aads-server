@@ -501,6 +501,8 @@ def test_cli_result_without_primary_receipt_does_not_infer_actual_model():
             "cost": "0",
             "input_tokens": 1,
             "output_tokens": 2,
+            "result_text": "",
+            "model_usage_models": ["claude-opus-4-6"],
         }
     ]
 

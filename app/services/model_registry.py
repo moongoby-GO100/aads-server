@@ -1820,6 +1820,9 @@ _ACTIVATION_MAX_PER_PROVIDER = max(0, int(os.getenv("LLM_MODEL_AUTO_ACTIVATE_MAX
 _ACTIVATION_RETRY_AFTER = timedelta(hours=24)
 _ACTIVATION_TRANSIENT_RETRY_AFTER = timedelta(hours=1)
 _ACTIVATION_PROBE_TIMEOUT_SECONDS = 20.0
+# CLI 릴레이 프로브 상한. apply_activation_probes 바깥 wait_for(TIMEOUT*account_count+5=45s) 보다 반드시 짧아야
+# 프로브가 스스로 오류를 분류해 돌려준다(바깥에서 잘리면 retry_after 가 사라진다).
+_ACTIVATION_CLI_PROBE_TIMEOUT_SECONDS = _ACTIVATION_PROBE_TIMEOUT_SECONDS * 1.5
 _ACTIVATION_PROBE_MAX_TOKENS = 16
 _ACTIVATION_PROBE_PROMPT = "Reply with exactly: OK"
 _NON_DISCOVERY_SOURCES = frozenset({"", "template", "accepted_alias", "manual_seed"})
@@ -1962,6 +1965,79 @@ async def _probe_anthropic_oauth(model: str) -> ProbeOutcome:
     return _aggregate_probe_failures(failures)
 
 
+_CLI_VERSION_REQUIRED_RE = re.compile(r"version\s+v?(\d+(?:\.\d+)+)\s+or\s+newer", re.IGNORECASE)
+_CLI_HTTP_STATUS_RE = re.compile(r"\b([45]\d\d)\b")
+_CLI_LIMIT_PHRASES = ("rate limit", "rate_limit", "ratelimit", "hit your limit", "resets ")
+
+
+def _classify_cli_probe_error(text: Any, retry_after: float | None = None) -> ProbeOutcome:
+    """CLI 릴레이 오류 문장을 오류 코드로만 바꾼다. 원문은 저장하지 않는다(토큰·경로 유출 방지)."""
+    from app.services import model_selector as ms
+
+    raw = str(text or "")
+    low = raw.lower()
+    version = _CLI_VERSION_REQUIRED_RE.search(raw)
+    if "does not support this model" in low and version:
+        return ProbeOutcome(False, f"cli_version_required:{version.group(1)}", False)
+    status = _CLI_HTTP_STATUS_RE.search(raw)
+    code = int(status.group(1)) if status else 0
+    if code in (401, 403, 404) or any(
+        m in low for m in ("unauthorized", "forbidden", "invalid api key", "authentication", "permission denied")
+    ):
+        return ProbeOutcome(False, f"http_{code}" if code in (401, 403, 404) else "cli_auth_failed", False)
+    if code == 429 or any(m in low for m in _CLI_LIMIT_PHRASES):
+        return ProbeOutcome(False, "http_429", True, retry_after)
+    if code >= 500:
+        return ProbeOutcome(False, f"http_{code}", True, retry_after)
+    if "relay unreachable" in low or any(m in low for m in ms._RELAY_RETRYABLE_ERROR_MARKERS):
+        return ProbeOutcome(False, "cli_relay_transient", True, retry_after)
+    if any(m in low for m in ms._RELAY_NON_RETRYABLE_ERROR_MARKERS):
+        return ProbeOutcome(False, "cli_relay_rejected", False)
+    return ProbeOutcome(False, "cli_error", False)
+
+
+async def _probe_claude_cli_relay(model: str) -> ProbeOutcome:
+    """실제 실행 경로(Claude CLI 릴레이, slot1)로 1회 호출. 판정은 result 본문·modelUsage 로만 한다."""
+    from app.services import model_selector as ms
+
+    try:
+        expected = ms.resolve_model(model) or model
+    except ValueError:
+        expected = model
+    seen: dict[str, Any] = {}
+
+    async def _run() -> ProbeOutcome | None:
+        async for ev in ms._stream_cli_relay_once(
+            model, "", [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}], oauth_slot="1"
+        ):
+            kind = ev.get("type")
+            if kind == "error":
+                ra = ev.get("retry_after")
+                return _classify_cli_probe_error(
+                    ev.get("content"), float(ra) if isinstance(ra, (int, float)) and ra >= 0 else None
+                )
+            if kind == "done":
+                seen.update(ev)
+                break
+        return None
+
+    try:
+        failed = await asyncio.wait_for(_run(), timeout=_ACTIVATION_CLI_PROBE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return ProbeOutcome(False, "probe_timeout", True)
+    except Exception as exc:
+        return ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True)
+    if failed is not None:
+        return failed
+    if not seen:
+        return ProbeOutcome(False, "no_done_event", True)
+    if not str(seen.get("result_text") or "").strip():
+        return ProbeOutcome(False, "empty_result", True)
+    if expected not in (seen.get("model_usage_models") or []):
+        return ProbeOutcome(False, "model_usage_mismatch", False)
+    return ProbeOutcome(True)
+
+
 def _aggregate_probe_failures(failures: Sequence[ProbeOutcome]) -> ProbeOutcome:
     """계정별 실패를 하나로 합친다. 한 계정이라도 일시 실패면 일시 실패로 보고(영구 판정으로 24시간 막지 않는다),
     Retry-After 는 가장 긴 값을 쓴다. 전부 영구 실패일 때만 영구로 기록한다."""
@@ -2003,6 +2079,8 @@ async def probe_model_execution(row: Mapping[str, Any]) -> ProbeOutcome:
         "messages": [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
     }
     if provider == "anthropic":
+        if backend == "claude_cli_relay":
+            return await _probe_claude_cli_relay(model)
         return await _probe_anthropic_oauth(model)
     if backend == "openai_compatible_direct":
         base_url = str(meta.get("execution_base_url") or _DIRECT_PROVIDER_BASE_URLS.get(provider) or "")

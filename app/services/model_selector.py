@@ -4552,7 +4552,45 @@ async def _stream_cli_relay_once(
                                 "subscription_inactive: Claude 구독이 비활성인 계정이라 "
                                 "건너뜁니다 (slot=%s)" % (oauth_slot or "auto")
                             )
-                        yield {"type": "error", "content": error_text}
+                        _err_evt: Dict[str, Any] = {"type": "error", "content": error_text}
+                        # 가산 필드 retry_after(초): resetsAt 이 미래이거나 문장에 retry-after 가 있을 때만.
+                        _wait: Optional[float] = None
+                        _now_ts = _time_mod.time()
+                        _rl = _last_rate_limit_info if isinstance(_last_rate_limit_info, dict) else {}
+                        # 창 resetsAt 은 항상 미래라서, 소진(utilization>=1)된 창만 쓴다.
+                        _cands = [_rl.get("resetsAt")]
+                        _wins = _rl.get("unifiedWindows")
+                        for _w in (_wins.values() if isinstance(_wins, dict) else []):
+                            if not isinstance(_w, dict):
+                                continue
+                            try:
+                                _exhausted = float(_w.get("utilization") or 0) >= 1
+                            except (TypeError, ValueError):
+                                continue  # 이 창만 건너뜀 — 다른 값의 파싱에 영향 없음
+                            if _exhausted:
+                                _cands.append(_w.get("resetsAt"))
+                        for _r in _cands:
+                            try:
+                                if _r in (None, ""):
+                                    continue
+                                _d = float(_r) - _now_ts
+                            except (TypeError, ValueError):
+                                continue
+                            # 동시에 소진된 창은 가장 늦게 풀리는 쪽이 계속 차단하므로 최댓값.
+                            if _d > 0 and (_wait is None or _d > _wait):
+                                _wait = _d
+                        # 오류 문장의 retry-after 는 위 한도 정보와 독립적으로 해석한다.
+                        _m = _re_mod.search(
+                            r"retry[- ]after:?\s*(\d+(?:\.\d+)?)", str(event.get("result", "")), _re_mod.I
+                        )
+                        if _m:
+                            from app.services.model_registry import _parse_retry_after
+                            _txt = _parse_retry_after(_m.group(1))
+                            if _txt is not None:
+                                _wait = _txt if _wait is None else max(_wait, _txt)
+                        if _wait is not None:
+                            _err_evt["retry_after"] = round(_wait, 1)
+                        yield _err_evt
                         return
 
                     # _map_cli_event 재사용하여 NDJSON → AADS 이벤트 변환
@@ -6615,6 +6653,11 @@ def _map_cli_event(event: dict, session_id: Optional[str] = None,
             "cost": str(round(total_cost, 6)),
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
+            # 가산 필드 — 활성화 프로브가 "실제 응답"을 판정하는 근거. 기존 소비자는 무시한다.
+            "result_text": "" if event.get("is_error") else str(event.get("result") or "")[:500],
+            "model_usage_models": sorted({
+                str(m).split("[")[0] for m in (event.get("modelUsage") or {})
+            }) if isinstance(event.get("modelUsage"), dict) else [],
         })
         return events
 

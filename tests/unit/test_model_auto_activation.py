@@ -1247,6 +1247,7 @@ async def test_probe_model_execution_sends_row_execution_model_unchanged(monkeyp
 
     monkeypatch.setattr(model_registry, "_probe_anthropic_oauth", fake)
     row = _discovered("anthropic", "claude-fable-5-2")
+    row["metadata"]["execution_backend"] = "anthropic_oauth_direct"  # 비릴레이 행은 직접 OAuth probe
     await model_registry.probe_model_execution(row)
     assert captured == [str(row.get("execution_model_id") or row["model_id"])]
     assert "fable-5-2" in captured[0]
@@ -1283,6 +1284,7 @@ async def test_slow_second_oauth_account_preserves_first_retry_after(monkeypatch
     monkeypatch.setattr(auth_provider, "get_oauth_tokens_async", AsyncMock(return_value=["one", "two"]))
     monkeypatch.setattr(auth_provider, "create_anthropic_client", lambda token: Client(token))
     row = _discovered("anthropic", "claude-fable-5-2")
+    row["metadata"]["execution_backend"] = "anthropic_oauth_direct"  # 비릴레이 행은 직접 OAuth probe
     await model_registry.apply_activation_probes([row], {}, now=NOW)
     assert seen == [("one", "claude-fable-5-2"), ("two", "claude-fable-5-2")]
     if second_result == "success":
@@ -1292,3 +1294,229 @@ async def test_slow_second_oauth_account_preserves_first_retry_after(monkeypatch
         assert probe["error"] == "http_429"
         assert probe["next_retry_at"] == (NOW + timedelta(hours=1)).isoformat()
         assert row["is_executable"] is False
+
+
+# ── Claude CLI 릴레이 행: 실제 응답(result·modelUsage)으로 활성화 판정 ─────────────
+
+def _relay_row(model="claude-fable-5-2"):
+    return {
+        "provider": "anthropic", "model_id": model,
+        "metadata": {"execution_backend": "claude_cli_relay"},
+    }
+
+
+def _patch_relay(monkeypatch, events):
+    from app.services import model_selector
+
+    async def fake_once(model, system_prompt, messages, **kwargs):
+        assert kwargs.get("oauth_slot") == "1"
+        for ev in events:
+            yield ev
+
+    monkeypatch.setattr(model_selector, "_stream_cli_relay_once", fake_once)
+
+
+def _done(text="OK", models=("claude-fable-5-2",), **extra):
+    return {"type": "done", "result_text": text, "model_usage_models": list(models),
+            "used_models": ["claude-fable-5-2"], **extra}
+
+
+@pytest.mark.asyncio
+async def test_cli_relay_success_requires_result_text_and_model_usage(monkeypatch):
+    _patch_relay(monkeypatch, [{"type": "delta", "content": "OK"}, _done()])
+    assert (await model_registry.probe_model_execution(_relay_row())).ok is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("done", [_done(text=""), _done(text="  "), _done(models=())])
+async def test_cli_relay_delta_alone_does_not_activate(monkeypatch, done):
+    _patch_relay(monkeypatch, [{"type": "delta", "content": "OK"}, done])
+    assert (await model_registry.probe_model_execution(_relay_row())).ok is False
+
+
+@pytest.mark.asyncio
+async def test_cli_relay_success_without_delta(monkeypatch):
+    _patch_relay(monkeypatch, [_done()])
+    assert (await model_registry.probe_model_execution(_relay_row())).ok is True
+
+
+@pytest.mark.asyncio
+async def test_cli_relay_version_required_is_permanent_with_visible_reason(monkeypatch):
+    msg = "There's an issue with the selected model. It does not support this model; version 2.1.290 or newer is required. /root/x"
+    _patch_relay(monkeypatch, [{"type": "error", "content": msg}])
+    out = await model_registry.probe_model_execution(_relay_row())
+    assert out == ProbeOutcome(False, "cli_version_required:2.1.290", False)
+    row = _discovered("anthropic", "claude-fable-5-2")
+    row["metadata"]["execution_backend"] = "claude_cli_relay"
+    await model_registry.apply_activation_probes([row], {}, now=NOW, prober=_prober_fixed(out))
+    assert row["is_active"] is False
+    assert row["metadata"]["activation_probe"]["error"] == "cli_version_required:2.1.290"
+
+
+def _prober_fixed(outcome):
+    async def probe(row):
+        return outcome
+    return probe
+
+
+@pytest.mark.asyncio
+async def test_cli_429_with_future_reset_keeps_retry_after_in_next_retry(monkeypatch):
+    _patch_relay(monkeypatch, [{"type": "error", "content": "API Error: 429 rate limit", "retry_after": 7200.0}])
+    out = await model_registry.probe_model_execution(_relay_row())
+    assert out == ProbeOutcome(False, "http_429", True, 7200.0)
+    row = _discovered("anthropic", "claude-fable-5-2")
+    await model_registry.apply_activation_probes([row], {}, now=NOW, prober=_prober_fixed(out))
+    probe = row["metadata"]["activation_probe"]
+    assert probe["transient"] is True
+    assert model_registry._parse_timestamp(probe["next_retry_at"]) == NOW + timedelta(hours=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 502, 504])
+async def test_cli_5xx_is_transient(monkeypatch, status):
+    _patch_relay(monkeypatch, [{"type": "error", "content": f"CLI Relay {status}: boom"}])
+    out = await model_registry.probe_model_execution(_relay_row())
+    assert out == ProbeOutcome(False, f"http_{status}", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_cli_auth_and_missing_are_permanent(monkeypatch, status):
+    _patch_relay(monkeypatch, [{"type": "error", "content": f"API Error: {status} secret-token-xyz"}])
+    out = await model_registry.probe_model_execution(_relay_row())
+    assert out.transient is False and out.error == f"http_{status}" and "secret" not in out.error
+
+
+@pytest.mark.asyncio
+async def test_non_relay_anthropic_row_still_uses_direct_oauth_probe(monkeypatch):
+    direct = AsyncMock(return_value=ProbeOutcome(True))
+    monkeypatch.setattr(model_registry, "_probe_anthropic_oauth", direct)
+    out = await model_registry.probe_model_execution({"provider": "anthropic", "model_id": "claude-x", "metadata": {}})
+    assert out.ok and direct.await_count == 1
+
+
+def test_map_cli_event_result_adds_result_text_and_model_usage_only():
+    from app.services import model_selector
+
+    event = {"type": "result", "is_error": False, "result": "OK", "usage": {"input_tokens": 3, "output_tokens": 1},
+             "total_cost_usd": 0.01, "modelUsage": {"claude-fable-5-2[1m]": {}, "claude-haiku-4-5": {}}}
+    done = model_selector._map_cli_event(event)[0]
+    assert done["type"] == "done"
+    assert done["result_text"] == "OK"
+    assert done["model_usage_models"] == ["claude-fable-5-2", "claude-haiku-4-5"]
+    for key in ("model", "actual_model", "model_verified", "model_mismatch", "used_models", "cost",
+                "input_tokens", "output_tokens"):
+        assert key in done
+    empty = model_selector._map_cli_event({"type": "result", "result": "OK"})[0]
+    assert empty["model_usage_models"] == []
+
+
+def test_cli_probe_timeout_is_shorter_than_outer_wait_for():
+    outer = model_registry._ACTIVATION_PROBE_TIMEOUT_SECONDS * 2 + 5
+    assert model_registry._ACTIVATION_CLI_PROBE_TIMEOUT_SECONDS < outer
+
+
+async def _run_cli_429(monkeypatch, windows, text="API Error: 429 rate limit"):
+    """rate_limit_event + result.is_error 를 흘려 _stream_cli_relay_once 의 마지막 error 이벤트를 돌려준다."""
+    import httpx
+
+    from app.services import model_selector
+
+    lines = [
+        json.dumps({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "rejected", "unifiedWindows": windows}}),
+        json.dumps({"type": "result", "is_error": True, "result": text}),
+    ]
+
+    class Resp:
+        status_code = 200
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+    class Stream:
+        async def __aenter__(self):
+            return Resp()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Health:
+        status_code = 200
+
+        def json(self):
+            from scripts.claude_model_contract import CONTRACT_VERSION
+            return {"claude_model_contract": {"version": CONTRACT_VERSION}, "slot_auth": {}}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            return Health()
+
+        def stream(self, *a, **k):
+            return Stream()
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    events = [e async for e in model_selector._stream_cli_relay_once(
+        "claude-fable-5-2", "", [{"role": "user", "content": "ping"}], oauth_slot="1")]
+    return events[-1]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_relay_once_error_carries_retry_after_from_reset(monkeypatch):
+    """result.is_error 429 + 소진된 창의 resetsAt 이 미래 → error 이벤트에 retry_after(초) 가산."""
+    import time as _t
+    err = await _run_cli_429(monkeypatch, {"five_hour": {"utilization": 1.0, "resetsAt": _t.time() + 600}})
+    assert err["type"] == "error" and 590 <= err["retry_after"] <= 600
+
+
+@pytest.mark.asyncio
+async def test_cli_429_simultaneously_exhausted_windows_keep_longest_wait(monkeypatch):
+    import time as _t
+    now = _t.time()
+    err = await _run_cli_429(monkeypatch, {
+        "five_hour": {"utilization": 1.0, "resetsAt": now + 600},
+        "seven_day": {"utilization": 1.0, "resetsAt": now + 7200},
+        "other": {"utilization": 0.2, "resetsAt": now + 9000},  # 소진 아님 → 무시
+    })
+    assert 7190 <= err["retry_after"] <= 7200
+
+
+@pytest.mark.asyncio
+async def test_cli_429_bad_window_value_does_not_erase_text_retry_after(monkeypatch):
+    import time as _t
+    err = await _run_cli_429(
+        monkeypatch,
+        {"five_hour": {"utilization": "unknown", "resetsAt": "garbage"},
+         "seven_day": {"utilization": 1.0, "resetsAt": _t.time() + 100}},
+        text="API Error: 429 retry-after: 7200",
+    )
+    assert err["retry_after"] == 7200.0
+
+
+@pytest.mark.asyncio
+async def test_cli_429_without_wait_info_has_no_retry_after_field(monkeypatch):
+    err = await _run_cli_429(monkeypatch, {"five_hour": {"utilization": "x", "resetsAt": None}})
+    assert err["type"] == "error" and "retry_after" not in err
+
+
+@pytest.mark.asyncio
+async def test_cli_relay_success_actually_activates_row_end_to_end(monkeypatch):
+    """프로브 성공 → apply_activation_probes 가 행을 실제로 활성화(is_active·verified)한다."""
+    _patch_relay(monkeypatch, [_done()])
+    row = _discovered("anthropic", "claude-fable-5-2")
+    row["metadata"]["execution_backend"] = "claude_cli_relay"
+    assert row["is_active"] is False
+    summary = await model_registry.apply_activation_probes([row], {}, now=NOW)
+    assert summary["activated"] == ["anthropic:claude-fable-5-2"]
+    assert row["is_active"] and row["is_executable"] and row["verification_status"] == "verified"
+    assert row["metadata"]["activation_probe"]["status"] == "ok"
