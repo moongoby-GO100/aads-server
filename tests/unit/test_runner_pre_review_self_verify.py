@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SRC = (ROOT / 'scripts/pipeline-runner.sh').read_text()
 NAMES = ('self_verify_extract', 'self_verify_classify', 'self_verify_project_python',
-         'self_verify_rewrite_argv', 'pre_review_self_verify')
+         'self_verify_rewrite_argv', 'self_verify_expand_argv', 'pre_review_self_verify')
 
 
 def function(source, name):
@@ -370,3 +370,119 @@ def test_pre_review_self_verify_runs_with_venv_and_records_interpreter(tmp_path)
                  '`pytest tests/x.py`\n', RUNNER_HEAVY_DIR=str(heavy))
     assert result.returncode == 0, result.stderr
     assert 'interpreter=%s' % py in result.stdout
+
+
+def test_self_verify_expand_argv_unit(tmp_path):
+    test_dir = tmp_path / 'tests' / 'a'
+    test_dir.mkdir(parents=True)
+    (test_dir / 'test_x1.py').write_text('# 1\n')
+    (test_dir / 'test_x2.py').write_text('# 2\n')
+    (tmp_path / 'a1.py').write_text('# a1\n')
+
+    # 1. Matching glob expansion
+    cmd1 = f'self_verify_expand_argv "{tmp_path}" "" pytest -q "tests/a/test_x*.py"'
+    res1 = run(cmd1)
+    assert res1.returncode == 0
+    assert res1.stdout.split('\0')[:-1] == ['pytest', '-q', 'tests/a/test_x1.py', 'tests/a/test_x2.py']
+
+    # 2. Option argument is not expanded
+    cmd2 = f'self_verify_expand_argv "{tmp_path}" "" pytest -k "a*"'
+    res2 = run(cmd2)
+    assert res2.returncode == 0
+    assert res2.stdout.split('\0')[:-1] == ['pytest', '-k', 'a*']
+
+    # 3. Outside patterns not expanded
+    cmd3 = f'self_verify_expand_argv "{tmp_path}" "" pytest -q "../test_*.py" "{tmp_path}/tests/a/*.py"'
+    res3 = run(cmd3)
+    assert res3.returncode == 0
+    assert res3.stdout.split('\0')[:-1] == ['pytest', '-q', '../test_*.py', f'{tmp_path}/tests/a/*.py']
+
+    # 4. Zero matches retains pattern
+    cmd4 = f'self_verify_expand_argv "{tmp_path}" "" pytest -q "tests/a/test_missing_*.py"'
+    res4 = run(cmd4)
+    assert res4.returncode == 0
+    assert res4.stdout.split('\0')[:-1] == ['pytest', '-q', 'tests/a/test_missing_*.py']
+
+
+def test_glob_expansion_multiple_files_executes_rc0(tmp_path):
+    test_dir = tmp_path / 'tests' / 'a'
+    test_dir.mkdir(parents=True)
+    (test_dir / 'test_x1.py').write_text('# test 1\n')
+    (test_dir / 'test_x2.py').write_text('# test 2\n')
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    executable = bin_dir / 'pytest'
+    executable.write_text('#!/bin/bash\nprintf "%s\\n" "$*" > executed_args\nexit 0\n')
+    executable.chmod(0o755)
+
+    result = gate(tmp_path, 'pytest -q tests/a/test_x*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert result.returncode == 0
+    assert 'self_verify_pass' in result.stdout
+    assert (tmp_path / 'executed_args').read_text().strip() == '-q tests/a/test_x1.py tests/a/test_x2.py'
+    assert 'rc=0' in result.stdout
+    assert 'glob 확장:' in result.stdout
+    assert 'tests/a/test_x1.py tests/a/test_x2.py' in result.stdout
+    assert 'EVENT:self_verify_glob_expanded:' in result.stdout
+
+
+def test_glob_zero_matches_retains_pattern_and_reports_summary(tmp_path):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    executable = bin_dir / 'pytest'
+    executable.write_text('#!/bin/bash\necho "ERROR: file or directory not found: $2" >&2\nexit 4\n')
+    executable.chmod(0o755)
+
+    # 1. Gate fails with rc=4 and reports fail fast with error feedback
+    result = gate(tmp_path, 'pytest -q tests/a/test_missing_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert result.returncode == 1
+    assert 'self_verify_failed' in result.stdout
+    assert 'rc=4' in result.stdout
+    assert 'glob 매치 0건: tests/a/test_missing_*.py' in result.stdout
+
+    # 2. Verify SELF_VERIFY_PREFIX explicitly captures the zero match summary
+    result_prefix = run('if pre_review_self_verify job session "$DIR" "$INST"; then exit 9; fi; '
+                        'printf "PREFIX:%s" "$SELF_VERIFY_PREFIX"',
+                        DIR=str(tmp_path), INST='pytest -q tests/a/test_missing_*.py',
+                        RUNNER_HEAVY_DIR=str(tmp_path / 'lane'),
+                        PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert result_prefix.returncode == 0
+    assert 'rc=4' in result_prefix.stdout
+    assert '[Runner self-verify] glob 매치 0건: tests/a/test_missing_*.py' in result_prefix.stdout
+
+
+def test_glob_dotdot_and_absolute_patterns_not_expanded(tmp_path):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    executable = bin_dir / 'pytest'
+    executable.write_text('#!/bin/bash\nprintf "%s\\n" "$*" > executed_args\nexit 0\n')
+    executable.chmod(0o755)
+
+    # .. pattern
+    res1 = gate(tmp_path, 'pytest -q ../test_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert res1.returncode == 0
+    assert (tmp_path / 'executed_args').read_text().strip() == '-q ../test_*.py'
+    assert 'glob 확장' not in res1.stdout
+
+    # absolute pattern
+    abs_pattern = f'{tmp_path}/test_*.py'
+    res2 = gate(tmp_path, f'pytest -q {abs_pattern}', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert res2.returncode == 0
+    assert (tmp_path / 'executed_args').read_text().strip() == f'-q {abs_pattern}'
+    assert 'glob 확장' not in res2.stdout
+
+
+def test_glob_option_argument_not_expanded(tmp_path):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    executable = bin_dir / 'pytest'
+    executable.write_text('#!/bin/bash\nprintf "%s\\n" "$*" > executed_args\nexit 0\n')
+    executable.chmod(0o755)
+    # create matching files in tmp_path
+    (tmp_path / 'a1.py').write_text('# a1\n')
+    (tmp_path / 'a2.py').write_text('# a2\n')
+
+    result = gate(tmp_path, "pytest -k 'a*'", PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert result.returncode == 0
+    assert (tmp_path / 'executed_args').read_text().strip() == '-k a*'
+    assert 'glob 확장' not in result.stdout
+    assert 'glob 매치 0건' not in result.stdout

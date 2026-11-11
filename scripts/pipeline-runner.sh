@@ -5326,6 +5326,106 @@ self_verify_rewrite_argv() {
     printf '%s\0' "$@"
 }
 
+# 작업트리($1) 기준으로 argv(3번째 인자부터)의 glob 메타문자(* ? [)를 포함한 비옵션 인자를 확장한다.
+# 셸을 거치지 않고 python glob.glob(root_dir=..., recursive=False) + sorted 로 안전하게 처리한다.
+# 옵션 인자(-k 등) 및 .. 또는 절대경로는 확장하지 않고 원문을 유지한다.
+# 매치 0건인 패턴 및 확장 내역은 $2(메타 파일)에 기록한다.
+# 확장된 argv 는 stdout 에 NUL(\0) 구분으로 출력된다.
+self_verify_expand_argv() {
+    local dir="$1" meta_out="${2:-}"; shift 2
+    python3 -c '
+import glob, json, os, shlex, sys
+
+worktree = os.path.abspath(sys.argv[1])
+meta_file = sys.argv[2]
+orig_argv = sys.argv[3:]
+
+if not os.path.isdir(worktree):
+    sys.stdout.buffer.write(b"".join(x.encode() + b"\0" for x in orig_argv))
+    sys.exit(0)
+
+OPTIONS_WITH_ARG = set([
+    "-k", "--keyword", "-m", "--mark", "-c", "--config", "--config-file",
+    "-o", "--override-ini", "-p", "-r", "--report", "-W", "--warning",
+    "-n", "--numprocesses", "--rootdir", "--ignore", "--ignore-glob",
+    "--deselect", "--import-mode", "--capture", "--tb", "--color",
+    "--maxfail", "--select", "--extend-select", "--extend-ignore",
+    "--exclude", "--extend-exclude", "--target-version", "-t",
+    "--testNamePattern", "--reporter", "--outputFile",
+])
+
+new_argv = []
+no_matches = []
+expanded = []
+
+skip_next = False
+end_of_options = False
+
+for i, arg in enumerate(orig_argv):
+    if i == 0:
+        new_argv.append(arg)
+        continue
+    if not end_of_options:
+        if skip_next:
+            new_argv.append(arg)
+            skip_next = False
+            continue
+        if arg == "--":
+            end_of_options = True
+            new_argv.append(arg)
+            continue
+        if arg.startswith("-"):
+            new_argv.append(arg)
+            if arg in OPTIONS_WITH_ARG:
+                skip_next = True
+            continue
+
+    if not any(c in arg for c in "*?["):
+        new_argv.append(arg)
+        continue
+
+    if os.path.isabs(arg) or any(part == ".." for part in arg.split("/")):
+        new_argv.append(arg)
+        continue
+
+    matches = sorted(glob.glob(arg, root_dir=worktree, recursive=False))
+    if not matches:
+        no_matches.append(arg)
+        new_argv.append(arg)
+        continue
+
+    escapes = False
+    for m in matches:
+        resolved = os.path.realpath(os.path.join(worktree, m))
+        if not (resolved == worktree or resolved.startswith(worktree + os.sep)):
+            escapes = True
+            break
+    if escapes:
+        new_argv.append(arg)
+        continue
+
+    new_argv.extend(matches)
+    expanded.append((arg, matches))
+
+sys.stdout.buffer.write(b"".join(x.encode() + b"\0" for x in new_argv))
+
+if meta_file:
+    with open(meta_file, "w", encoding="utf-8") as f:
+        for pat in no_matches:
+            f.write(f"[Runner self-verify] glob 매치 0건: {pat}\n")
+        if expanded:
+            before_str = shlex.join(orig_argv)
+            after_str = shlex.join(new_argv)
+            f.write(f"[Runner self-verify] glob 확장: {before_str} -> {after_str}\n")
+            event_data = {
+                "before": orig_argv,
+                "after": new_argv,
+                "patterns": [p for p, _ in expanded],
+            }
+            f.write(f"EVENT:self_verify_glob_expanded:{json.dumps(event_data, ensure_ascii=False)}\n")
+' "$dir" "$meta_out" "$@"
+}
+
 self_verify_classify() {
     case "$2" in
         0) printf pass ;;
@@ -5337,7 +5437,7 @@ self_verify_classify() {
 
 pre_review_self_verify() {
     local jid="$1" sid="$2" dir="$3" inst="$4"
-    local kind cmd rc verdict count=0 summary="" out feedback secs lock_wait unsafe_count=0 unsafe_examples="" metadata
+    local kind cmd rc verdict count=0 summary="" out feedback secs lock_wait unsafe_count=0 unsafe_examples="" metadata glob_meta glob_summary line
     SELF_VERIFY_PREFIX=""
     case "${PIPELINE_SELF_VERIFY:-1}" in 0|[Ff][Aa][Ll][Ss][Ee]|[Oo][Ff][Ff]|[Nn][Oo]) return 0 ;; esac
     if printf '%s\n' "$inst" | grep -Eq '^[[:space:]]*NO_SELF_VERIFY[[:space:]]*$'; then return 0; fi
@@ -5355,6 +5455,19 @@ pre_review_self_verify() {
         fi
         count=$((count + 1))
         mapfile -d '' -t argv < <(python3 -c 'import shlex,sys; sys.stdout.buffer.write(b"".join(x.encode()+b"\0" for x in shlex.split(sys.argv[1])))' "$cmd")
+        glob_meta=$(mktemp)
+        glob_summary=""
+        mapfile -d '' -t argv < <(self_verify_expand_argv "$dir" "$glob_meta" "${argv[@]}")
+        if [[ -f "$glob_meta" ]]; then
+            while IFS= read -r line; do
+                if [[ "$line" == EVENT:self_verify_glob_expanded:* ]]; then
+                    record_runner_event "$jid" "self_verify_glob_expanded" "" "" "" "" "" "" "${line#EVENT:self_verify_glob_expanded:}" || true
+                elif [[ -n "$line" ]]; then
+                    glob_summary+="$line"$'\n'
+                fi
+            done < "$glob_meta"
+            rm -f "$glob_meta"
+        fi
         local vpy interp
         vpy=$(self_verify_project_python "$dir")
         mapfile -d '' -t argv < <(self_verify_rewrite_argv "$vpy" "${argv[@]}")
@@ -5397,6 +5510,10 @@ pre_review_self_verify() {
         feedback="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'"$(tail -n 80 "$out")"
         rm -f "$out"
         summary+="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'
+        if [[ -n "$glob_summary" ]]; then
+            summary+="$glob_summary"
+            feedback+=$'\n'"$glob_summary"
+        fi
         if [[ "$verdict" == fail ]]; then
             feedback+=$'\n''수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음.'
             summary+="[Runner self-verify] 수정 재호출 생략: 워커 실행은 run_job 내부의 모델/토큰/재시도 장부에 결합되어 독립 재호출 함수가 없음."$'\n'
