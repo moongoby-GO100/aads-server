@@ -22,6 +22,8 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from app.core.secret_redact import redact_text
+
 logger = logging.getLogger(__name__)
 
 TRACE_TABLE = "llmops_traces"
@@ -65,18 +67,6 @@ _SENSITIVE_METADATA_KEY = re.compile(
 _HASHED_TRACE_KEY_RE = re.compile(r"^external:[^:]*:sha256:[0-9a-f]{64}$")
 _INGEST_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
-# 요약 저장 전 마스킹 — 원문에 섞여 들어온 시크릿이 DB나 외부 export로 새지 않게 한다.
-_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"), "sk-ant-***"),
-    (re.compile(r"sk-[A-Za-z0-9]{20,}"), "sk-***"),
-    (re.compile(r"AIza[A-Za-z0-9_\-]{20,}"), "AIza***"),
-    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "gh_***"),
-    (re.compile(r"xox[abprs]-[A-Za-z0-9\-]{10,}"), "xox-***"),
-    (re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"), "jwt.***"),
-    (re.compile(r"postgres(?:ql)?://[^\s:/]+:[^\s@]+@"), "postgres://***:***@"),
-    (re.compile(r"(?i)\b(api[_-]?key|auth[_-]?token|secret|password|passwd)\b\s*[:=]\s*\S+"), r"\1=***"),
-)
-
 # 존재가 확인된 relation만 캐시한다 (부재는 캐시하지 않는다 — relation_exists 참고)
 _relation_present: dict[str, bool] = {}
 # 부재 경고를 relation당 1회로 줄이기 위한 기록
@@ -90,11 +80,8 @@ def reset_relation_cache() -> None:
 
 
 def mask_secrets(text: str) -> str:
-    """요약 문자열에서 알려진 시크릿 패턴을 마스킹한다."""
-    masked = text
-    for pattern, replacement in _SECRET_PATTERNS:
-        masked = pattern.sub(replacement, masked)
-    return masked
+    """요약 문자열의 시크릿을 마스킹한다. 정본은 app/core/secret_redact.py (도구 출력 가림과 동일 함수)."""
+    return redact_text(text)
 
 
 def clip(value: Any, limit: int = SUMMARY_LIMIT) -> str:

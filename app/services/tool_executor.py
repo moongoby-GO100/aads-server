@@ -255,6 +255,35 @@ LITELLM_API_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-litellm")
 _AADS_API_BASE = os.getenv("AADS_API_BASE", "http://localhost:8080")
 
 _MAX_RESULT_CHARS = 25000  # ~8000 토큰 (지시서 기준 25,000 허용)
+
+
+def _redact_and_truncate(result: Any) -> str:
+    """도구 결과 → 구조 가림 → 직렬화 → 텍스트 가림 → (그 다음) 길이 제한.
+
+    가림은 반드시 자르기 전에 한다. 잘림 지점에 걸린 비밀값 앞부분이 남지 않게 하기 위함이다.
+    가림 자체가 실패하면 원문을 내보내지 않고 차단 문구를 반환한다.
+    """
+    try:
+        from app.core.secret_redact import redact_tail, redact_text_counted, redact_value_counted
+
+        n = 0
+        if isinstance(result, (dict, list, tuple)):
+            result, n = redact_value_counted(result)
+        text = (
+            result
+            if isinstance(result, str)
+            else json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
+        )
+        text, n2 = redact_text_counted(text)
+        n += n2
+        if len(text) > _MAX_RESULT_CHARS:
+            text = redact_tail(text[:_MAX_RESULT_CHARS]) + "\n...[결과 일부 생략]"
+        if n:
+            text += f"\n[보안] 비밀값 {n}건을 가렸습니다"
+        return text
+    except Exception:
+        logger.warning("tool output redaction failed", exc_info=True)
+        return "[ERROR] 도구 출력 비밀값 가림 실패 — 결과를 차단했습니다"
 _TOOL_TIMEOUT = 20.0  # 일반 도구 타임아웃
 _DATABASE_TOOL_TIMEOUT = max(float(os.getenv("AADS_DATABASE_TOOL_TIMEOUT_SECONDS", "125")), 125.0)
 _LONG_TOOL_TIMEOUT = 55.0  # MCP stdio 클라이언트 타임아웃(~60s) 이내로 응답 보장
@@ -1075,22 +1104,14 @@ class ToolExecutor:
                             tool_name,
                             cached_result,
                         )
-                        if len(decorated_result) > _MAX_RESULT_CHARS:
-                            decorated_result = decorated_result[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
-                        return decorated_result
+                        return _redact_and_truncate(decorated_result)
 
             _timeout = _timeout_for_tool(tool_name)
             result = await asyncio.wait_for(
                 self._dispatch(tool_name, tool_input),
                 timeout=_timeout,
             )
-            result_str = (
-                json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
-                if not isinstance(result, str)
-                else result
-            )
-            if len(result_str) > _MAX_RESULT_CHARS:
-                result_str = result_str[:_MAX_RESULT_CHARS] + "\n...[결과 일부 생략]"
+            result_str = _redact_and_truncate(result)
             if cache_key and execution_id and self._should_cache_result(result_str):
                 self._store_cached_tool_result(execution_id, cache_key, result_str)
                 logger.info(
