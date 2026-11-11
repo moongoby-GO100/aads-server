@@ -241,3 +241,46 @@ def test_deleting_manual_deduction_row_while_preview_in_flight_is_not_restored()
     result = subprocess.run(['node', '-e', PREFIX + DELETE_SCRIPT, str(MODULE)], capture_output=True, text=True, timeout=40, check=False)
     assert result.returncode == 0, result.stderr + result.stdout
     assert 'OK' in result.stdout
+
+
+SETTLE_ALIGN_SCRIPT = r'''
+(async()=>{
+  const settle1={code:'prior_month_overpaid_recover',label:'전월 차액 정산',amount:5000,settlement_of_root_id:'r1',calc_note:'메모'};
+  row.deduction_items=[...row.deduction_items,settle1];
+  row.pay_items=[...row.pay_items,{code:'prior_month_topup',label:'전월 차액 추가 정산',amount:7000,settlement_of_root_id:'r2',calc_note:'지급메모'},
+    {code:'held_release',label:'보류금',amount:3000,calc_note:'보류메모'}];
+  await window.ObysPayrollAdmin.mount(host,{api,businessId:'b1',month:'2026-11',canManage:true});
+  await settle();
+  const html=[host.innerHTML,...[...controls.values()].map(c=>c.innerHTML)].join('\n');
+  const tables=html.match(/<table class="payroll-item-table">.*?<\/table>/gs);
+  assert.equal(tables.length,2);
+  const [payT,dedT]=tables;
+  const cols=tr=>[...tr.matchAll(/<td(?:\s[^>]*)?>/g)].reduce((n,m)=>n+Number((m[0].match(/colspan="(\d+)"/)||[0,1])[1]),0);
+  const head=(dedT.match(/<thead>.*?<\/thead>/s)[0].match(/<th>/g)||[]).length;
+  assert.equal(head,5);
+  const rows=dedT.match(/<tr[ >].*?<\/tr>/gs).filter(r=>!r.includes("<th>"));
+  assert.ok(rows.some(r=>r.includes('data-settlement-row')));
+  for(const r of rows)assert.equal(cols(r),5);
+  const sr=rows.find(r=>r.includes('data-settlement-row'));
+  const tds=sr.match(/<td.*?<\/td>/gs);
+  assert.ok(tds[4].includes('data-settle-off="r1"')&&tds[4].includes('이번 달 제외')&&tds[4].includes('min-height:44px'));
+  assert.equal(tds[3],'<td></td>');
+  const S=window.ObysPayrollAdmin.settlementRowHtml,H=window.ObysPayrollAdmin.heldRowHtml;
+  const r0={label:'전월 차액 정산',amount:5000,settlement_of_root_id:'r1',calc_note:'메모'};
+  assert.equal(S('pay',r0),'<tr data-settlement-row>\n      <td>전월 차액 정산</td><td>전월 차액 정산</td><td>5,000</td><td>메모</td>\n      <td><button type="button" class="btn" style="min-height:44px" data-settle-off="r1">이번 달 제외</button></td></tr>');
+  assert.equal(S('deduction',r0),'<tr data-settlement-row>\n      <td>전월 차액 정산</td><td>전월 차액 정산</td><td>5,000</td>\n      <td><button type="button" class="btn" style="min-height:44px" data-settle-off="r1">이번 달 제외</button></td></tr>');
+  assert.equal(S('pay',r0,true),'<tr data-settlement-row>\n      <td>전월 차액 정산</td><td>전월 차액 정산</td><td>5,000</td><td>메모</td>\n      <td><small>지급 완료 사실</small></td></tr>');
+  assert.equal(H({label:'보류금',amount:3000,calc_note:'보류메모'}),'<tr data-held-line>\n      <td>보류금 지급</td><td>보류금</td><td>3,000</td><td>보류메모</td><td><small>서버 계산 · 수정 불가</small></td></tr>');
+  // 지급 표의 정산·보류 행은 기존 함수 출력과 같다.
+  assert.ok(payT.includes(S('pay',{label:'전월 차액 추가 정산',amount:7000,settlement_of_root_id:'r2',calc_note:'지급메모'})));
+  assert.ok(payT.includes(H({label:'보류금',amount:3000,calc_note:'보류메모'})));
+  console.log('OK');
+})().catch(e=>{console.error(e);process.exit(1)});
+'''
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node 없음')
+def test_deduction_settlement_row_matches_header_columns_and_render_functions_unchanged():
+    result = subprocess.run(['node', '-e', PREFIX + SETTLE_ALIGN_SCRIPT, str(MODULE)], capture_output=True, text=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert 'OK' in result.stdout
