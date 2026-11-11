@@ -3097,15 +3097,35 @@ instruction_forbids_deploy() {
     local re_rel_push_decl='^[[:space:]>*#-]*push[_[:space:]-]?only[[:space:]*`]*([:=][[:space:]*`]*(true|yes|1|on)([^[:alnum:]_]|$)|[[:space:][:punct:]]*$)'
     local re_rel_push_off='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
     local re_rel_policy_forbid='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(push[_[:space:]-]?only|commit[_[:space:]-]?only|no[_[:space:]-]?deploy|forbid(den)?|deny|denied|none|block(ed)?)([^[:alnum:]_]|$)'
+    # 배포 허용 DEPLOY_POLICY 키워드 상수 (AADS-RUNNER-DEPLOY-POLICY-PUSH-UNTIL-GATE-20261111)
+    # app/services/e2e_verify.py instruction_is_push_only() 와 반드시 동기화한다.
+    local re_push_until='(커밋|commit|push|푸시)[^\n]{0,6}까지'
+    local re_policy_decl='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(.*)$'
+    local re_policy_tok="^[[:space:]\`'\"\\*#>-]*([^[:space:]():;,\`'\"\\.]+)"
+    local re_policy_allowed='^(bluegreen|blue-green|blue_green|deploy|release|lane|standard|auto|reload(-api|_api)?|approval(_[[:alnum:]_]+)?|ceo(_[[:alnum:]_]+)?|장중|실매매)$'
+    local re_push_input='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
     while IFS= read -r rel_line || [[ -n "$rel_line" ]]; do
         rel_n=$((rel_n + 1))
         if (( rel_n <= 20 )) && [[ "$rel_line" =~ $re_rel_deploy_only ]]; then
             rel_deploy_only=1
         fi
         rel_low="${rel_line,,}"
-        if [[ "$rel_low" =~ $re_rel_policy_forbid ]]; then
-            rel_conflict=1
+        if [[ "$rel_low" =~ $re_policy_decl ]]; then
+            local pol_val="${BASH_REMATCH[3]}"
+            if [[ "$pol_val" =~ $re_push_until ]]; then
+                rel_conflict=1
+            else
+                local pol_tok=""
+                if [[ "$pol_val" =~ $re_policy_tok ]]; then
+                    pol_tok="${BASH_REMATCH[1],,}"
+                fi
+                if [[ -z "$pol_tok" ]] || ! [[ "$pol_tok" =~ $re_policy_allowed ]]; then
+                    rel_conflict=1
+                fi
+            fi
         elif [[ "$rel_low" =~ $re_rel_push_decl ]] && ! [[ "$rel_low" =~ $re_rel_push_off ]]; then
+            rel_conflict=1
+        elif [[ "$rel_low" =~ $re_push_input ]] && [[ "$rel_low" =~ $re_push_until ]] && ! [[ "$rel_low" =~ $re_rel_push_off ]]; then
             rel_conflict=1
         fi
     done <<< "$text"
@@ -3113,20 +3133,36 @@ instruction_forbids_deploy() {
         return 1
     fi
     # DEPLOY_POLICY가 있으면 기존 게이트의 판정 입력을 선언 관련 줄로만 좁힌다.
-    local policy_input="" policy_scan="" policy_line="" has_policy_line=0
-    local re_policy_input='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=]'
-    local re_push_input='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
+    local policy_input="" policy_scan="" policy_line="" has_policy_line=0 has_forbidden_policy=0
     local re_push_assign='push[_-]?only[[:space:]]*[:=][[:space:]]*(true|yes|1|on)([^[:alnum:]_]|$)'
     local re_deploy_input='^[[:space:]>*#-]*deploy(ment)?[[:space:]]*[:=]'
     while IFS= read -r policy_line || [[ -n "$policy_line" ]]; do
         policy_scan=$(printf '%s' "$policy_line" | tr '[:upper:]' '[:lower:]')
-        if [[ "$policy_scan" =~ $re_policy_input ]]; then
+        if [[ "$policy_scan" =~ $re_policy_decl ]]; then
             has_policy_line=1
             policy_input+="${policy_line}"$'\n'
+            local p_val="${BASH_REMATCH[3]}"
+            if [[ "$p_val" =~ $re_push_until ]]; then
+                has_forbidden_policy=1
+            else
+                local p_tok=""
+                if [[ "$p_val" =~ $re_policy_tok ]]; then
+                    p_tok="${BASH_REMATCH[1],,}"
+                fi
+                if [[ -z "$p_tok" ]] || ! [[ "$p_tok" =~ $re_policy_allowed ]]; then
+                    has_forbidden_policy=1
+                fi
+            fi
         elif [[ "$policy_scan" =~ $re_push_input ]] || [[ "$policy_scan" =~ $re_push_assign ]] || [[ "$policy_scan" =~ $re_deploy_input ]]; then
             policy_input+="${policy_line}"$'\n'
+            if [[ "$policy_scan" =~ $re_push_until ]] && ! [[ "$policy_scan" =~ $re_rel_push_off ]]; then
+                has_forbidden_policy=1
+            fi
         fi
     done <<< "$text"
+    if (( has_forbidden_policy )); then
+        return 0
+    fi
     if (( has_policy_line )); then
         text="$policy_input"
     fi
@@ -9741,7 +9777,7 @@ deploy_job() {
             fi
 
             if [ "$DASHBOARD_CHANGED" = true ]; then
-                log "  BLUEGREEN aads-dashboard — release launcher 호출 (헬스체크+롤백)"
+                log "  BLUEGREEN aads-dashboard — release launcher 호출 (헬스체크+롤백, fallback: aads-dashboard/deploy.sh)"
                 local _dash_deploy_log="/tmp/pipeline-deploy-dashboard-${job_id}.log"
                 local _dash_deploy_rc=0
                 dashboard_deploy_release "$current_sha" >"$_dash_deploy_log" 2>&1 || _dash_deploy_rc=$?

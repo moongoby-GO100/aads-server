@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from app.services.e2e_verify import instruction_is_push_only
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ("pipeline-runner.sh", "pipeline-runner.sh.local")
 
@@ -242,3 +244,39 @@ def test_decision_does_not_depend_on_shell_locale(gate_fn, locale):
     """'배포' 와 '금지' 사이가 한글 15자(바이트 45) — LC_ALL=C 에서 바이트로 세면 40 을 넘어 놓쳤다."""
     text = "배포는 이번 작업에서 아무 관련 없는 항목이라서 금지"
     assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
+# ── DEPLOY_POLICY 허용 키워드 및 push-until 게이트 (AADS-RUNNER-DEPLOY-POLICY-PUSH-UNTIL-GATE-20261111) ──
+
+RUNNER_ACF6E577_DEPLOY_POLICY = (
+    "DEPLOY_POLICY: main 커밋·push까지. 파동 레인 반영은 WaveEngineOwner가 검수 후 배포 시스템으로 별도. "
+    "운영 폴더·systemd 수정 금지. HANDOVER.md 수정·--no-verify·force push 금지."
+)
+
+DEPLOY_POLICY_GATE_CASES = [
+    (RUNNER_ACF6E577_DEPLOY_POLICY, "FORBID", True),
+    ("DEPLOY_POLICY: push까지만", "FORBID", True),
+    ("DEPLOY_POLICY: 커밋까지", "FORBID", True),
+    ("DEPLOY_POLICY: main 커밋·push까지.", "FORBID", True),
+    ("DEPLOY_POLICY: bluegreen", "ALLOW", False),
+    ("DEPLOY_POLICY: standard", "ALLOW", False),
+    ("DEPLOY_POLICY: auto", "ALLOW", False),
+    ("DEPLOY_POLICY: 알수없는값", "FORBID", True),
+    ("DEPLOY_ONLY: true\nDEPLOY_POLICY: bluegreen", "ALLOW", False),
+    ("DEPLOY_ONLY: true\nDEPLOY_POLICY: push까지", "FORBID", True),
+]
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize("text, shell_verdict, py_verdict", DEPLOY_POLICY_GATE_CASES)
+def test_deploy_policy_push_until_and_allowlist_gate(gate_fn, text, shell_verdict, py_verdict, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == shell_verdict
+    assert instruction_is_push_only(text) is py_verdict
+
+
+@pytest.mark.parametrize("text, shell_verdict, py_verdict", DEPLOY_POLICY_GATE_CASES)
+def test_shell_and_python_deploy_policy_parity(gate_fn, text, shell_verdict, py_verdict):
+    shell_forbid = _decide(gate_fn, text) == "FORBID"
+    py_forbid = instruction_is_push_only(text)
+    assert shell_forbid is py_forbid
+

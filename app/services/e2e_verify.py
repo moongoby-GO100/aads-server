@@ -170,6 +170,66 @@ _DEPLOY_OFF_RE = re.compile(
 )
 _COMMIT_ONLY_RE = re.compile(r"(?:커밋|push)\s*까지만")
 _DEPLOY_FORBID_RE = re.compile(r"(?:배포|재기동|deploy).{0,12}(?:금지|하지\s*(?:마|말)|말라)")
+_NEG_RE = r"(?:금지|하지\s*(?:마|말|않)|않는다|않습니다|안\s*(?:한다|합니다)|말라)"
+_DEPLOY_WIDE_RE = re.compile(r"(?:배포|재기동|deploy)([^\n.!?;\u3002]{0,40}?)" + _NEG_RE)
+_SEQ_RE = re.compile(r"(?:후|뒤|이후|다음|하되|하고|하며|하면|전에|먼저|then|after|before)")
+
+
+def _check_wide_deploy_forbid(text: str) -> bool:
+    for m in _DEPLOY_WIDE_RE.finditer(text):
+        if not _SEQ_RE.search(m.group(1)):
+            return True
+    return False
+
+# 배포 허용 DEPLOY_POLICY 키워드 상수 (AADS-RUNNER-DEPLOY-POLICY-PUSH-UNTIL-GATE-20261111)
+# scripts/pipeline-runner.sh instruction_forbids_deploy() 와 반드시 함께 수정한다.
+DEPLOY_POLICY_ALLOWED_KEYWORDS = (
+    "bluegreen",
+    "blue-green",
+    "blue_green",
+    "deploy",
+    "release",
+    "lane",
+    "standard",
+    "auto",
+    "reload",
+    "reload-api",
+    "reload_api",
+    "approval",
+    "approval_gate",
+    "approval_gated",
+    "ceo",
+    "장중",
+    "실매매",
+)
+
+_DEPLOY_ONLY_RE = re.compile(r"^[ \t]*DEPLOY_ONLY[ \t]*:[ \t]*true(?![a-zA-Z0-9_])")
+_POLICY_LINE_RE = re.compile(
+    r"^[ \t>*#-]*(?:deploy(?:ment)?|release)[_ -]?policy[ \t]*[:=][ \t]*(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PUSH_UNTIL_RE = re.compile(r"(?:커밋|commit|push|푸시)[^\n]{0,6}까지", re.IGNORECASE)
+_PUSH_DECL_RE = re.compile(r"^[ \t>*#-]*push[_ -]?only\b", re.IGNORECASE)
+_PUSH_ASSIGN_TRUE_RE = re.compile(
+    r"push[_-]?only\s*[:=]\s*(?:true|yes|1|on)(?![a-z0-9_])|^[ \t>*#-]*push[_ -]?only[ \t`*]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_allowed_policy_token(token: str) -> bool:
+    if not token:
+        return False
+    tok = token.lower()
+    return (
+        tok in DEPLOY_POLICY_ALLOWED_KEYWORDS
+        or tok.startswith("approval_")
+        or tok.startswith("ceo_")
+    )
+
+
+def _extract_policy_first_token(policy_value: str) -> str:
+    m = re.match(r"^[`'\"*#>-]*([^\s():;,`'\"\.]+)", (policy_value or "").strip())
+    return m.group(1).lower() if m else ""
 _E2E_DIRECTIVE_RE = re.compile(r"^[ \t>*#-]*e2e_verify[ \t]*:[ \t]*(.+)$", re.IGNORECASE | re.MULTILINE)
 _E2E_URL_RE = re.compile(r"\burl\s*=\s*(\S+)", re.IGNORECASE)
 _E2E_SELECTORS_RE = re.compile(r"\bselectors\s*=\s*(.+)$", re.IGNORECASE)
@@ -250,11 +310,63 @@ async def check_overdue_deferred_evidence(
 
 
 def instruction_is_push_only(instruction: str) -> bool:
-    """Structured push-only declarations (mirror of the runner's instruction_forbids_deploy core rules)."""
-    lowered = (instruction or "").lower()[:200_000]
-    if not lowered:
+    """Structured push-only declarations (mirror of the runner's instruction_forbids_deploy core rules).
+
+    scripts/pipeline-runner.sh instruction_forbids_deploy() 와 반드시 함께 수정한다.
+    """
+    raw = (instruction or "")[:200_000]
+    if not raw.strip():
         return False
+
+    lines = raw.splitlines()
+    rel_deploy_only = False
+    for line in lines[:20]:
+        if _DEPLOY_ONLY_RE.match(line):
+            rel_deploy_only = True
+            break
+
+    has_policy_line = False
+    has_forbidden_policy = False
+    policy_input_lines: list[str] = []
+
+    for line in lines:
+        pm = _POLICY_LINE_RE.match(line)
+        if pm:
+            has_policy_line = True
+            policy_input_lines.append(line)
+            val = pm.group(1).strip()
+            if _PUSH_UNTIL_RE.search(val):
+                has_forbidden_policy = True
+            else:
+                tok = _extract_policy_first_token(val)
+                if not _is_allowed_policy_token(tok):
+                    has_forbidden_policy = True
+        elif _PUSH_DECL_RE.match(line):
+            policy_input_lines.append(line)
+            if not _PUSH_ONLY_OFF_RE.search(line):
+                if _PUSH_UNTIL_RE.search(line):
+                    has_forbidden_policy = True
+
+    # DEPLOY_ONLY: true 릴리스 잡 예외
+    if rel_deploy_only:
+        conflict = has_forbidden_policy
+        if not conflict:
+            for pline in policy_input_lines:
+                if _PUSH_DECL_RE.match(pline) and not _PUSH_ONLY_OFF_RE.search(pline):
+                    if _PUSH_ASSIGN_TRUE_RE.search(pline):
+                        conflict = True
+                        break
+        if not conflict:
+            return False
+
+    if has_forbidden_policy:
+        return True
+
+    text_to_check = "\n".join(policy_input_lines) if has_policy_line else raw
+    lowered = text_to_check.lower()
     scrubbed = _PUSH_ONLY_OFF_RE.sub(" ", lowered)
+    if _check_wide_deploy_forbid(scrubbed):
+        return True
     return any(
         pattern.search(scrubbed)
         for pattern in (_PUSH_ONLY_ANY_RE, _DEPLOY_POLICY_RE, _DEPLOY_OFF_RE, _COMMIT_ONLY_RE, _DEPLOY_FORBID_RE)
