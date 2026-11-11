@@ -2849,9 +2849,53 @@ def _resolve_antigravity_binary():
     return ""
 
 
+# `agy models` 를 실제로 실행해 본 결과로 허용 목록을 넓힌다(AADS-AGY-MODEL-AUTODISCOVERY-20261111).
+# 코드 고정 표(_ANTIGRAVITY_NATIVE_MODELS)에 없는 새 모델도 agy 가 목록에 올렸다면 --model 로 넘길 수 있다.
+# 폐기 목록은 항상 우선한다. 캐시는 프로세스 메모리뿐이라 재시작하면 비며, 비면 고정 표만 쓴다.
+_ANTIGRAVITY_MODEL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,80}")
+_ANTIGRAVITY_LIVE_MODELS = {}
+_ANTIGRAVITY_LIVE_TTL_SEC = float(os.getenv("AGY_RELAY_LIVE_MODELS_TTL_SEC", "900"))
+_ANTIGRAVITY_MODELS_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_MODELS_TIMEOUT_SEC", "20"))
+
+
+def _parse_antigravity_models_output(text):
+    """`agy models` 출력(탭 구분 "id\t표시명")에서 id 목록. 탭 없는 줄·잘못된 id 는 버린다."""
+    ids = []
+    for line in str(text or "").splitlines():
+        if "\t" not in line:
+            continue
+        model_id = line.split("\t", 1)[0].strip()
+        if _ANTIGRAVITY_MODEL_ID_RE.fullmatch(model_id) and model_id not in ids:
+            ids.append(model_id)
+    return ids
+
+
+def _remember_antigravity_live_models(ids, now=None):
+    stamp = time.monotonic() if now is None else now
+    _ANTIGRAVITY_LIVE_MODELS.clear()
+    _ANTIGRAVITY_LIVE_MODELS.update({m: stamp for m in ids})
+
+
+def _antigravity_live_model(name):
+    """마지막 성공 수집 목록에 포함되어 있는지 (만료 여부 무관 판정용)."""
+    return name in _ANTIGRAVITY_LIVE_MODELS
+
+
+def _antigravity_live_model_fresh(name):
+    """캐시에 있고 TTL(기본 900초) 이내인지 (갱신 시점 판단용)."""
+    stamp = _ANTIGRAVITY_LIVE_MODELS.get(name)
+    return stamp is not None and (time.monotonic() - stamp) <= _ANTIGRAVITY_LIVE_TTL_SEC
+
+
 def _resolve_antigravity_model(model):
     """요청 모델 → agy --model 값. 모르는 모델은 None (조용히 기본값으로 바꾸지 않는다)."""
-    return _ANTIGRAVITY_MODEL_MAP.get(str(model or "").strip())
+    name = str(model or "").strip()
+    mapped = _ANTIGRAVITY_MODEL_MAP.get(name)
+    if mapped:
+        return mapped
+    if name not in _ANTIGRAVITY_RETIRED_MODELS and _antigravity_live_model(name):
+        return name
+    return None
 
 
 def _antigravity_model_rejection(model):
@@ -3198,6 +3242,7 @@ async def handle_antigravity_stream(request):
         system_prompt, messages_text, body.get("image_attachments"), session_id)
     if not messages_text:
         return web.json_response({"error": "messages_text required"}, status=400)
+    await _refresh_antigravity_live_models_if_needed(model)
     rejection = _antigravity_model_rejection(model)
     if rejection:
         return web.json_response({"error": rejection[0], "detail": rejection[1]}, status=400)
@@ -3808,6 +3853,77 @@ async def relay_secret_middleware(request, handler):
     return await handler(request)
 
 
+async def _fetch_antigravity_models_text():
+    """호스트에서 `agy models` 를 실행한다. 반환 (text, ids, error_code, returncode)."""
+    agy_bin = _resolve_antigravity_binary()
+    if not agy_bin:
+        return "", [], "agy_not_found", None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            agy_bin, "models",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=_antigravity_clean_env(), start_new_session=True,
+        )
+    except OSError as exc:
+        return "", [], "agy_spawn_failed:" + type(exc).__name__, None
+    try:
+        out, _err = await asyncio.wait_for(proc.communicate(), timeout=_ANTIGRAVITY_MODELS_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        _antigravity_kill_group(proc)
+        return "", [], "agy_models_timeout", None
+    if proc.returncode != 0:
+        return "", [], "agy_models_failed", proc.returncode
+    text = out.decode("utf-8", errors="replace")
+    ids = _parse_antigravity_models_output(text)
+    if not ids:
+        return text, [], "agy_models_empty", 0
+    _remember_antigravity_live_models(ids)
+    return text, ids, None, 0
+
+
+_ANTIGRAVITY_REFRESH_LOCK = None
+_ANTIGRAVITY_LAST_REFRESH = 0.0
+
+
+async def _refresh_antigravity_live_models_if_needed(name):
+    """실행 요청 전: 캐시가 만료됐거나 요청 모델이 캐시에 없으면 `agy models` 를 1회 갱신한다.
+
+    동시 요청은 잠금으로 한 번만 갱신한다. 갱신 실패 시 마지막 성공 캐시를 그대로 둔다(판정은 호출자가).
+    """
+    global _ANTIGRAVITY_REFRESH_LOCK, _ANTIGRAVITY_LAST_REFRESH
+    name = str(name or "").strip()
+    if not name or name in _ANTIGRAVITY_MODEL_MAP or name in _ANTIGRAVITY_RETIRED_MODELS:
+        return
+    if _antigravity_live_model_fresh(name):
+        return
+    if _ANTIGRAVITY_REFRESH_LOCK is None:
+        _ANTIGRAVITY_REFRESH_LOCK = asyncio.Lock()
+    entered = time.monotonic()
+    async with _ANTIGRAVITY_REFRESH_LOCK:
+        # 기다리는 동안 다른 요청이 이미 갱신했으면 다시 하지 않는다.
+        if _ANTIGRAVITY_LAST_REFRESH >= entered or _antigravity_live_model_fresh(name):
+            return
+        try:
+            await _fetch_antigravity_models_text()
+        except Exception as exc:  # 갱신 실패는 거절 사유가 아니라 낡은 캐시로 판정
+            logger.warning("agy models refresh failed: %s", type(exc).__name__)
+        _ANTIGRAVITY_LAST_REFRESH = time.monotonic()
+
+
+async def handle_antigravity_models(request):
+    """호스트의 `agy models` 출력을 그대로 돌려준다. API 컨테이너에는 agy 가 없다. 실패하면 502 — 빈 목록으로 위장하지 않는다."""
+    text, ids, err, rc = await _fetch_antigravity_models_text()
+    if err:
+        status = 504 if err == "agy_models_timeout" else 502
+        body = {"error": err.split(":")[0]}
+        if ":" in err:
+            body["detail"] = err.split(":", 1)[1]
+        if rc:
+            body["returncode"] = rc
+        return web.json_response(body, status=status)
+    return web.json_response({"output": text, "count": len(ids)})
+
+
 async def handle_account_login_start(request):
     """OAuth 재로그인을 시작한다 — 화면의 '재로그인' 버튼이 여기를 부른다.
 
@@ -3988,6 +4104,7 @@ def create_app():
     app.router.add_post("/stream", handle_stream)
     app.router.add_post("/codex-stream", handle_codex_stream)
     app.router.add_post("/antigravity-stream", handle_antigravity_stream)
+    app.router.add_get("/antigravity-models", handle_antigravity_models)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/leases", handle_leases)
     app.router.add_get("/codex-usage", handle_codex_usage)

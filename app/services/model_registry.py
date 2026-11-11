@@ -35,7 +35,7 @@ _DISCOVERY_STALE_AFTER_SECONDS = max(
 
 _GLOBAL_DISCOVERY_PROVIDER = "all"
 _DISCOVERY_PROVIDERS = (
-    "openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", "codex",
+    "openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", "codex", "antigravity",
     "groq", "mistral", "openrouter", "minimax", "together", "cerebras", "sambanova",
 )
 
@@ -305,6 +305,10 @@ _MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
     "gemini-4-argon-high": (_decimal(0.0), _decimal(0.0)),
     "gemini-4-argon-medium": (_decimal(0.0), _decimal(0.0)),
     "gemini-4-argon-low": (_decimal(0.0), _decimal(0.0)),
+    # carbon 은 argon 과 같은 계열(구독 OAuth, 건당 과금 없음)로 취급한다.
+    "gemini-4-carbon-high": (_decimal(0.0), _decimal(0.0)),
+    "gemini-4-carbon-medium": (_decimal(0.0), _decimal(0.0)),
+    "gemini-4-carbon-low": (_decimal(0.0), _decimal(0.0)),
     "gemini-3.8-flash-high": (_decimal(0.0), _decimal(0.0)),
     "gemini-3.8-flash-medium": (_decimal(0.0), _decimal(0.0)),
     "gemini-3.8-flash-low": (_decimal(0.0), _decimal(0.0)),
@@ -324,6 +328,9 @@ _THINKING_MODELS = {
     "gemini-4-argon-high",
     "gemini-4-argon-medium",
     "gemini-4-argon-low",
+    "gemini-4-carbon-high",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-low",
     "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low",
@@ -710,6 +717,7 @@ _MODEL_CANONICAL_ALIASES: dict[str, str] = {
 }
 
 _DISCOVERY_REQUIREMENTS = {
+    "antigravity": "Claude relay(호스트) 의 GET /antigravity-models 가 `agy models` 를 실행해 목록을 돌려준다",
     "anthropic": "x-api-key required for Models API; OAuth auth token supports runtime only",
     "openai": "Bearer provider key required",
     "gemini": "Google Generative Language API key required",
@@ -928,8 +936,28 @@ def _supports_tools_for(provider: str) -> bool:
     return provider != "litellm"
 
 
+# agy 는 구독 OAuth 라 건당 과금이 없고, `agy models` 의 id 는 모두 -low/-medium/-high 추론 강도 접미사를 가진다.
+# 코드 고정 표에 없는 새 모델(예: 신규 세대)도 이 기본값으로 동작해야 한다.
+_AGY_EFFORT_SUFFIX_RE = re.compile(r"-(?:low|medium|high)$")
+
+
+def _costs_for(provider: str, model_id: str) -> tuple[Decimal | None, Decimal | None]:
+    costs = _MODEL_COSTS.get(model_id)
+    if costs:
+        return costs
+    if provider == "antigravity":
+        return (_decimal(0.0), _decimal(0.0))
+    return (None, None)
+
+
+def _is_thinking_model(provider: str, model_id: str) -> bool:
+    if model_id in _THINKING_MODELS:
+        return True
+    return provider == "antigravity" and bool(_AGY_EFFORT_SUFFIX_RE.search(model_id))
+
+
 def _build_template(provider: str, model_id: str) -> ModelTemplate:
-    costs = _MODEL_COSTS.get(model_id, (None, None))
+    costs = _costs_for(provider, model_id)
     category = _category_for(model_id)
     execution_backend = None
     execution_base_url = None
@@ -959,7 +987,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
         family=_family_for(provider, model_id),
         category=category,
         supports_tools=_supports_tools_for(provider),
-        supports_thinking=model_id in _THINKING_MODELS or category == "reasoning",
+        supports_thinking=_is_thinking_model(provider, model_id) or category == "reasoning",
         supports_vision=model_id in _VISION_MODELS or category == "vision" or provider == "antigravity",
         supports_coding=model_id in _CODING_MODELS or category == "coding" or provider in {"anthropic", "codex", "antigravity"},
         input_cost=costs[0],
@@ -973,7 +1001,7 @@ def _build_template(provider: str, model_id: str) -> ModelTemplate:
 def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
     capabilities = {
         "tools": _supports_tools_for(provider),
-        "thinking": model_id in _THINKING_MODELS or _category_for(model_id) == "reasoning",
+        "thinking": _is_thinking_model(provider, model_id) or _category_for(model_id) == "reasoning",
         "vision": model_id in _VISION_MODELS or _category_for(model_id) == "vision" or provider == "antigravity",
         "coding": model_id in _CODING_MODELS or _category_for(model_id) == "coding" or provider in {"anthropic", "codex", "antigravity"},
         "raw_generation_methods": (raw or {}).get("supportedGenerationMethods", []),
@@ -1000,9 +1028,9 @@ def _model_capabilities(provider: str, model_id: str, raw: dict[str, Any] | None
     return capabilities
 
 
-def _pricing_for(model_id: str) -> dict[str, str]:
-    costs = _MODEL_COSTS.get(model_id)
-    if not costs:
+def _pricing_for(model_id: str, provider: str = "") -> dict[str, str]:
+    costs = _costs_for(provider, model_id)
+    if costs[0] is None and costs[1] is None:
         return {}
     return {
         "input_cost": str(costs[0]) if costs[0] is not None else "",
@@ -1019,6 +1047,8 @@ def _anthropic_key_supports_models_api(key_name: str) -> bool:
 
 
 def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, Any]) -> bool:
+    if provider == "antigravity":
+        return True  # 키가 아니라 호스트 relay 의 `agy models` 로 수집한다.
     supported = {"openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", *_OPENAI_COMPAT_DISCOVERY_BASE_URLS}
     return provider in supported and int(provider_state.get("available_key_count", 0)) > 0
 
@@ -1240,7 +1270,7 @@ def _discovered_model_row(
         "verification_status": "discovered" if executable else "review_required",
         "last_verified_at": provider_state.get("last_verified_at"),
         "capabilities": _model_capabilities(provider, model_id, raw),
-        "pricing": _pricing_for(model_id),
+        "pricing": _pricing_for(model_id, provider),
         "is_selectable": executable,
         "is_executable": executable,
     }
@@ -1549,6 +1579,80 @@ async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any
     return await asyncio.to_thread(read_codex_models_cache)
 
 
+AGY_DISCOVERY_SOURCE = "antigravity_cli"
+_AGY_MODEL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,80}")
+_AGY_MODELS_TIMEOUT_SECONDS = 25.0
+
+
+def parse_agy_models_output(text: Any) -> list[dict[str, Any]]:
+    """`agy models` 출력(탭 구분 "id\t표시명")을 [{model_id, display_name}] 로. 탭 없는 줄·잘못된 id 는 버린다."""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in str(text or "").splitlines():
+        if "\t" not in line:
+            continue
+        model_id, _, display = line.partition("\t")
+        model_id = model_id.strip()
+        if not _AGY_MODEL_ID_RE.fullmatch(model_id) or model_id in seen:
+            continue
+        seen.add(model_id)
+        rows.append({
+            "model_id": model_id,
+            "display_name": display.strip() or model_id,
+            "raw": {"agy_display_name": display.strip()},
+        })
+    return rows
+
+
+def _agy_unavailable(error: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # 조회 실패는 목록 0개가 아니라 "모름" 이다 — 호출자는 기존 행을 승격·은퇴시키지 않는다.
+    return [], {
+        "status": "unavailable",
+        "count": 0,
+        "error": error,
+        "discovery_source": AGY_DISCOVERY_SOURCE,
+        "runtime_executable": True,
+        "auto_discovery_supported": False,
+        "discovery_requirement": _provider_discovery_requirement("antigravity"),
+        "model_source": "template",
+    }
+
+
+async def _fetch_antigravity_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """호스트 relay 의 GET /antigravity-models(`agy models` 실행)로 목록을 받는다. 발견만 한다 — 실행가능 판정은 probe 몫."""
+    from app.services import model_selector as ms
+
+    headers = {}
+    secret = ms._load_relay_shared_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_AGY_MODELS_TIMEOUT_SECONDS, connect=5.0)) as client:
+            resp = await client.get(f"{ms._CLAUDE_RELAY_URL}/antigravity-models", headers=headers)
+    except Exception as exc:
+        return _agy_unavailable(f"relay_unreachable:{type(exc).__name__}")
+    if resp.status_code != 200:
+        return _agy_unavailable(f"relay_http_{resp.status_code}")
+    try:
+        payload = resp.json()
+        output = payload.get("output") if isinstance(payload, Mapping) else None
+    except ValueError:
+        return _agy_unavailable("relay_invalid_json")
+    rows = parse_agy_models_output(output)
+    if not rows:
+        return _agy_unavailable("agy_models_empty")  # 빈 목록으로 기존 모델을 은퇴시키지 않는다.
+    return rows, {
+        "status": "ok",
+        "count": len(rows),
+        "discovery_source": AGY_DISCOVERY_SOURCE,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "runtime_executable": True,
+        "auto_discovery_supported": True,
+        "discovery_requirement": _provider_discovery_requirement("antigravity"),
+        "model_source": "discovery",
+    }
+
+
 def _discovery_error_code(exc: BaseException, limit: int = 500) -> str:
     """HTTP 오류는 공급자와 무관한 코드(http_<status>)로 정규화한다. 예외 문자열에는 요청 URL(?key=...)이 실릴 수 있다."""
     if isinstance(exc, httpx.HTTPStatusError):
@@ -1800,6 +1904,7 @@ async def discover_provider_model_rows(
         "kimi": _fetch_kimi_models,
         "deepseek": _fetch_deepseek_models,
         "codex": _fetch_codex_cli_models,
+        "antigravity": _fetch_antigravity_models,
         **{
             name: functools.partial(_fetch_openai_compatible_models, name)
             for name in _OPENAI_COMPAT_DISCOVERY_BASE_URLS
@@ -2069,6 +2174,41 @@ def _classify_cli_probe_error(text: Any, retry_after: float | None = None) -> Pr
     return ProbeOutcome(False, "cli_error", False)
 
 
+async def _probe_antigravity_relay(model: str) -> ProbeOutcome:
+    """실제 실행 경로(relay /antigravity-stream)로 1회 호출. 본문이 비어 있으면 실패다."""
+    from app.services import model_selector as ms
+
+    text_parts: list[str] = []
+    seen_done = False
+
+    async def _run() -> ProbeOutcome | None:
+        nonlocal seen_done
+        async for ev in ms._stream_antigravity_relay_once(
+            model, "", [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}]
+        ):
+            kind = ev.get("type")
+            if kind == "error":
+                return _classify_cli_probe_error(ev.get("content"))
+            if kind == "delta":
+                text_parts.append(str(ev.get("content") or ""))
+            elif kind == "done":
+                seen_done = True
+                break
+        return None
+
+    try:
+        failed = await asyncio.wait_for(_run(), timeout=_ACTIVATION_CLI_PROBE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return ProbeOutcome(False, "probe_timeout", True)
+    except Exception as exc:
+        return ProbeOutcome(False, f"fetch_error:{type(exc).__name__}", True)
+    if failed is not None:
+        return failed
+    if not "".join(text_parts).strip():
+        return ProbeOutcome(False, "empty_result" if seen_done else "no_done_event", True)
+    return ProbeOutcome(True)
+
+
 async def _probe_claude_cli_relay(model: str) -> ProbeOutcome:
     """실제 실행 경로(Claude CLI 릴레이, slot1)로 1회 호출. 판정은 result 본문·modelUsage 로만 한다."""
     from app.services import model_selector as ms
@@ -2151,6 +2291,8 @@ async def probe_model_execution(row: Mapping[str, Any]) -> ProbeOutcome:
         "model": model,
         "messages": [{"role": "user", "content": _ACTIVATION_PROBE_PROMPT}],
     }
+    if provider == "antigravity":
+        return await _probe_antigravity_relay(model)
     if provider == "anthropic":
         if backend == "claude_cli_relay":
             return await _probe_claude_cli_relay(model)
@@ -2523,7 +2665,7 @@ def build_registry_snapshots(key_rows: Iterable[dict[str, Any]]) -> tuple[list[d
                     "verification_status": "verified" if has_runtime_models else "unknown",
                     "last_verified_at": state.get("last_verified_at"),
                     "capabilities": _model_capabilities(provider, template.model_id),
-                    "pricing": _pricing_for(template.model_id),
+                    "pricing": _pricing_for(template.model_id, template.provider),
                     "is_selectable": has_runtime_models,
                     "is_executable": has_runtime_models,
                 }
@@ -3430,6 +3572,11 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
     preserve_codex_cli_rows = not any(
         run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
     )
+    # agy 목록을 못 받은 회차(릴레이 불가·빈 출력)에는 antigravity 행을 UPSERT 도 은퇴도 하지 않는다(템플릿 행 포함).
+    # 템플릿 행을 쓰면 discovery_source·metadata·is_executable 이 덮이고 비실행 행이 승격될 수 있다.
+    preserve_agy_cli_rows = not any(
+        run.get("provider") == "antigravity" and run.get("status") == "ok" for run in discovery_runs
+    )
     review_required_providers = sorted(
         {
             row["provider"]
@@ -3476,6 +3623,8 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
         try:
             async with conn.transaction():
                 for row in model_rows:
+                    if preserve_agy_cli_rows and row["provider"] == "antigravity":
+                        continue
                     metadata = _coerce_json_object(row.get("metadata"))
                     for key, value in _reviewed_release_fields(row["provider"], row["model_id"]).items():
                         metadata.setdefault(key, value)
@@ -3591,12 +3740,14 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                     WHERE activation_source <> 'manual'
                       AND COALESCE(metadata->>'sync_token', '') <> $1
                       AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
+                      AND NOT ($5::boolean AND provider = 'antigravity')
                       AND NOT ($4::boolean AND provider = 'anthropic' AND ($3::boolean OR is_executable = TRUE))
                     """,
                     sync_token,
                     preserve_codex_cli_rows,
                     lookup_failed,
                     guard_anthropic,
+                    preserve_agy_cli_rows,
                 )
 
                 await append_key_audit_log(

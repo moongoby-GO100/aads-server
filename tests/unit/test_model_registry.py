@@ -500,6 +500,7 @@ async def test_discovery_reports_observed_skips_without_latest_guarantee(monkeyp
         return [], {"status": "skipped", "error": "google_routes_disabled", "runtime_executable": False}
     for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
                  "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_deepseek_models", "_fetch_codex_cli_models",
+                 "_fetch_antigravity_models",
                  "_fetch_openai_compatible_models"):
         monkeypatch.setattr(model_registry, name, skipped)
     rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)
@@ -569,6 +570,7 @@ async def test_discovery_observes_failures_without_changing_provider_set(monkeyp
         raise RuntimeError("test catalog unavailable")
     for name in ("_fetch_openai_models", "_fetch_anthropic_models", "_fetch_gemini_models",
                  "_fetch_litellm_models", "_fetch_kimi_models", "_fetch_deepseek_models", "_fetch_codex_cli_models",
+                 "_fetch_antigravity_models",
                  "_fetch_openai_compatible_models"):
         monkeypatch.setattr(model_registry, name, failed)
     rows, runs = await model_registry.discover_provider_model_rows([], enabled=True)

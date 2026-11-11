@@ -432,7 +432,7 @@ async def test_sync_guard_keeps_last_executable_and_logs_error(sync_env, monkeyp
     with caplog.at_level("ERROR"):
         upserts, retire = await _run_sync(sync_env, monkeypatch, rows, ["claude-a-1-1"])
     assert upserts["claude-a-1-1"] is True  # downgrade not applied
-    assert retire[0][-1] is True  # retire SQL spared executable anthropic rows
+    assert retire[0][4] is True  # retire SQL spared executable anthropic rows
     assert "sync_would_zero_anthropic_executable" in caplog.text
 
 
@@ -442,7 +442,7 @@ async def test_sync_partial_disable_applies_normally(sync_env, monkeypatch, capl
     with caplog.at_level("ERROR"):
         upserts, retire = await _run_sync(sync_env, monkeypatch, rows, ["claude-a-1-1", "claude-b-1-1"])
     assert upserts == {"claude-a-1-1": False, "claude-b-1-1": True}
-    assert retire[0][-1] is False
+    assert retire[0][4] is False
     assert "sync_would_zero" not in caplog.text
 
 
@@ -456,7 +456,7 @@ async def test_sync_guard_lookup_exception_fails_closed(sync_env, monkeypatch, c
         )
     assert upserts["claude-a-1-1"] is False  # R5: does not promote to True
     assert upserts["gpt-b-1-1"] is False  # other provider sync continues normally
-    assert retire[0][-1] is True  # retire SQL spared executable anthropic rows
+    assert retire[0][4] is True  # retire SQL spared executable anthropic rows
     assert "anthropic_guard_lookup_failed" in caplog.text
 
 

@@ -342,12 +342,23 @@ async def test_missing_binary_is_error_event(relay, monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_unknown_model_rejected_before_spawn(relay, monkeypatch, tmp_path):
     marker = tmp_path / "spawned"
+    refreshes = []
+
+    async def _no_models():  # 실행 전 허용 목록 갱신(`agy models`)은 가짜 agy 를 건드리지 않게 막는다
+        refreshes.append(1)
+        return "", [], "agy_models_failed", 1
+
+    monkeypatch.setattr(relay, "_ANTIGRAVITY_LIVE_MODELS", {})
+    monkeypatch.setattr(relay, "_ANTIGRAVITY_REFRESH_LOCK", None)
+    monkeypatch.setattr(relay, "_ANTIGRAVITY_LAST_REFRESH", 0.0)
+    monkeypatch.setattr(relay, "_fetch_antigravity_models_text", _no_models)
     status, events, text = await _call(
         relay, monkeypatch, tmp_path, f"touch {marker}\necho hi\n",
         payload={"model": "gemini-3.5-flash", "messages_text": "x"},
     )
     assert status == 400
     assert "unknown_antigravity_model" in text
+    assert refreshes == [1]  # 목록에 없으면 거절 전에 1회 갱신을 시도한다
     assert not marker.exists()
 
 
@@ -743,6 +754,13 @@ async def test_antigravity_failure_falls_back_to_codex_chain(monkeypatch):
 
 # ── model_selector: _stream_antigravity_relay_once 도구 전달·이벤트 변환·타임아웃 ──
 def _patch_relay_http(monkeypatch, stream_lines, captured):
+    # antigravity_enabled() 는 DB(llm_api_keys)를 읽는다 — 단위 테스트에서는 풀이 없으므로 활성으로 고정한다.
+    import app.core.antigravity_account as _agy_account
+
+    async def _enabled():
+        return True
+
+    monkeypatch.setattr(_agy_account, "antigravity_enabled", _enabled)
     class _FakeResp:
         status_code = 200
 
