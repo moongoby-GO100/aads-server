@@ -1251,6 +1251,8 @@ class ToolExecutor:
             "confirm_milestone":      self._confirm_milestone,
             "work_item_review":       self._work_item_review,
             "work_item_change_set_execute": self._work_item_change_set_execute,
+            "work_item_change_set_create": self._work_item_change_set_create,
+            "work_item_create": self._work_item_create,
             # AADS-190: 내보내기 + 스케줄러
             "export_data":            self._export_data,
             "schedule_task":          self._schedule_task,
@@ -5828,6 +5830,190 @@ class ToolExecutor:
             "change_set_id": change_set_id,
             "state": result.get("state") if isinstance(result, dict) else None,
             "execution_key": execution_key,
+        }
+
+    @staticmethod
+    def _work_item_bound_session() -> str:
+        """contextvar 세션을 UUID 로 검증해 돌려준다. 없거나 형식이 틀리면 빈 문자열."""
+        sid = str(current_chat_session_id.get("") or "").strip()
+        try:
+            return str(uuid.UUID(sid)) if sid else ""
+        except (ValueError, AttributeError):
+            return ""
+
+    async def _work_item_write_actor(self, conn: Any, *, target_project: str, goal_id: Optional[str]) -> Any:
+        """등록 도구 공통 권한 판정. (actor, None) 또는 (None, 오류코드) 를 돌려준다.
+
+        허용: 호출 세션이 target_project 의 active 배정을 가졌거나 goal_id 목표의 주도 세션.
+        세션은 contextvar 바인딩만 인정한다(입력으로 받지 않는다).
+        """
+        from app.services.goal_work_hierarchy import resolve_actor_scope
+
+        sid = self._work_item_bound_session()
+        if not sid:
+            return None, "execute_session_required"
+        session = await conn.fetchrow(
+            "SELECT tenant_id::text AS tenant_id, user_id FROM chat_sessions WHERE id = $1::uuid", sid,
+        )
+        if not session:
+            return None, "project_scope_denied"
+        user_id = str(session["user_id"] or "").strip()
+        if not user_id:
+            return None, "execute_session_owner_required"
+        actor = await resolve_actor_scope(
+            conn, tenant_id=str(session["tenant_id"]), user_id=user_id, actor_session_id=sid,
+        )
+        if not actor.may_access(target_project):
+            return None, "project_scope_denied"
+        assigned = await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM project_role_assignments
+                 WHERE tenant_id=$1::uuid AND project=$2 AND session_id=$3::uuid AND active)""",
+            actor.tenant_id, target_project, sid,
+        )
+        lead = bool(goal_id) and bool(await conn.fetchval(
+            """SELECT EXISTS(SELECT 1 FROM goals WHERE id=$1::uuid AND tenant_id=$2::uuid
+                 AND owner_session_id=$3::uuid)""",
+            goal_id, actor.tenant_id, sid,
+        ))
+        if not (assigned or lead):
+            return None, "work_item_write_not_permitted"
+        return actor, None
+
+    _WORK_ITEM_WRITE_MESSAGES = {
+        "execute_session_required": "세션을 확인할 수 없어 처리할 수 없다",
+        "execute_session_owner_required": "소유자가 확인되지 않는 세션은 등록할 수 없다",
+        "project_scope_denied": "이 세션이 접근할 수 없는 프로젝트다",
+        "work_item_write_not_permitted": "이 프로젝트의 active 배정이 없거나 해당 목표의 주도 세션이 아니라 등록할 수 없다",
+        "goal_work_hierarchy_disabled": "업무 카드 기능이 꺼져 있다",
+        "goal_workflow_approval_disabled": "업무 카드 승인 기능이 꺼져 있다",
+        "invalid_request": "입력 형식이 올바르지 않다",
+        "acceptance_criteria_required": "acceptance_criteria 는 1개 이상 필요하다",
+        "work_item_not_found": "대상 업무 카드를 찾을 수 없다",
+        "goal_not_found": "목표를 찾을 수 없다",
+        "work_item_write_failed": "등록 중 오류가 발생했다 (변경 없음)",
+    }
+
+    def _work_item_write_fail(self, code: str, **extra: Any) -> Dict[str, Any]:
+        return {"error": code, "message": self._WORK_ITEM_WRITE_MESSAGES.get(code, code), **extra}
+
+    async def _work_item_change_set_create(self, inp: Dict[str, Any]) -> Any:
+        """업무 변경안 등록. 검증·해시·멱등·승인 경로 생성은 create_change_set/route_change_set 에 위임한다."""
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+
+        from app.core.db_pool import get_pool
+        from app.core.goal_work_hierarchy_policy import (
+            goal_work_hierarchy_enabled,
+            workflow_approval_enabled,
+        )
+        from app.routers.work_items import ChangeSetRequest
+        from app.services.goal_workflow_approval import create_change_set, route_change_set
+
+        fail = self._work_item_write_fail
+        if not goal_work_hierarchy_enabled():
+            return fail("goal_work_hierarchy_disabled")
+        if not workflow_approval_enabled():
+            return fail("goal_workflow_approval_disabled")
+        target_id = str(inp.get("target_id") or "").strip()
+        try:
+            target_id = str(uuid.UUID(target_id))
+            req = ChangeSetRequest.model_validate({k: v for k, v in inp.items() if k != "target_id"})
+        except (ValueError, AttributeError, ValidationError):
+            return fail("invalid_request")
+        try:
+            async with get_pool().acquire() as conn, conn.transaction():
+                sess = self._work_item_bound_session()
+                if not sess:
+                    return fail("execute_session_required")
+                tenant = await conn.fetchval(
+                    "SELECT tenant_id::text FROM chat_sessions WHERE id = $1::uuid", sess,
+                ) if sess else None
+                target = await conn.fetchrow(
+                    "SELECT project, goal_id::text AS goal_id FROM work_items "
+                    "WHERE id = $1::uuid AND tenant_id = $2::uuid", target_id, tenant,
+                ) if tenant else None
+                if not target:
+                    # 세션 없음/다른 테넌트/없는 카드를 구분해 알리지 않는다(존재 노출 방지).
+                    return fail("execute_session_required" if not sess else "work_item_not_found")
+                actor, err = await self._work_item_write_actor(
+                    conn, target_project=str(target["project"]), goal_id=target["goal_id"],
+                )
+                if err:
+                    return fail(err)
+                created = await create_change_set(
+                    conn, tenant_id=actor.tenant_id, actor=actor, target_id=target_id,
+                    payload=req.model_dump(mode="json"),
+                )
+                routing = await route_change_set(
+                    conn, tenant_id=actor.tenant_id, change_set_id=created["id"], actor=actor,
+                )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return fail(str(detail.get("code") or "work_item_write_failed"))
+        except Exception as exc:
+            logger.error("work_item_change_set_create failed target=%s: %s", target_id, type(exc).__name__, exc_info=True)
+            return fail("work_item_write_failed")
+        return {
+            "ok": True,
+            "change_set_id": created.get("id"),
+            "state": created.get("state"),
+            "patch_hash": created.get("patch_hash"),
+            "required_routes": routing.get("required_routes"),
+            "approval_request_ids": routing.get("approval_request_ids"),
+        }
+
+    async def _work_item_create(self, inp: Dict[str, Any]) -> Any:
+        """목표·마일스톤 아래 task 등록. 계층·멱등·테넌트 검증은 create_work_item 에 위임한다."""
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+
+        from app.core.db_pool import get_pool
+        from app.core.goal_work_hierarchy_policy import goal_work_hierarchy_enabled
+        from app.routers.goals import WorkItemCreateRequest
+        from app.services.goal_work_hierarchy import create_work_item
+
+        fail = self._work_item_write_fail
+        if not goal_work_hierarchy_enabled():
+            return fail("goal_work_hierarchy_disabled")
+        try:
+            goal_id = str(uuid.UUID(str(inp.get("goal_id") or "").strip()))
+            req = WorkItemCreateRequest.model_validate({k: v for k, v in inp.items() if k != "goal_id"})
+        except (ValueError, AttributeError, ValidationError):
+            return fail("invalid_request")
+        if not req.acceptance_criteria:
+            return fail("acceptance_criteria_required")
+        try:
+            async with get_pool().acquire() as conn, conn.transaction():
+                sess = self._work_item_bound_session()
+                if not sess:
+                    return fail("execute_session_required")
+                goal = await conn.fetchrow(
+                    "SELECT g.project FROM goals g JOIN chat_sessions s ON s.tenant_id = g.tenant_id "
+                    "WHERE g.id = $1::uuid AND s.id = $2::uuid", goal_id, sess,
+                ) if sess else None
+                if not goal:
+                    return fail("execute_session_required" if not sess else "goal_not_found")
+                actor, err = await self._work_item_write_actor(
+                    conn, target_project=str(goal["project"]), goal_id=goal_id,
+                )
+                if err:
+                    return fail(err)
+                item, created = await create_work_item(
+                    conn, tenant_id=actor.tenant_id, actor=actor, goal_id=goal_id,
+                    payload=req.model_dump(mode="json"),
+                )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            return fail(str(detail.get("code") or "work_item_write_failed"))
+        except Exception as exc:
+            logger.error("work_item_create failed goal=%s: %s", goal_id, type(exc).__name__, exc_info=True)
+            return fail("work_item_write_failed")
+        return {
+            "ok": True,
+            "work_item_id": item.get("id"),
+            "type": item.get("type"),
+            "status": item.get("status"),
+            "idempotent_replay": not created,
         }
 
     async def _ask_session(self, inp: Dict[str, Any]) -> Any:

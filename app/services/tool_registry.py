@@ -74,6 +74,8 @@ _DEFER_LOADING: Dict[str, bool] = {
     "confirm_milestone": True,             # 마일스톤 완료 판정 — 주도 (2026-09-14)
     "work_item_review": True,              # 업무 카드 인수/보완요청 — 담당 본인 제외 (2026-11-04)
     "work_item_change_set_execute": True,  # 승인된 변경안 실행 — 현재 턴 lease 로 execute_change_set (2026-11-04)
+    "work_item_change_set_create": True,   # 업무 변경안 등록 — create_change_set+route_change_set 경유 (2026-11-11)
+    "work_item_create": True,              # 목표·마일스톤 아래 epic/story/task 등록 — create_work_item 경유 (2026-11-11)
     "save_note": True,
     "recall_notes": True,
     "delete_note": True,
@@ -615,6 +617,58 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                 "change_set_id": {"type": "string", "description": "업무 변경안(work_item_change_sets) id (UUID)"},
             },
             "required": ["change_set_id"],
+        },
+    },
+    "work_item_change_set_create": {
+        "name": "work_item_change_set_create",
+        "description": (
+            "업무 카드(work_item)에 대한 변경안을 등록합니다(승인 요청까지만 — 승인·실행은 하지 않습니다). "
+            "기존 create_change_set + route_change_set 을 그대로 거치므로 patch 검증, patch_hash, base_version 충돌(409), "
+            "idempotency_key 재전송 처리, 승인 경로 생성이 동일하게 적용됩니다. "
+            "호출 세션이 대상 카드 프로젝트의 active 배정을 가졌거나 해당 목표의 주도 세션일 때만 허용되며, "
+            "아니면 work_item_write_not_permitted 를 반환합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_id": {"type": "string", "description": "대상 업무 카드(work_items) id (UUID)"},
+                "base_version": {"type": "integer", "description": "현재 카드 version (불일치 시 version_conflict)"},
+                "patch": {"type": "array", "items": {"type": "object"}, "description": "변경 patch 연산 목록"},
+                "action": {"type": "string", "enum": ["create", "update", "assign", "cancel", "execute", "accept"], "description": "기본 update"},
+                "rationale": {"type": "string", "description": "변경 이유"},
+                "expected_effect": {"type": "string", "description": "기대 효과"},
+                "rollback_plan": {"type": "string", "description": "되돌리는 방법"},
+                "idempotency_key": {"type": "string", "description": "재시도 안전 키 (같은 키·같은 내용이면 기존 변경안 반환)"},
+                "environment": {"type": "string", "enum": ["dev", "staging", "production"], "description": "기본 dev"},
+                "risk_factors": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["target_id", "base_version", "patch", "rationale", "expected_effect", "rollback_plan", "idempotency_key"],
+        },
+    },
+    "work_item_create": {
+        "name": "work_item_create",
+        "description": (
+            "목표(goal)·마일스톤 아래에 epic/story/task 업무 카드를 등록합니다. 기존 create_work_item 을 그대로 거치므로 "
+            "계층 검증(epic 은 parent 없음, story→epic, task→story), 마일스톤 소속, idempotency_key, 테넌트 검증이 동일하게 "
+            "적용됩니다. acceptance_criteria 는 1개 이상 필수입니다. "
+            "호출 세션이 해당 프로젝트의 active 배정을 가졌거나 해당 목표의 주도 세션일 때만 허용되며, "
+            "아니면 work_item_write_not_permitted 를 반환합니다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "string", "description": "목표 id (UUID)"},
+                "type": {"type": "string", "enum": ["epic", "story", "task"]},
+                "milestone_id": {"type": "string", "description": "목표 소속 마일스톤 id (UUID)"},
+                "parent_id": {"type": "string", "description": "상위 카드 id. epic 은 생략, story/task 는 필수"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "acceptance_criteria": {"type": "array", "items": {}, "description": "완료 기준 (1개 이상 필수)"},
+                "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+                "assignment_id": {"type": "string", "description": "배정(project_role_assignments) id — 선택"},
+                "idempotency_key": {"type": "string"},
+            },
+            "required": ["goal_id", "type", "milestone_id", "title", "acceptance_criteria", "idempotency_key"],
         },
     },
     "ask_session": {
@@ -4050,7 +4104,7 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
 
 _GROUPS: Dict[str, List[str]] = {
     "system": ["health_check", "dashboard_query", "task_history", "server_status"],
-    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "canonical_document_approve", "mockup_review_submit", "skill_find", "skill_load", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status", "work_item_change_set_execute"],
+    "action": ["goal_register", "directive_create", "create_design_modification_request", "todo_write", "handover_write", "handover_search", "handover_export", "canonical_document_register", "canonical_document_lookup", "canonical_document_review", "canonical_document_approve", "mockup_review_submit", "skill_find", "skill_load", "skill_execute", "read_github_file", "query_database", "query_project_database", "read_remote_file", "list_remote_dir", "cost_report", "export_data", "schedule_task", "read_uploaded_file", "google_sheets_register", "google_sheets_read", "google_sheets_update", "google_sheets_append", "google_sheets_write_records", "google_sheets_clear", "google_sheets_create", "device_command", "generate_image", "edit_image", "generate_video", "video_status", "video_download", "local_model_queue_status", "local_model_install_test", "generate_music", "generate_three_d_asset", "media_job_status", "work_item_change_set_execute", "work_item_change_set_create", "work_item_create"],
     "search": ["search_crawl_match", "search_searxng", "web_search"],
     "workflow": ["inspect_service", "get_all_service_status", "generate_directive"],
     # AADS-159: 브라우저 도구 그룹 (소스 분석 도구도 함께 제공 — Tier 6 원칙)
