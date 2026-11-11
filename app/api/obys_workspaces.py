@@ -2974,7 +2974,10 @@ async def workspace_records(
         route=selected_route, user=current_user, business_id=business_id,
         date_from=date_from, date_to=date_to, own_email=own_email,
     )
-    source_rows = _filter_source_dates(source_rows, date_from, date_to)
+    if selected_route == "payroll":
+        _filter_source_dates([], date_from, date_to)
+    else:
+        source_rows = _filter_source_dates(source_rows, date_from, date_to)
     matching = _filter(
         [_record(kind, row, business["name"]) for kind, row in source_rows], search, status
     )
