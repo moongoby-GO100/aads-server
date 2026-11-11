@@ -2856,6 +2856,7 @@ _ANTIGRAVITY_MODEL_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,80}")
 _ANTIGRAVITY_LIVE_MODELS = {}
 _ANTIGRAVITY_LIVE_TTL_SEC = float(os.getenv("AGY_RELAY_LIVE_MODELS_TTL_SEC", "900"))
 _ANTIGRAVITY_MODELS_TIMEOUT_SEC = float(os.getenv("AGY_RELAY_MODELS_TIMEOUT_SEC", "20"))
+_CODEX_MODELS_TIMEOUT_SEC = float(os.getenv("CODEX_RELAY_MODELS_TIMEOUT_SEC", "25"))
 
 
 def _parse_antigravity_models_output(text):
@@ -3924,6 +3925,32 @@ async def handle_antigravity_models(request):
     return web.json_response({"output": text, "count": len(ids)})
 
 
+async def handle_codex_models(request):
+    """호스트의 `codex debug models`(카탈로그 JSON)를 그대로 돌려준다. API 컨테이너에는 codex 가 없다.
+
+    실패하면 502/504 — 빈 목록으로 위장하지 않는다(호출자는 실패 시 codex 행을 건드리지 않는다).
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CODEX_BIN, "debug", "models",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return web.json_response({"error": "codex_spawn_failed", "detail": type(exc).__name__}, status=502)
+    try:
+        out, _err = await asyncio.wait_for(proc.communicate(), timeout=_CODEX_MODELS_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        return web.json_response({"error": "codex_models_timeout"}, status=504)
+    if proc.returncode != 0:
+        return web.json_response({"error": "codex_models_failed", "returncode": proc.returncode}, status=502)
+    return web.json_response({"output": out.decode("utf-8", errors="replace")})
+
+
 async def handle_account_login_start(request):
     """OAuth 재로그인을 시작한다 — 화면의 '재로그인' 버튼이 여기를 부른다.
 
@@ -4105,6 +4132,7 @@ def create_app():
     app.router.add_post("/codex-stream", handle_codex_stream)
     app.router.add_post("/antigravity-stream", handle_antigravity_stream)
     app.router.add_get("/antigravity-models", handle_antigravity_models)
+    app.router.add_get("/codex-models", handle_codex_models)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/leases", handle_leases)
     app.router.add_get("/codex-usage", handle_codex_usage)

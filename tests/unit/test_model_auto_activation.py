@@ -844,6 +844,8 @@ class _SyncConn:
             return []
         if query.strip() == "SELECT provider, model_id FROM llm_models":
             return [{"provider": p, "model_id": m} for p, m in self.models]
+        if "SELECT provider, model_id, input_cost, output_cost, supports_thinking" in query:
+            return []  # DB 우선 속성 조회 — 이 fake 는 저장된 가격·thinking 값이 없다.
         if "activation_probe" in query:
             return [
                 {

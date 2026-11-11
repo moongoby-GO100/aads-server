@@ -717,6 +717,7 @@ _MODEL_CANONICAL_ALIASES: dict[str, str] = {
 }
 
 _DISCOVERY_REQUIREMENTS = {
+    "codex": "Claude relay(호스트) 의 GET /codex-models 가 `codex debug models` 를 실행해 카탈로그를 돌려준다(실패 시 models_cache.json)",
     "antigravity": "Claude relay(호스트) 의 GET /antigravity-models 가 `agy models` 를 실행해 목록을 돌려준다",
     "anthropic": "x-api-key required for Models API; OAuth auth token supports runtime only",
     "openai": "Bearer provider key required",
@@ -947,12 +948,35 @@ def _costs_for(provider: str, model_id: str) -> tuple[Decimal | None, Decimal | 
         return costs
     if provider == "antigravity":
         return (_decimal(0.0), _decimal(0.0))
+    if provider == "codex":
+        return _codex_family_costs(model_id)
     return (None, None)
+
+
+_CODEX_MODEL_ID_RE = re.compile(r"^gpt-(\d+(?:\.\d+)?)-([a-z]+)$")
+
+
+def _codex_family_costs(model_id: str) -> tuple[Decimal | None, Decimal | None]:
+    """표에 없는 신규 codex 모델은 같은 등급(sol/terra/luna/astra) 중 가장 높은 알려진 세대의 단가를 시드로 쓴다."""
+    match = _CODEX_MODEL_ID_RE.match(model_id)
+    if not match:
+        return (None, None)
+    best: tuple[float, tuple[Decimal | None, Decimal | None]] | None = None
+    for known in _PROVIDER_MODELS.get("codex", ()):
+        known_match = _CODEX_MODEL_ID_RE.match(known)
+        if not known_match or known_match.group(2) != match.group(2) or known not in _MODEL_COSTS:
+            continue
+        version = float(known_match.group(1))
+        if best is None or version > best[0]:
+            best = (version, _MODEL_COSTS[known])
+    return best[1] if best else (None, None)
 
 
 def _is_thinking_model(provider: str, model_id: str) -> bool:
     if model_id in _THINKING_MODELS:
         return True
+    if provider == "codex" and _CODEX_MODEL_ID_RE.match(model_id):
+        return True  # codex CLI 의 gpt-N-등급 모델은 모두 추론 강도를 갖는다 — 표에 없는 신규 세대도 같다.
     return provider == "antigravity" and bool(_AGY_EFFORT_SUFFIX_RE.search(model_id))
 
 
@@ -1047,10 +1071,56 @@ def _anthropic_key_supports_models_api(key_name: str) -> bool:
 
 
 def _provider_auto_discovery_supported(provider: str, provider_state: dict[str, Any]) -> bool:
-    if provider == "antigravity":
-        return True  # 키가 아니라 호스트 relay 의 `agy models` 로 수집한다.
+    if provider in {"antigravity", "codex"}:
+        return True  # 키가 아니라 호스트 relay(`agy models`/`codex debug models`) 또는 codex 캐시로 수집한다.
     supported = {"openai", "anthropic", "gemini", "litellm", "kimi", "deepseek", *_OPENAI_COMPAT_DISCOVERY_BASE_URLS}
     return provider in supported and int(provider_state.get("available_key_count", 0)) > 0
+
+
+# 코드 고정 표(_MODEL_COSTS/_THINKING_MODELS)는 DB 에 값이 없을 때의 시드다. CLI 구독 provider 는 DB 값이 우선한다.
+_DB_ATTRIBUTE_PRIORITY_PROVIDERS = frozenset({"codex", "antigravity"})
+
+
+def apply_db_attribute_priority(model_rows: Iterable[dict[str, Any]], db_rows: Iterable[Mapping[str, Any]]) -> int:
+    """llm_models 에 이미 있는 가격·thinking 값을 코드 표 값보다 우선한다. NULL 이면 표(시드)·계열 기본값을 그대로 둔다."""
+    existing = {(str(r["provider"]), str(r["model_id"])): r for r in db_rows}
+    changed = 0
+    for row in model_rows:
+        if row.get("provider") not in _DB_ATTRIBUTE_PRIORITY_PROVIDERS:
+            continue
+        db = existing.get((row["provider"], row["model_id"]))
+        if not db:
+            continue
+        touched = False
+        for col in ("tier", "fallback_group"):
+            if db.get(col) is not None and row.get(col) != db[col]:
+                row[col] = db[col]  # DB 의 tier·fallback_group 이 코드 계열 기본값보다 우선한다.
+                touched = True
+        db_meta = _coerce_json_object(db.get("metadata"))
+        if db_meta:
+            # DB 에 있던 metadata 키를 보존하고, 코드가 이번에 계산한 키만 덮어쓴다(merge).
+            row["metadata"] = {**db_meta, **_coerce_json_object(row.get("metadata"))}
+        for col in ("input_cost", "output_cost"):
+            if db.get(col) is not None and row.get(col) != db[col]:
+                row[col] = db[col]
+                touched = True
+        if db.get("supports_thinking") is not None and row.get("supports_thinking") != db["supports_thinking"]:
+            row["supports_thinking"] = bool(db["supports_thinking"])
+            caps = _coerce_json_object(row.get("capabilities"))
+            caps["thinking"] = bool(db["supports_thinking"])
+            row["capabilities"] = caps
+            touched = True
+        if touched:
+            pricing = _coerce_json_object(row.get("pricing"))
+            if row.get("input_cost") is not None or row.get("output_cost") is not None:
+                pricing.update({
+                    "input_cost": str(row["input_cost"]) if row.get("input_cost") is not None else "",
+                    "output_cost": str(row["output_cost"]) if row.get("output_cost") is not None else "",
+                    "unit": "usd_per_1m_tokens",
+                })
+                row["pricing"] = pricing
+            changed += 1
+    return changed
 
 
 def _provider_discovery_requirement(provider: str) -> str:
@@ -1572,11 +1642,75 @@ async def _fetch_kimi_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return rows, {"status": "ok", "count": len(rows), "model_source": "discovery"}
 
 
-async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """codex CLI 가 ChatGPT 백엔드에서 받아 둔 카탈로그. 발견만 한다 — 실행가능 판정은 probe 몫."""
-    from app.services.cli_model_autoreg import read_codex_models_cache
+_CODEX_MODELS_TIMEOUT_SECONDS = 30.0
 
-    return await asyncio.to_thread(read_codex_models_cache)
+
+async def _fetch_codex_models_from_relay() -> tuple[list[dict[str, Any]], str]:
+    """호스트 relay 의 GET /codex-models(`codex debug models`)를 파싱한다. (rows, error). error 가 있으면 rows 는 비어 있다."""
+    from app.services import model_selector as ms
+    from app.services.cli_model_autoreg import parse_codex_models_cache
+
+    headers = {}
+    secret = ms._load_relay_shared_secret()
+    if secret:
+        headers["X-Claude-Relay-Secret"] = secret
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_CODEX_MODELS_TIMEOUT_SECONDS, connect=5.0)) as client:
+            resp = await client.get(f"{ms._CLAUDE_RELAY_URL}/codex-models", headers=headers)
+    except Exception as exc:
+        return [], f"relay_unreachable:{type(exc).__name__}"
+    if resp.status_code != 200:
+        return [], f"relay_http_{resp.status_code}"
+    try:
+        payload = resp.json()
+        output = payload.get("output") if isinstance(payload, Mapping) else None
+        catalog = json.loads(output) if isinstance(output, str) else None
+    except ValueError:
+        return [], "relay_invalid_json"
+    if not isinstance(catalog, Mapping) or not isinstance(catalog.get("models"), list):
+        return [], "codex_catalog_invalid"
+    rows, _hidden = parse_codex_models_cache(catalog)
+    if not rows:
+        return [], "codex_models_empty"  # 빈 목록으로 기존 모델을 은퇴시키지 않는다.
+    return rows, ""
+
+
+async def _fetch_codex_cli_models() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """codex CLI 카탈로그를 수집한다. 발견만 한다 — 실행가능 판정은 probe 몫.
+
+    1순위: 호스트 relay 의 `codex debug models`(실측). 2순위: 기존 models_cache.json 경로.
+    둘 다 실패하면 status=unavailable — 호출자는 codex 행을 UPSERT 도 은퇴도 시키지 않는다.
+    """
+    from app.services import cli_model_autoreg
+
+    rows, relay_error = await _fetch_codex_models_from_relay()
+    if rows:
+        return rows, {
+            "status": "ok",
+            "count": len(rows),
+            "source": "relay_codex_debug_models",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "discovery_source": cli_model_autoreg.DISCOVERY_SOURCE,
+            "runtime_executable": False,
+            "auto_discovery_supported": True,
+            "discovery_requirement": _provider_discovery_requirement("codex"),
+            "model_source": "discovery",
+        }
+    cache_rows, meta = await asyncio.to_thread(cli_model_autoreg.read_codex_models_cache)
+    meta = dict(meta)
+    meta["relay_error"] = relay_error
+    meta["auto_discovery_supported"] = True
+    if meta.get("status") == "ok" and not cache_rows:
+        # 빈 캐시({"models": []})는 relay 빈 목록과 같다 — 조회 실패로 취급해 기존 codex 행을 UPSERT·은퇴시키지 않는다.
+        meta.update({
+            "status": "unavailable",
+            "count": 0,
+            "error": "empty_cache",
+            "model_source": "template",
+        })
+    elif meta.get("status") == "ok":
+        meta["source"] = "models_cache"
+    return cache_rows, meta
 
 
 AGY_DISCOVERY_SOURCE = "antigravity_cli"
@@ -3166,8 +3300,37 @@ _MODEL_TIER_CATALOG: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 
+# codex gpt-N-등급: 등급별 (tier, fallback_group). 표에 없는 신규 세대는 같은 등급의 가장 높은 알려진 세대 값을 따른다.
+_MODEL_TIER_CATALOG.update({
+    ("codex", "gpt-6-astra"): ("S", "premium"),
+    ("codex", "gpt-6-sol"): ("A", "standard"),
+    ("codex", "gpt-6.1-sol"): ("A", "standard"),
+    ("codex", "gpt-6.1-terra"): ("A", "standard"),
+    ("codex", "gpt-6-luna"): ("B", "standard"),
+    ("codex", "gpt-5.6-sol"): ("A", "standard"),
+    ("codex", "gpt-5.6-terra"): ("A", "standard"),
+    ("codex", "gpt-5.6-luna"): ("B", "standard"),
+})
+
+
 def _catalog_tier(provider: str, model_id: str) -> tuple[str | None, str | None]:
-    return _MODEL_TIER_CATALOG.get((provider, model_id), (None, None))
+    exact = _MODEL_TIER_CATALOG.get((provider, model_id))
+    if exact:
+        return exact
+    if provider != "codex":
+        return (None, None)
+    match = _CODEX_MODEL_ID_RE.match(model_id)
+    if not match:
+        return (None, None)
+    best: tuple[float, tuple[str, str]] | None = None
+    for (known_provider, known_id), value in _MODEL_TIER_CATALOG.items():
+        known_match = _CODEX_MODEL_ID_RE.match(known_id) if known_provider == "codex" else None
+        if not known_match or known_match.group(2) != match.group(2):
+            continue
+        version = float(known_match.group(1))
+        if best is None or version > best[0]:
+            best = (version, value)
+    return best[1] if best else (None, None)
 
 
 async def _fetch_last_discovery_success(conn: asyncpg.Connection) -> dict[str, str]:
@@ -3492,6 +3655,14 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
             for r in await conn.fetch("SELECT provider, model_id FROM llm_models")
         }
         verified_codex_ids = await cli_model_autoreg.fetch_verified_codex_ids(conn)
+        db_attribute_rows = [
+            dict(r) for r in await conn.fetch(
+                "SELECT provider, model_id, input_cost, output_cost, supports_thinking, tier, fallback_group, metadata "
+                "FROM llm_models "
+                "WHERE provider = ANY($1::text[])",
+                sorted(_DB_ATTRIBUTE_PRIORITY_PROVIDERS),
+            )
+        ]
         prior_success = await _fetch_last_discovery_success(conn)
         activation_state = await _fetch_activation_state(conn)
     manual_active_keys = {(r["provider"], r["model_id"]) for r in manual_rows}
@@ -3516,6 +3687,7 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
         for run in discovery_runs
     ]
     model_rows = _merge_model_rows(template_rows, discovered_rows)
+    apply_db_attribute_priority(model_rows, db_attribute_rows)
     activation: dict[str, Any] = {}
     # 플래그는 새 활성화·probe 호출만 끈다. 발견 행은 항상 이 단계를 거쳐야 기존 활성 상태·probe 이력이 UPSERT 에서 보존된다.
     activation = await apply_activation_probes(
@@ -3568,7 +3740,7 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
         and _row_meta(row).get("activation_review_reason") == "auto_activation_disabled"
     }
     cli_model_autoreg.apply_verified_codex(model_rows, set(verified_codex_ids) - held_codex_ids)
-    # 캐시를 못 읽은 회차에는 codex_cli_cache 행을 은퇴시키지 않는다 — probe 가 세운 is_executable 을 지킨다.
+    # codex 목록(relay·캐시)을 못 받은 회차에는 codex 행을 UPSERT 도 은퇴도 하지 않는다 — probe 가 세운 is_executable·템플릿 행 포함.
     preserve_codex_cli_rows = not any(
         run.get("provider") == "codex" and run.get("status") == "ok" for run in discovery_runs
     )
@@ -3625,6 +3797,8 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                 for row in model_rows:
                     if preserve_agy_cli_rows and row["provider"] == "antigravity":
                         continue
+                    if preserve_codex_cli_rows and row["provider"] == "codex":
+                        continue
                     metadata = _coerce_json_object(row.get("metadata"))
                     for key, value in _reviewed_release_fields(row["provider"], row["model_id"]).items():
                         metadata.setdefault(key, value)
@@ -3632,6 +3806,8 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                     capabilities = _coerce_json_object(row.get("capabilities"))
                     pricing = _coerce_json_object(row.get("pricing"))
                     tier, fallback_group = _catalog_tier(row["provider"], row["model_id"])
+                    tier = row.get("tier") or tier
+                    fallback_group = row.get("fallback_group") or fallback_group
                     is_exec_val = (
                         False
                         if (lookup_failed and row["provider"] == "anthropic")
@@ -3739,7 +3915,7 @@ async def _sync_model_registry_locked(*, triggered_by: str = "system", reason: s
                         updated_at = NOW()
                     WHERE activation_source <> 'manual'
                       AND COALESCE(metadata->>'sync_token', '') <> $1
-                      AND NOT ($2::boolean AND COALESCE(discovery_source, '') = 'codex_cli_cache')
+                      AND NOT ($2::boolean AND provider = 'codex')
                       AND NOT ($5::boolean AND provider = 'antigravity')
                       AND NOT ($4::boolean AND provider = 'anthropic' AND ($3::boolean OR is_executable = TRUE))
                     """,

@@ -45,6 +45,14 @@ CACHE_PAYLOAD = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _relay_codex_models_off(monkeypatch):
+    """이 파일은 캐시 파일 경로를 검증한다 — 호스트 relay 의 실제 응답에 좌우되지 않게 relay 조회를 끈다."""
+    monkeypatch.setattr(
+        model_registry, "_fetch_codex_models_from_relay", AsyncMock(return_value=([], "relay_off_in_test")),
+    )
+
+
 @pytest.fixture
 def cache_file(tmp_path, monkeypatch):
     path = tmp_path / "models_cache.json"
@@ -130,6 +138,8 @@ class DbConn:
                 return []
             self.candidates[key] = {"status": "discovered", "product_name": args[1], "source": args[2]}
             return [{"model_id": args[0]}]
+        if "SELECT provider, model_id, input_cost, output_cost, supports_thinking" in query:
+            return []  # DB 우선 속성 조회 — 이 fake 는 저장된 가격·thinking 값이 없다.
         if "activation_probe" in query:
             return []  # 호출 검증 이력 — 이 fake 는 이력이 없다.
         if "MAX(created_at) AS last_success_at" in query:
