@@ -499,9 +499,11 @@ db_exec() {
     #     job_id 처리 루프를 오염시키는 문제 방지.
     # SQL은 -c 인자로 넘기지 않고 stdin으로 전달한다.
     # systemctl/ps 출력에 claim/update SQL 전문이 노출되는 운영 리스크를 막는다.
+    local sql="$1"
+    shift || true
     local out
-    out=$(printf '%s' "$1" | _psql_cmd -q -t -A -P footer=off -F $'\x1e' 2>&1) || {
-        _notify_db_failure "$1"
+    out=$(printf '%s' "$sql" | _psql_cmd -q -t -A -P footer=off -F $'\x1e' "$@" 2>&1) || {
+        _notify_db_failure "$sql"
         return 1
     }
     echo "$out"
@@ -10749,11 +10751,11 @@ _warn_reclaimer_db_unavailable() {
 # origin/main 에 없는 커밋, 열린 프로세스. 하나라도 걸리면 보존하고 기존 24h 정책에 맡긴다.
 # awaiting_approval·review_hold 등 비종료 상태는 DB 상태 확인에서 걸러진다(승인 시 커밋에 필요).
 _reclaim_finished_worktree() {
-    local job_id="$1" status script out line
+    local job_id="$1" status phase is_rework meta script out line delim tmp raw_phase raw_rework
     [[ "${RUNNER_WT_IMMEDIATE_RECLAIM:-1}" == "1" ]] || return 0
     [[ "$job_id" =~ ^runner-[0-9a-zA-Z_-]+$ ]] || return 0
     [[ -d "/tmp/aads-wt-${job_id}" ]] || return 0
-    status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id=$(sql_escape "$job_id");" 2>/dev/null | tr -d '[:space:]') || status=""
+    status=$(db_exec "SELECT status FROM pipeline_jobs WHERE job_id=$(sql_escape "$job_id");" -v ON_ERROR_STOP=1 2>/dev/null | tr -d '[:space:]') || status=""
     case "$status" in
         done|error|cancelled|rejected_done|failed) ;;
         *)
@@ -10761,6 +10763,29 @@ _reclaim_finished_worktree() {
             return 0
             ;;
     esac
+    # review_failed·자동 재작업 대상 등 산출물 재사용 판정은 reclaim 스크립트가 phase/is_rework 로 한다.
+    # SQL 에서 전체 error_detail 로 재작업 여부(is_rework)를 판정해 1000자 절단 오판을 방지한다.
+    # 조회 실패·오류 출력·구분자 불일치·미지 값은 fail-closed: phase=__unknown__ 로 넘겨 즉시 아카이브·삭제를 막는다(24h 보존 약속).
+    phase="__unknown__"; is_rework=0
+    meta=$(db_exec "SELECT COALESCE(phase,''), (CASE WHEN status != 'error' THEN 0 WHEN phase = 'review_failed' THEN (CASE WHEN COALESCE(error_detail, '') LIKE 'review_failed: verdict=REQUEST_CHANGES%' THEN 1 ELSE 0 END) WHEN phase = 'push_stale_base' THEN 1 WHEN phase = 'deploy_isolated_stale_approval' THEN 1 WHEN phase = 'error' AND COALESCE(error_detail, '') = 'deploy_isolated_stale_approval' THEN 1 WHEN (phase = 'deploy_isolated_push_state' OR (phase = 'error' AND COALESCE(error_detail, '') LIKE 'deploy_isolated_push_state%')) THEN (CASE WHEN COALESCE(error_detail, '') LIKE '%stale_base%' AND COALESCE(error_detail, '') NOT LIKE '%fetch_fail%' THEN 1 ELSE 0 END) ELSE 0 END) FROM pipeline_jobs WHERE job_id=$(sql_escape "$job_id");" -v ON_ERROR_STOP=1 2>/dev/null) || meta=""
+    delim=$'\x1e'
+    tmp="${meta//[^$delim]/}"
+    if [[ -n "$meta" && "$meta" != *$'\n'* && ! "$meta" =~ (ERROR|FATAL|PANIC|psql:) && "${#tmp}" -eq 1 ]]; then
+        IFS=$'\x1e' read -r raw_phase raw_rework <<< "$meta" || true
+        raw_phase="${raw_phase//[[:space:]]/}"
+        raw_rework="${raw_rework//[[:space:]]/}"
+        [[ -n "$raw_phase" ]] || raw_phase="__none__"
+        case "$raw_phase" in
+            ""|__none__|review_failed|push_stale_base|deploy_isolated_push_state|deploy_isolated_stale_approval|review_hold|review_hold_*|ai_review|done|error|cancelled|failed|rejected_done|completed|no_changes|queued|queued_for_deploy|running|awaiting_approval|approved|before|blocked_dependency|dedup_blocked|build_fail|deploy_failed|deploying|deploy_lock_fail|deploy_lock_wait|deploy_not_live|deploy_queued|deploy_skip_docs_only|deploy_already_present|deploy_deferred_intraday|health_check_fail_rollback|push_fail|push_only_by_directive|reconciled_stale|retry_execution_blocked|rolling_back|token_missing|acct_release_via_aads|auth_unavailable|auth_recovery_pending|claude_code_detached|claude_code_work|tool_timeout|cancelled_by_operator)
+                phase="$raw_phase"
+                [[ "$raw_rework" == "1" ]] && is_rework=1 || is_rework=0
+                ;;
+            *)
+                phase="__unknown__"
+                is_rework=0
+                ;;
+        esac
+    fi
     # worktree 가 깨끗하지 않아 보존되더라도 종료 job 이 띄운 임시 PG 는 회수한다.
     _reap_job_temp_pg "$job_id" || true
     _reap_job_test_containers "$job_id" || true
@@ -10769,7 +10794,7 @@ _reclaim_finished_worktree() {
         _warn_reclaimer_unavailable "$script"
         return 0
     fi
-    out=$(RUNNER_WT_ONLY_JOB="$job_id" RUNNER_WT_ONLY_STATUS="$status" timeout 45 bash "$script" 2>&1) || true
+    out=$(RUNNER_WT_ONLY_JOB="$job_id" RUNNER_WT_ONLY_STATUS="$status" RUNNER_WT_ONLY_PHASE="$phase" RUNNER_WT_ONLY_IS_REWORK="$is_rework" RUNNER_WT_ONLY_ERROR_DETAIL="" timeout 45 bash "$script" 2>&1) || true
     while IFS= read -r line; do
         [[ -n "$line" ]] && log "  WORKTREE_RECLAIM job=$job_id ${line}"
     done <<< "$out"

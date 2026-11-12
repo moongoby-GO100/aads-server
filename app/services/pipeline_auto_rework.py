@@ -42,6 +42,18 @@ AUTO_REWORK_FAILURE_PHASES = frozenset({
     "deploy_isolated_stale_approval",
 })
 
+REWORK_CANDIDATE_SQL_EXPR = (
+    "CASE "
+    "WHEN status != 'error' THEN 0 "
+    "WHEN phase = 'review_failed' THEN (CASE WHEN COALESCE(error_detail, '') LIKE 'review_failed: verdict=REQUEST_CHANGES%' THEN 1 ELSE 0 END) "
+    "WHEN phase = 'push_stale_base' THEN 1 "
+    "WHEN phase = 'deploy_isolated_stale_approval' THEN 1 "
+    "WHEN phase = 'error' AND COALESCE(error_detail, '') = 'deploy_isolated_stale_approval' THEN 1 "
+    "WHEN (phase = 'deploy_isolated_push_state' OR (phase = 'error' AND COALESCE(error_detail, '') LIKE 'deploy_isolated_push_state%')) "
+    "THEN (CASE WHEN COALESCE(error_detail, '') LIKE '%stale_base%' AND COALESCE(error_detail, '') NOT LIKE '%fetch_fail%' THEN 1 ELSE 0 END) "
+    "ELSE 0 END"
+)
+
 
 def auto_rework_enabled() -> bool:
     return os.getenv("PIPELINE_AUTO_REWORK", "1").strip().lower() not in {"0", "false", "off", "no"}

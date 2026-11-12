@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from app.services.pipeline_auto_rework import REWORK_CANDIDATE_SQL_EXPR, is_request_changes_failure
+
 ROOT = Path(__file__).resolve().parents[2]
 RECLAIM = ROOT / "scripts" / "reclaim_runner_worktrees.sh"
 RUNNER = ROOT / "scripts" / "pipeline-runner.sh"
@@ -80,7 +82,23 @@ def _bin(tmp_path: Path, busy_path: str = "") -> Path:
     return b
 
 
-def _immediate(repo, tmp_path, job_id, status, *, dry_run=False, busy_path=""):
+def _immediate(
+    repo,
+    tmp_path,
+    job_id,
+    status,
+    *,
+    dry_run=False,
+    busy_path="",
+    phase="",
+    detail="",
+    is_rework: int | str | None = None,
+    phase_env=True,
+):
+    if is_rework is None:
+        rework_flag = "1" if is_request_changes_failure(status, phase, detail) else "0"
+    else:
+        rework_flag = str(is_rework)
     env = os.environ | {
         "PATH": f"{_bin(tmp_path, busy_path)}:{os.environ['PATH']}",
         "RUNNER_WT_REPO": str(repo),
@@ -88,8 +106,13 @@ def _immediate(repo, tmp_path, job_id, status, *, dry_run=False, busy_path=""):
         "RUNNER_WT_ARCHIVE_DIR": str(tmp_path / "archive"),
         "RUNNER_WT_ONLY_JOB": job_id,
         "RUNNER_WT_ONLY_STATUS": status,
+        "RUNNER_WT_ONLY_PHASE": phase,
+        "RUNNER_WT_ONLY_ERROR_DETAIL": detail,
+        "RUNNER_WT_ONLY_IS_REWORK": rework_flag,
         "DRY_RUN": "1" if dry_run else "0",
     }
+    if not phase_env:
+        env.pop("RUNNER_WT_ONLY_PHASE")
     return subprocess.run(
         ["bash", str(RECLAIM)], env=env, text=True, capture_output=True, timeout=60, check=False
     )
@@ -121,17 +144,98 @@ def test_clean_worktree_is_removed_immediately_for_every_terminal_status(repo, m
     assert "DB unavailable" not in proc.stderr
 
 
-def test_uncommitted_change_is_preserved_without_archiving(repo, make_wt, tmp_path):
+def test_uncommitted_change_is_preserved_without_archiving_for_done(repo, make_wt, tmp_path):
+    """done 은 종전대로 깨끗한 것만 지운다."""
     job_id, path = make_wt()
     (path / "README").write_text("edited\n")
 
-    proc = _immediate(repo, tmp_path, job_id, "error")
+    proc = _immediate(repo, tmp_path, job_id, "done")
 
     assert path.is_dir()
     assert (path / "README").read_text() == "edited\n"
     assert _result(proc) == "preserved"
     assert "preserved_unclean=1" in proc.stdout
     assert not (tmp_path / "archive").exists()
+
+
+@pytest.mark.parametrize("status", ["error", "cancelled", "failed"])
+def test_unfinished_terminal_status_archives_dirty_work_then_removes(repo, make_wt, tmp_path, status):
+    """2026-11-12 contabo14 runner-7696f793/63253416: error/cancelled 는 미커밋 변경 때문에 즉시 회수가 보존했다."""
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    (path / "new_doc.md").write_text("untracked content\n")
+
+    proc = _immediate(repo, tmp_path, job_id, status)
+
+    assert proc.returncode == 0, proc.stderr
+    assert not path.exists()
+    assert _result(proc) == "removed"
+    arch = tmp_path / "archive"
+    full = arch / f"{job_id}.dirty-full.patch"
+    assert full.is_file()
+    body = full.read_text()
+    # 미추적 파일 내용까지 패치에 있어야 한다(diff HEAD 만으로는 사라진다)
+    assert "untracked content" in body and "new_doc.md" in body and "edited" in body
+    assert (arch / f"{job_id}.dirty.patch").is_file()
+
+
+def test_dirty_archive_does_not_touch_worktree_index(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "new_doc.md").write_text("x\n")
+    proc = _immediate(repo, tmp_path, job_id, "error", dry_run=True)
+    assert _result(proc) == "dry_run_candidate"
+    assert path.is_dir()
+    assert "?? new_doc.md" in _git(path, "status", "--porcelain")
+
+
+def test_dirty_error_is_preserved_when_archive_flag_off(repo, make_wt, tmp_path, monkeypatch):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    monkeypatch.setenv("RUNNER_WT_IMMEDIATE_ARCHIVE_DIRTY", "0")
+
+    proc = _immediate(repo, tmp_path, job_id, "error")
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    assert not (tmp_path / "archive").exists()
+
+
+def test_dirty_error_is_preserved_when_patch_exceeds_limit(repo, make_wt, tmp_path, monkeypatch):
+    job_id, path = make_wt()
+    (path / "big.bin").write_bytes(b"a" * (2 * 1024 * 1024))
+    monkeypatch.setenv("RUNNER_WT_ARCHIVE_MAX_PATCH_MB", "1")
+
+    proc = _immediate(repo, tmp_path, job_id, "error")
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    assert "skipped_archive_failed=1" in proc.stdout
+    # 숨김 staging(.<job>.XXXXXX)까지 포함해 job 관련 잔여물이 0개여야 한다
+    arch = tmp_path / "archive"
+    leftovers = [n for n in (os.listdir(arch) if arch.exists() else []) if job_id in n]
+    assert leftovers == []
+
+
+@pytest.mark.parametrize("status", TERMINAL)
+def test_preserve_marker_blocks_reclaim_for_every_status(repo, make_wt, tmp_path, status):
+    job_id, path = make_wt()
+    (path / ".preserve").write_text("keep\n")
+
+    proc = _immediate(repo, tmp_path, job_id, status)
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved_marker"
+
+
+def test_dirty_error_in_use_by_process_is_preserved(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+
+    proc = _immediate(repo, tmp_path, job_id, "error", busy_path=str(path))
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    assert "skipped_active=1" in proc.stdout
 
 
 def test_untracked_file_is_preserved(repo, make_wt, tmp_path):
@@ -196,7 +300,21 @@ def test_cache_allowlist_does_not_hide_other_ignored_or_untracked_files(repo, ma
     assert path2.is_dir()
 
 
-def test_unmerged_commit_is_preserved_without_bundling(repo, make_wt, tmp_path):
+def test_unmerged_commit_is_preserved_without_bundling_for_done(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "feature.txt").write_text("work\n")
+    _git(path, "add", "feature.txt")
+    _git(path, "commit", "-qm", "unpushed work")
+
+    proc = _immediate(repo, tmp_path, job_id, "done")
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    assert "preserved_unclean=1" in proc.stdout
+    assert not (tmp_path / "archive").exists()
+
+
+def test_unmerged_commit_on_error_is_bundled_then_removed(repo, make_wt, tmp_path):
     job_id, path = make_wt()
     (path / "feature.txt").write_text("work\n")
     _git(path, "add", "feature.txt")
@@ -204,10 +322,9 @@ def test_unmerged_commit_is_preserved_without_bundling(repo, make_wt, tmp_path):
 
     proc = _immediate(repo, tmp_path, job_id, "error")
 
-    assert path.is_dir()
-    assert _result(proc) == "preserved"
-    assert "preserved_unclean=1" in proc.stdout
-    assert not (tmp_path / "archive").exists()
+    assert not path.exists()
+    assert _result(proc) == "removed"
+    assert (tmp_path / "archive" / f"{job_id}.bundle").is_file()
 
 
 def test_merged_commit_does_not_count_as_unmerged(repo, make_wt, tmp_path):
@@ -302,7 +419,18 @@ def harness(tmp_path, repo):
     log = tmp_path / "harness.log"
     log.write_text("")
 
-    def run(body: str, *, status: str = "done", install_reclaimer: bool = True, extra_env: dict | None = None):
+    def run(
+        body: str,
+        *,
+        status: str = "done",
+        phase: str = "",
+        detail: str = "",
+        is_rework: int | None = None,
+        meta_fail: bool = False,
+        meta_raw: str | None = None,
+        install_reclaimer: bool = True,
+        extra_env: dict | None = None,
+    ):
         target = run_dir / "reclaim_runner_worktrees.sh"
         if install_reclaimer:
             if not target.exists():
@@ -310,10 +438,29 @@ def harness(tmp_path, repo):
                 target.chmod(0o755)
         elif target.exists():
             target.unlink()
+
+        if meta_raw is not None:
+            escaped_meta = meta_raw.replace("'", "'\\''")
+            db_meta_response = f"printf '%s\\n' '{escaped_meta}'"
+        elif meta_fail:
+            db_meta_response = "return 1"
+        else:
+            rework_val = (
+                is_rework
+                if is_rework is not None
+                else (1 if is_request_changes_failure(status, phase, detail) else 0)
+            )
+            db_meta_response = f'printf "%s\\x1e%s\\n" "{phase}" "{rework_val}"'
+
         script = f"""
 LOGF={log}
 log() {{ echo "LOG $*" >> "$LOGF"; }}
-db_exec() {{ echo "{status}"; }}
+db_exec() {{
+    case "$1" in
+        *"SELECT COALESCE(phase"*) {db_meta_response} ;;
+        *) echo "{status}" ;;
+    esac
+}}
 sql_escape() {{ echo "'$1'"; }}
 lookup_error_book() {{ echo "ERRBOOK $2 :: $(cat "$1")" >> "$LOGF"; }}
 curl() {{ echo "CURL $*" >> "$LOGF"; }}
@@ -345,17 +492,42 @@ def test_runner_hook_removes_clean_terminal_worktree(harness, make_wt):
     assert "result=removed" in out
 
 
-def test_runner_hook_preserves_dirty_error_worktree(harness, make_wt):
+def test_runner_hook_archives_then_removes_dirty_error_worktree(harness, make_wt, tmp_path):
     job_id, path = make_wt()
     (path / "README").write_text("edited\n")
 
     out = harness(f"_reclaim_finished_worktree {job_id}", status="error")
 
+    assert not path.exists()
+    assert "result=removed" in out
+    assert (tmp_path / "archive" / f"{job_id}.dirty-full.patch").is_file()
+
+
+def test_runner_hook_preserves_dirty_error_worktree_when_flag_off(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error",
+        extra_env={"RUNNER_WT_IMMEDIATE_ARCHIVE_DIRTY": "0"},
+    )
+
     assert path.is_dir()
     assert "result=preserved" in out
 
 
-def test_runner_hook_preserves_unmerged_commit(harness, make_wt):
+def test_runner_hook_preserves_dirty_done_worktree(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+
+    out = harness(f"_reclaim_finished_worktree {job_id}", status="done")
+
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_runner_hook_bundles_then_removes_unmerged_error_worktree(harness, make_wt, tmp_path):
     job_id, path = make_wt()
     (path / "f.txt").write_text("w\n")
     _git(path, "add", "f.txt")
@@ -363,8 +535,9 @@ def test_runner_hook_preserves_unmerged_commit(harness, make_wt):
 
     out = harness(f"_reclaim_finished_worktree {job_id}", status="error")
 
-    assert path.is_dir()
-    assert "result=preserved" in out
+    assert not path.exists()
+    assert "result=removed" in out
+    assert (tmp_path / "archive" / f"{job_id}.bundle").is_file()
 
 
 @pytest.mark.parametrize("status", ["awaiting_approval", "review_hold", "running", ""])
@@ -458,3 +631,279 @@ def test_sync_installs_reclaimer_next_to_runner_with_exec_mode():
     assert "'reclaim_runner_worktrees.sh', 'aag-brief.py'" in text
     assert "row['destination'].endswith('.sh')" in text
     assert "['bash', '-n', str(staged)]" in text
+
+
+# ── R2: ignored 비캐시 보존 / staging 정리 / review_failed 제외 ─────────────
+
+
+def test_error_with_only_ignored_noncache_file_is_preserved_intact(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (repo / ".gitignore").write_text("local.db\n.vault.key\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore")
+    # 워크트리 HEAD 는 이전 커밋이므로 워크트리에 직접 .gitignore 를 둔다(추적 변경 없이 ignore 만 적용: info/exclude)
+    excl = Path(_git(path, "rev-parse", "--git-path", "info/exclude").strip())
+    excl = excl if excl.is_absolute() else path / excl
+    excl.parent.mkdir(parents=True, exist_ok=True)
+    excl.write_text("local.db\n.vault.key\n")
+    (path / "local.db").write_bytes(b"\x00data\x01")
+    (path / ".vault.key").write_text("secret\n")
+
+    proc = _immediate(repo, tmp_path, job_id, "error")
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    assert "preserved (ignored non-cache)" in proc.stdout and "count=2" in proc.stdout
+    assert (path / "local.db").read_bytes() == b"\x00data\x01"
+    assert (path / ".vault.key").read_text() == "secret\n"
+    assert not (tmp_path / "archive").exists()  # 시크릿을 archive_dir 로 복제하지 않는다
+
+
+def test_error_with_only_ignored_cache_and_untracked_doc_is_archived_then_removed(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "__pycache__").mkdir()
+    (path / "__pycache__" / "m.cpython-311.pyc").write_bytes(b"\x00pyc")
+    excl = Path(_git(path, "rev-parse", "--git-path", "info/exclude").strip())
+    excl = excl if excl.is_absolute() else path / excl
+    excl.parent.mkdir(parents=True, exist_ok=True)
+    excl.write_text("__pycache__/\n*.pyc\n")
+    (path / "notes.md").write_text("untracked doc body\n")
+
+    proc = _immediate(repo, tmp_path, job_id, "error")
+
+    assert _result(proc) == "removed", proc.stdout + proc.stderr
+    assert not path.exists()
+    body = (tmp_path / "archive" / f"{job_id}.dirty-full.patch").read_text()
+    assert "untracked doc body" in body and "notes.md" in body
+
+
+def test_archive_failure_leaves_no_hidden_staging(repo, make_wt, tmp_path, monkeypatch):
+    job_id, path = make_wt()
+    (path / "big.bin").write_bytes(b"a" * (2 * 1024 * 1024))
+    monkeypatch.setenv("RUNNER_WT_ARCHIVE_MAX_PATCH_MB", "1")
+
+    proc = _immediate(repo, tmp_path, job_id, "error")
+
+    assert path.is_dir()
+    assert _result(proc) == "preserved"
+    arch = tmp_path / "archive"
+    assert [n for n in os.listdir(arch) if job_id in n] == []
+    assert os.listdir(arch) == []  # 숨김 항목 포함 전체
+
+
+def test_review_failed_dirty_is_not_archived_or_removed(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+
+    proc = _immediate(repo, tmp_path, job_id, "error", phase="review_failed")
+
+    assert path.is_dir()
+    assert (path / "README").read_text() == "edited\n"
+    assert _result(proc) == "preserved"
+    assert "preserved (not clean)" in proc.stdout
+    assert not (tmp_path / "archive").exists()
+
+
+def test_review_failed_clean_is_still_removed(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    proc = _immediate(repo, tmp_path, job_id, "error", phase="review_failed")
+    assert _result(proc) == "removed"
+    assert not path.exists()
+
+
+def test_cancelled_dirty_without_ignored_noncache_is_archived_then_removed(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    proc = _immediate(repo, tmp_path, job_id, "cancelled")
+    assert _result(proc) == "removed"
+    assert not path.exists()
+    assert (tmp_path / "archive" / f"{job_id}.dirty-full.patch").is_file()
+
+
+def test_runner_hook_passes_phase_and_preserves_dirty_review_failed(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+
+    out = harness(f"_reclaim_finished_worktree {job_id}", status="error", phase="review_failed")
+
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+# ── R2 재작업: staged index 보존 / phase 조회 실패 fail-closed / error_detail 재작업 대상 ──
+
+
+def test_staged_only_content_is_archived_before_removal(repo, make_wt, tmp_path):
+    job_id, path = make_wt()
+    (path / "README").write_text("staged only body\n")
+    _git(path, "add", "README")
+    orig = _git(path, "show", "HEAD:README")
+    (path / "README").write_text(orig)  # 작업 파일은 HEAD 로 복원 — index 에만 변경이 남는다(MM)
+    assert "MM" in _git(path, "status", "--porcelain")
+
+    proc = _immediate(repo, tmp_path, job_id, "error", phase="error")
+
+    assert _result(proc) == "removed", proc.stdout + proc.stderr
+    assert not path.exists()
+    staged = (tmp_path / "archive" / f"{job_id}.staged.patch").read_text()
+    assert "staged only body" in staged
+
+
+def test_unknown_or_missing_phase_never_allows_dirty_removal(repo, make_wt, tmp_path):
+    for kw in ({"phase": "__unknown__"}, {"phase_env": False}):
+        job_id, path = make_wt()
+        (path / "README").write_text("edited\n")
+        proc = _immediate(repo, tmp_path, job_id, "error", **kw)
+        assert path.is_dir() and _result(proc) == "preserved", kw
+        assert (path / "README").read_text() == "edited\n"
+    assert not (tmp_path / "archive").exists()
+
+
+@pytest.mark.parametrize(
+    "detail,kept",
+    [
+        ("deploy_isolated_stale_approval", True),
+        ("deploy_isolated_push_state: stale_base origin moved", True),
+        ("deploy_isolated_push_state: fetch_fail stale_base", False),
+        ("deploy_isolated_push_state: network", False),
+        ("some other error", False),
+    ],
+)
+def test_phase_error_auto_rework_detail_keeps_dirty_worktree(repo, make_wt, tmp_path, detail, kept):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    proc = _immediate(repo, tmp_path, job_id, "error", phase="error", detail=detail)
+    assert path.is_dir() == kept, proc.stdout
+    assert _result(proc) == ("preserved" if kept else "removed")
+
+
+def test_runner_hook_fails_closed_when_phase_query_fails(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    out = harness(f"_reclaim_finished_worktree {job_id}", status="error", meta_fail=True)
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_runner_hook_passes_error_detail_for_stale_base_rework(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error", phase="error", detail="deploy_isolated_push_state: stale_base",
+    )
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+# ── R3 회귀 테스트: 메타 조회 SQL 오류 / 구분자 불일치 / 미지 phase / error_detail > 1000자 / 동치 ──
+
+
+def test_runner_hook_preserves_dirty_worktree_on_db_exec_error_string(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error",
+        meta_raw="ERROR:  relation pipeline_jobs does not exist",
+    )
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_runner_hook_preserves_dirty_worktree_on_delimiter_mismatch(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error",
+        meta_raw="review_failed",
+    )
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_runner_hook_preserves_dirty_worktree_on_unknown_phase(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error",
+        meta_raw="unknown_phase_xyz\x1e0",
+    )
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_runner_hook_preserves_dirty_worktree_when_stale_base_beyond_1000_chars(harness, make_wt):
+    job_id, path = make_wt()
+    (path / "README").write_text("edited\n")
+    long_detail = "deploy_isolated_push_state: " + ("padding_" * 200) + " stale_base origin moved"
+    assert len(long_detail) > 1000
+    assert long_detail.index("stale_base") > 1000
+    out = harness(
+        f"_reclaim_finished_worktree {job_id}",
+        status="error",
+        phase="error",
+        detail=long_detail,
+    )
+    assert path.is_dir()
+    assert "result=preserved" in out
+
+
+def test_rework_candidate_sql_matches_python_predicate():
+    import sqlite3
+
+    con = sqlite3.connect(":memory:")
+    con.execute("PRAGMA case_sensitive_like = ON;")
+    cur = con.cursor()
+    cur.execute("CREATE TABLE jobs (status TEXT, phase TEXT, error_detail TEXT);")
+
+    statuses = ["error", "done", "cancelled", "running", "failed"]
+    phases = [
+        "review_failed",
+        "push_stale_base",
+        "deploy_isolated_stale_approval",
+        "deploy_isolated_push_state",
+        "error",
+        "build_fail",
+        "deploy_failed",
+        "unknown_phase",
+        "",
+    ]
+    details = [
+        "",
+        "review_failed: verdict=REQUEST_CHANGES score=0.68",
+        "review_failed: verdict=REJECTED score=0.1",
+        "review_failed: source=origin_session_adjudicator",
+        "deploy_isolated_stale_approval",
+        "deploy_isolated_stale_approval with extra stuff",
+        "deploy_isolated_push_state: stale_base origin moved",
+        "deploy_isolated_push_state: fetch_fail stale_base",
+        "deploy_isolated_push_state: network timeout",
+        "deploy_isolated_push_state: " + ("x" * 1500) + " stale_base",
+        "deploy_isolated_push_state: " + ("x" * 1500) + " stale_base fetch_fail",
+        "deploy_isolated_push_state: " + ("x" * 1500),
+        "some other error message entirely",
+    ]
+
+    for s in statuses:
+        for p in phases:
+            for d in details:
+                py_res = is_request_changes_failure(s, p, d)
+                cur.execute("DELETE FROM jobs;")
+                cur.execute("INSERT INTO jobs VALUES (?, ?, ?);", (s, p, d))
+                sql_res = bool(
+                    cur.execute(f"SELECT {REWORK_CANDIDATE_SQL_EXPR} FROM jobs;").fetchone()[0]
+                )
+                assert py_res == sql_res, (
+                    f"Mismatch for status={s!r}, phase={p!r}, detail={d[:40]!r}: "
+                    f"py={py_res}, sql={sql_res}"
+                )
+
+    runner_code = RUNNER.read_text(encoding="utf-8")
+    assert "review_failed: verdict=REQUEST_CHANGES%" in runner_code
+    assert "deploy_isolated_stale_approval" in runner_code
+    assert "%stale_base%" in runner_code
+    assert "%fetch_fail%" in runner_code
+

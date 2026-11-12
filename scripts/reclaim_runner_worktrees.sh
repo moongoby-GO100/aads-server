@@ -10,14 +10,50 @@
 #   단, 재생성 가능한 ignored 캐시(__pycache__, .ruff_cache, .pytest_cache, .mypy_cache, .next, node_modules, *.pyc,
 #   tsconfig.tsbuildinfo)만 남은 경우는 깨끗한 것으로 본다.
 #   종료 상태(done|error|cancelled|rejected_done|failed)가 아니면(awaiting_approval 등) 손대지 않는다.
+#   예외(RUNNER_WT_IMMEDIATE_ARCHIVE_DIRTY, 기본 1): 작업을 끝내지 못한 종료(error|cancelled|failed)는
+#   미커밋·미추적·미병합 작업을 archive_dir 에 먼저 보존(번들 + 미추적 파일 내용까지 담은 패치, 검증 후 이동)하고 지운다.
+#   2026-11-12 contabo14: error/cancelled 는 거의 항상 미커밋 변경이 있어 즉시 회수가 '깨끗하지 않음' 으로 보존했고,
+#   폴더(260~290MB)가 24h 시간 기준까지 남았다. done/rejected_done 은 종전대로 깨끗한 것만 지운다.
+#   폴더에 .preserve 파일이 있으면 어떤 모드에서도 지우지 않는다.
 set -euo pipefail
 
 repo="${RUNNER_WT_REPO:-/root/aads/aads-server}"
 retention="${RUNNER_WT_RETENTION_HOURS:-24}"
 reclaimed=0 freed=0 archived=0 skipped_active=0 skipped_recent=0 skipped_unknown=0 skipped_unknown_repo=0 skipped_archive_failed=0
-reclaimed_over_cap=0 preserved_unclean=0
+reclaimed_over_cap=0 preserved_unclean=0 preserved_marker=0
 only_job="${RUNNER_WT_ONLY_JOB:-}"
 only_status="${RUNNER_WT_ONLY_STATUS:-}"
+only_phase="${RUNNER_WT_ONLY_PHASE-__unset__}"
+only_detail="${RUNNER_WT_ONLY_ERROR_DETAIL:-}"
+only_is_rework="${RUNNER_WT_ONLY_IS_REWORK:-0}"
+allow_dirty_archive=0
+if [[ "${RUNNER_WT_IMMEDIATE_ARCHIVE_DIRTY:-1}" == 1 ]]; then
+    case "$only_status" in error|cancelled|failed) allow_dirty_archive=1 ;; esac
+fi
+# 산출물 재사용이 예정된 phase 는 즉시 아카이브·삭제하지 않는다(종전: 깨끗하면 삭제, 아니면 24h 시간 기준까지 보존).
+#  - review_failed: 러너가 "ARTIFACT_MAX_AGE_HOURS 시간 보존 후 자동 회수" 라고 안내한다(오판 가능성).
+#  - push_stale_base / deploy_isolated_*: pipeline_auto_rework.AUTO_REWORK_FAILURE_PHASES — 자동 재작업이 부모 산출물을 쓴다.
+#  - review_hold*: 검수 판정·재검수 대기(review-hold-sweeper). 상태는 review_hold 라 이미 비종료지만 error 로 끝난 변종도 포함.
+#  - is_rework_candidate: pipeline_auto_rework.is_request_changes_failure 와 동치인 SQL 판정 결과(stale_base 등 포함)가 1이면 재작업 대상.
+#  - fail-closed: phase 를 알 수 없으면(미전달 __unset__, 조회 실패 __unknown__) 삭제를 허용하지 않는다.
+case "$only_phase" in
+    __unset__|__unknown__|review_failed|review_hold|review_hold_*|push_stale_base|deploy_isolated_push_state|deploy_isolated_stale_approval|ai_review)
+        allow_dirty_archive=0 ;;
+    error)
+        case "$only_detail" in
+            deploy_isolated_stale_approval*) allow_dirty_archive=0 ;;
+            deploy_isolated_push_state*)
+                if [[ "$only_detail" == *stale_base* && "$only_detail" != *fetch_fail* ]]; then allow_dirty_archive=0; fi ;;
+        esac ;;
+esac
+if [[ "$only_is_rework" == "1" || "$only_is_rework" == "t" || "$only_is_rework" == "true" ]]; then
+    allow_dirty_archive=0
+fi
+archive_max_mb="${RUNNER_WT_ARCHIVE_MAX_PATCH_MB:-50}"
+if [[ ! "$archive_max_mb" =~ ^[0-9]+$ ]]; then
+    echo "[reclaim-wt] invalid RUNNER_WT_ARCHIVE_MAX_PATCH_MB: $archive_max_mb" >&2
+    exit 2
+fi
 if [[ -n "$only_job" && ! "$only_job" =~ ^runner-[0-9a-zA-Z_-]+$ ]]; then
     echo "[reclaim-wt] invalid RUNNER_WT_ONLY_JOB: $only_job" >&2
     exit 2
@@ -182,7 +218,7 @@ _path_busy() {
 # clean_only=1: remove only when nothing needs archiving (no dirty/ignored files, no unmerged commits).
 _reclaim_path() {
     local path="$1" job_id="$2" common_real="$3" cap_pass="$4" clean_only="${5:-0}"
-    local dirty head_sha needs_bundle merge_base size archive_ok staging item
+    local dirty head_sha needs_bundle merge_base size archive_ok staging item ignored_noncache ignored_count full_idx full_kb
     # Inspect tracked, untracked, and ignored changes before archiving.
     dirty="$(timeout 5 git -C "$path" status --porcelain --ignored --untracked-files=all 2>/dev/null)" || {
         skipped_archive_failed=$((skipped_archive_failed + 1))
@@ -204,13 +240,26 @@ _reclaim_path() {
         }
     fi
 
+    if [[ "$clean_only" == 1 && "$allow_dirty_archive" == 1 && -n "$dirty" ]]; then
+        # dirty-full.patch 는 git add -A 로 만들어 .gitignore 대상 파일 내용을 담지 못하고 ignored.list 는 이름만 남는다.
+        # 재생성 가능한 캐시 밖의 ignored(!!) 파일(.vault.key, local.db, 데이터)은 내용 보존 수단이 없으므로 삭제하지 않는다.
+        # tar 로 archive_dir 에 복제하지 않는다 — 시크릿 파일이 복제된다.
+        ignored_noncache="$(printf '%s\n' "$dirty" | grep '^!! ' | grep -vE '^!! (.*/)?(__pycache__|\.ruff_cache|\.pytest_cache|\.mypy_cache|\.next|node_modules)/|^!! (.*/)?[^/]+\.pyc$|^!! (.*/)?tsconfig\.tsbuildinfo$' || true)"
+        if [[ -n "$ignored_noncache" ]]; then
+            ignored_count="$(printf '%s\n' "$ignored_noncache" | grep -c .)"
+            preserved_unclean=$((preserved_unclean + 1))
+            echo "[reclaim-wt] preserved (ignored non-cache) path=$path count=$ignored_count"
+            return 1
+        fi
+    fi
+
     if [[ "$clean_only" == 1 && -n "$dirty" ]]; then
         # 재생성 가능한 ignored 캐시(!! 항목)만 있으면 깨끗한 것으로 본다. 추적/미추적 변경과
         # 그 밖의 ignored 파일(.vault.key, 데이터, patch 등)은 그대로 보존 대상이다.
         dirty="$(printf '%s\n' "$dirty" | grep -vE '^!! (.*/)?(__pycache__|\.ruff_cache|\.pytest_cache|\.mypy_cache|\.next|node_modules)/|^!! (.*/)?[^/]+\.pyc$|^!! (.*/)?tsconfig\.tsbuildinfo$' | grep -v '^$' || true)"
     fi
 
-    if [[ "$clean_only" == 1 ]] && { [[ -n "$dirty" ]] || (( needs_bundle )); }; then
+    if [[ "$clean_only" == 1 && "$allow_dirty_archive" != 1 ]] && { [[ -n "$dirty" ]] || (( needs_bundle )); }; then
         preserved_unclean=$((preserved_unclean + 1))
         echo "[reclaim-wt] preserved (not clean) path=$path dirty=$([[ -n "$dirty" ]] && echo 1 || echo 0) unmerged=$needs_bundle"
         return 1
@@ -241,6 +290,26 @@ _reclaim_path() {
         if (( archive_ok )) && [[ -n "$dirty" ]]; then
             timeout 90 git -C "$path" diff HEAD > "$staging/$job_id.dirty.patch" || archive_ok=0
             timeout 90 git -C "$path" ls-files -o --exclude-standard > "$staging/$job_id.untracked.list" || archive_ok=0
+            # 실제 index 에만 남은 staged 내용(git add 후 작업 파일을 HEAD 로 되돌린 MM 상태)은 diff HEAD·dirty-full 어느 쪽에도 없다.
+            # 읽기 전용 diff --cached 로 별도 보존한다(index 는 건드리지 않는다).
+            timeout 90 git -C "$path" diff --cached --binary HEAD > "$staging/$job_id.staged.patch" 2>/dev/null || archive_ok=0
+            # diff HEAD 는 미추적 파일의 내용을 담지 못한다. 임시 index 로 미추적 파일까지 담은 전체 패치를 따로 만든다(작업트리 index 는 건드리지 않는다).
+            if (( archive_ok )); then
+                full_idx="$(mktemp -d)" || archive_ok=0
+            fi
+            if (( archive_ok )); then
+                { GIT_INDEX_FILE="$full_idx/index" timeout 90 git -C "$path" read-tree HEAD \
+                    && GIT_INDEX_FILE="$full_idx/index" timeout 90 git -C "$path" add -A -- . \
+                    && GIT_INDEX_FILE="$full_idx/index" timeout 90 git -C "$path" diff --cached --binary HEAD > "$staging/$job_id.dirty-full.patch"; } 2>/dev/null || archive_ok=0
+                rm -rf -- "$full_idx"
+                if (( archive_ok )) && [[ -f "$staging/$job_id.dirty-full.patch" ]]; then
+                    full_kb="$(du -sk "$staging/$job_id.dirty-full.patch" "$staging/$job_id.staged.patch" | awk '{s+=$1} END {print s+0}')"
+                    if [[ "$full_kb" =~ ^[0-9]+$ ]] && (( full_kb > archive_max_mb * 1024 )); then
+                        echo "[reclaim-wt] archive patch too large (${full_kb}KB > ${archive_max_mb}MB): $path" >&2
+                        archive_ok=0
+                    fi
+                fi
+            fi
             timeout 90 git -C "$path" ls-files -o -i --exclude-standard > "$staging/$job_id.ignored.list" || archive_ok=0
         fi
         if (( archive_ok )); then
@@ -255,7 +324,14 @@ _reclaim_path() {
                 mv -- "$item" "$archive_dir/" || { archive_ok=0; break; }
             done
         fi
-        rmdir -- "$staging" 2>/dev/null || true
+        if [[ -n "${staging:-}" ]]; then
+            if (( archive_ok )); then
+                rmdir -- "$staging" 2>/dev/null || true
+            elif [[ "$staging" == "$archive_dir/.${job_id}."* && ! -L "$staging" && -d "$staging" ]]; then
+                # 실패한 아카이브의 부분 산출물(패치·번들)이 숨김 staging 에 남아 호출마다 누적되지 않게 통째로 지운다.
+                rm -rf -- "$staging"
+            fi
+        fi
         if (( ! archive_ok )); then
             skipped_archive_failed=$((skipped_archive_failed + 1))
             echo "[reclaim-wt] archive failed: $path" >&2
@@ -283,6 +359,11 @@ _validate_runner_worktree() {
     # worktree is registered. Never follow a symlink outside /tmp.
     [[ "$path" == /tmp/* && "${path##*/}" =~ ^aads-wt-runner-[0-9a-zA-Z_-]+$ ]] || return 1
     [[ ! -L "$path" ]] || return 1
+    if [[ -e "$path/.preserve" ]]; then
+        preserved_marker=$((preserved_marker + 1))
+        echo "[reclaim-wt] preserved (.preserve marker) path=$path"
+        return 1
+    fi
     path_real="$(cd "$path" && pwd -P)" || { skipped_unknown_repo=$((skipped_unknown_repo + 1)); return 1; }
     [[ "$path_real" == /tmp/* ]] || return 1
     [[ "$path_real" != /root/aads/aads-server && "$path_real" != /root/aads/aads-dashboard && "$path_real" != "$repo_real" && "$path_real" != "$compose_real" && "$path_real" != "$deploy_real" ]] || { skipped_active=$((skipped_active + 1)); return 1; }
@@ -309,6 +390,7 @@ if [[ -n "$only_job" ]]; then
     elif [[ "$result" == removed ]]; then
         if ! _validate_runner_worktree "$path"; then
             result=preserved_unverified
+            if (( preserved_marker )); then result=preserved_marker; fi
         elif ! _reclaim_path "$path" "$only_job" "$common_real" 0 1; then
             result=preserved
             if [[ "${DRY_RUN:-0}" == 1 ]] && (( preserved_unclean + skipped_active + skipped_archive_failed == 0 )); then
@@ -316,7 +398,7 @@ if [[ -n "$only_job" ]]; then
             fi
         fi
     fi
-    echo "[reclaim-wt] immediate job=${only_job} status=${only_status:-none} result=${result} reclaimed=${reclaimed} freed=${freed}MB preserved_unclean=${preserved_unclean} skipped_active=${skipped_active} skipped_archive_failed=${skipped_archive_failed}"
+    echo "[reclaim-wt] immediate job=${only_job} status=${only_status:-none} result=${result} reclaimed=${reclaimed} freed=${freed}MB preserved_unclean=${preserved_unclean} skipped_active=${skipped_active} skipped_archive_failed=${skipped_archive_failed} archived=${archived}"
     exit 0
 fi
 
