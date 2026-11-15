@@ -330,7 +330,7 @@ async def assess(conn: Any, tenant: str, project: str, head_id: Any, revision_id
     tier = cross.tier_of(revision, head)
     summary = cross.summarize(tier, revision.get('author_model'), rows)
     try:
-        checks = rubric.run_checks(head.get('kind') or '', revision.get('title'), revision.get('content'), tier)
+        checks = rubric.run_checks(head.get('kind') or '', revision.get('title'), revision.get('content'), tier, metadata=revision)
     except Exception:
         logger.warning('doc_auto_approval_checks_failed', exc_info=True)
         checks = [{'id': 'checks_unavailable', 'ok': False, 'detail': '결정적 검사를 실행하지 못함'}]

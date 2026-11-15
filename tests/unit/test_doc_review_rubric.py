@@ -644,3 +644,116 @@ def test_prompt_excludes_unverified_from_penalties():
     system, _ = rubric.build_review_request('plan', 'D2', '계획', '본문', [], [])
     guidance = 'unverified 에 넣은 항목은 scores·score 감점과 verdict=reject 의 근거로 쓰지 않는다. 제공된 본문·발췌·검사 결과 안에서 확인되는 결함만 issues 와 감점에 반영한다.'
     assert '발췌로 확인할 수 없는 정합성 의문은 issues가 아니라 unverified에 기록하세요.\n' + guidance in system
+
+
+def test_release_tree_paths_exist_reproduction(monkeypatch, tmp_path):
+    """재현 테스트: root=/app 에 파일이 없고 지정 릴리스 트리에는 있으면 -> missing 0, ok=true.
+    수정 전 코드에서는 _check_paths 가 root(/app)만 확인하므로 missing 1건, ok=false 로 실패했음.
+    """
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "app").mkdir()
+    content = "- release_sha: `673c6c309`\nsee app/services/canonical_document_delegation.py"
+
+    monkeypatch.setattr(rubric, "_find_git_repo", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(rubric, "_verify_commit_in_repo", lambda repo, sha: True)
+    monkeypatch.setattr(
+        rubric,
+        "_check_path_in_tree",
+        lambda repo, sha, path: path in ("app", "app/services/canonical_document_delegation.py"),
+    )
+
+    checks = rubric.run_checks("contract", "릴리스 마이그레이션 자동 검증 교차 검토", content, "contract", root=str(root))
+    paths = next(c for c in checks if c["id"] == "paths_exist")
+    assert paths["ok"] is True
+    assert "저장소에 없음 0건" in paths["detail"]
+    assert "기준: 릴리스 673c6c3" in paths["detail"]
+
+
+def test_release_tree_path_truly_missing(monkeypatch, tmp_path):
+    """릴리스 트리에도 없는 경로 -> missing 으로 남고 ok=false (진짜 누락은 계속 잡는다)."""
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "app").mkdir()
+    content = "- release_sha: `673c6c309`\nsee app/services/truly_non_existent.py"
+
+    monkeypatch.setattr(rubric, "_find_git_repo", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(rubric, "_verify_commit_in_repo", lambda repo, sha: True)
+    monkeypatch.setattr(rubric, "_check_path_in_tree", lambda repo, sha, path: path == "app")
+
+    checks = rubric.run_checks("contract", "릴리스 마이그레이션 자동 검증 교차 검토", content, "contract", root=str(root))
+    paths = next(c for c in checks if c["id"] == "paths_exist")
+    assert paths["ok"] is False
+    assert "app/services/truly_non_existent.py" in paths["detail"]
+    assert "저장소에 없음 1건" in paths["detail"]
+    assert "기준: 릴리스 673c6c3" in paths["detail"]
+
+
+def test_release_tree_inaccessible_classified_as_unverifiable(tmp_path):
+    """릴리스 트리 접근 불가 -> unverifiable 로 분류, ok 에 영향 없음, detail 에 사유 표기."""
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "app").mkdir()
+    content = "- release_sha: `deadbeef123`\nsee app/services/canonical_document_delegation.py"
+
+    checks = rubric.run_checks("contract", "릴리스 마이그레이션 자동 검증 교차 검토", content, "contract", root=str(root))
+    paths = next(c for c in checks if c["id"] == "paths_exist")
+    assert paths["ok"] is True
+    assert "검토 서버에서 릴리스 deadbee 트리를 확인할 수 없어 미확인 1건" in paths["detail"]
+    assert "저장소에 없음 0건" in paths["detail"]
+    assert "기준: 릴리스 deadbee" in paths["detail"]
+
+
+def test_document_without_release_sha_uses_app_root(tmp_path):
+    """릴리스를 가리키지 않는 일반 문서 -> 기존 동작과 동일 (/app 또는 root 기준)."""
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "app").mkdir()
+    (root / "app" / "real.py").write_text("x")
+    content = "see app/real.py and app/missing.py"
+
+    checks = rubric.run_checks("contract", "일반 문서", content, "contract", root=str(root))
+    paths = next(c for c in checks if c["id"] == "paths_exist")
+    assert paths["ok"] is False
+    assert "app/missing.py" in paths["detail"]
+    assert "저장소에 없음 1건" in paths["detail"]
+    assert "기준: /app" in paths["detail"]
+
+
+def test_release_tree_with_real_git_repo(tmp_path):
+    """실제 git 저장소(tmp_path 내 격리 repo)에서 release_sha 커밋 트리 검증 통합 테스트."""
+    import subprocess
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(["git", "init", str(repo_dir)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Tester"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.com"], check=True)
+    f = repo_dir / "app" / "services" / "canonical_document_delegation.py"
+    f.parent.mkdir(parents=True)
+    f.write_text("# new feature in release\n")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "feat: delegation"], check=True)
+    sha = subprocess.run(["git", "-C", str(repo_dir), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+    dummy_root = tmp_path / "dummy_root"
+    dummy_root.mkdir()
+    (dummy_root / "app").mkdir()
+
+    # 1. 파일이 존재하는 경우 -> ok=True, missing 0
+    content_ok = f"- release_sha: `{sha}`\nsee app/services/canonical_document_delegation.py"
+    checks_ok = rubric.run_checks("contract", "릴리스 마이그레이션 검토", content_ok, "contract", root=str(dummy_root), repo_dir=str(repo_dir))
+    paths_ok = next(c for c in checks_ok if c["id"] == "paths_exist")
+    assert paths_ok["ok"] is True
+    assert "저장소에 없음 0건" in paths_ok["detail"]
+    assert f"기준: 릴리스 {sha[:7]}" in paths_ok["detail"]
+
+    # 2. 파일이 진짜 없는 경우 -> ok=False, missing 1
+    content_bad = f"- release_sha: `{sha}`\nsee app/services/not_found_file.py"
+    checks_bad = rubric.run_checks("contract", "릴리스 마이그레이션 검토", content_bad, "contract", root=str(dummy_root), repo_dir=str(repo_dir))
+    paths_bad = next(c for c in checks_bad if c["id"] == "paths_exist")
+    assert paths_bad["ok"] is False
+    assert "app/services/not_found_file.py" in paths_bad["detail"]
+    assert "저장소에 없음 1건" in paths_bad["detail"]
+
+
+

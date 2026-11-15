@@ -302,7 +302,7 @@ async def execute_review(tenant, project, head, revision, *, follow_up=False):
                 lists.append(models)
         kind = head.get('kind') or ''
         try:
-            checks = rubric.run_checks(kind, revision.get('title'), revision.get('content'), tier)
+            checks = rubric.run_checks(kind, revision.get('title'), revision.get('content'), tier, metadata=revision)
         except Exception:
             logger.warning('doc_cross_review_checks_failed', exc_info=True)
             checks = [{'id': 'checks_unavailable', 'ok': False, 'detail': '결정적 검사를 실행하지 못함'}]

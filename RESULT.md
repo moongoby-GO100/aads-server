@@ -1,3 +1,94 @@
+# [P1/S] 문서 교차검토 paths_exist 거짓 양성 수정 결과 (AADS-DOC-REVIEW-PATHS-EXIST-RELEASE-TREE-20261115)
+
+## 개요
+- **TASK_ID**: AADS-DOC-REVIEW-PATHS-EXIST-RELEASE-TREE-20261115
+- **TITLE**: [P1/S] 문서 교차검토 paths_exist 거짓 양성 수정 — 실행 중 컨테이너(/app)가 아니라 문서가 가리키는 릴리스 트리 기준으로 판정 + 오류 사전 등록
+- **상태**: 코드 수정 및 단위 검증 완료, 오류 사전 등록 완료 (active), 승인 대기
+- **정본 등록**: 정본 미등록(미완료) / 열람 링크 미제공 (이유: 결과 보고서용 별도 정본 문서는 미발행하며 RESULT.md 및 핸드오버 DB에 기록)
+- **금지 명령 준수**: git commit/push/add/reset/checkout, docker build/compose/restart, npm/next build, supervisorctl/systemctl, kill/pkill 일체 미실행
+
+## STEP 0 기존 구현 조사 및 분류
+| 파일 및 대상 | 분류 | 설명 |
+|---|---|---|
+| `app/services/doc_review_rubric.py::_check_paths` | 수정 | 기존 `root` 기반 경로 확인 외에 `release_sha`가 지정/추출된 경우 git 릴리스 트리를 우선 판정하고 접근 불가 시 `unverifiable`로 분류하도록 개선 |
+| `app/services/doc_review_rubric.py::run_checks` | 수정 | `metadata`, `release_sha`, `repo_dir` 인자 수용 및 `extract_release_sha`를 통한 릴리스 SHA 자동 추출 연동 |
+| `app/services/doc_review_rubric.py::extract_release_sha` | 신규 | 메타데이터(release_sha, commit_hash, commit_sha, source_task_id) 및 본문/제목 정규식에서 릴리스 SHA 추출 헬퍼 |
+| `app/services/doc_review_rubric.py::_find_git_repo` | 신규 | 환경변수/프로젝트 설정/작업트리 등 로컬 파일시스템 내 git 저장소 경로 안전 탐색 헬퍼 (DB/네트워크 없음) |
+| `app/services/doc_review_rubric.py::_verify_commit_in_repo` | 신규 | git 커밋 유효성 검증 헬퍼 (`git rev-parse --verify`) |
+| `app/services/doc_review_rubric.py::_check_path_in_tree` | 신규 | git 커밋 트리 내 파일/디렉터리 존재 여부 확인 헬퍼 (`git cat-file -e`) |
+| `app/services/doc_review_rubric.py` 기타 함수/채점 로직 | 유지 | `build_review_request`, `finalize_review`, `approved_excerpt` 등 기존 로직 100% 유지 |
+| `app/services/doc_cross_review.py:305` | 수정 | `rubric.run_checks` 호출 시 `metadata=revision` 전달하여 리비전 메타데이터 연동 |
+| `app/services/doc_auto_approval.py:333` | 수정 | `rubric.run_checks` 호출 시 `metadata=revision` 전달하여 리비전 메타데이터 연동 |
+| `app/services/doc_auto_resolve.py:233` | 유지 | `paths_exist`가 `ok: True`일 때 `failed_checks`에 들어가지 않으므로 `unverifiable`이 사실 오류로 취급되지 않음을 코드 분석으로 검증 및 유지 |
+| `migrations/*.sql` | 유지 | 병행 러너 충돌 방지를 위해 일체 미수정 |
+| `project_document_reviews` | 유지 | 기존 행 UPDATE/DELETE 일체 없음 |
+| 삭제 대상 | 없음 | 삭제된 함수, 클래스, 모듈 없음 |
+
+## 핵심 변경 내용
+1. **기준 트리 판정**:
+   - 문서 메타데이터(`release_sha`, `commit_hash`, `commit_sha`, `source_task_id` 커밋 SHA) 및 본문/제목(예: `- release_sha: ...`, `RELEASE <sha>`, `` `release:<sha>/...` ``)에서 릴리스 SHA를 우선 감지.
+   - 로컬 git 저장소에서 해당 커밋 트리를 확인 가능한 경우 `git cat-file -e`를 통해 커밋 트리 기준으로 경로 존재 여부를 정확히 판정.
+2. **트리 접근 불가 시 처리 (거짓 양성 방지)**:
+   - 운영 API 컨테이너와 같이 `.git`이 마운트되지 않아 릴리스 트리를 확인할 수 없거나 커밋을 조회할 수 없는 경우, 해당 경로를 `missing`이 아닌 `unverifiable`로 분류.
+   - `detail`에 `"검토 서버에서 릴리스 <sha7> 트리를 확인할 수 없어 미확인 N건"` 명시, `ok: True` 유지하여 배포 차단 순환을 원천 해소.
+3. **일반 문서 호환성**:
+   - 릴리스 SHA가 없는 일반 문서는 기존처럼 `/app` (또는 지정 `root`) 기준으로 판정하여 동작 변화 없음.
+4. **검토 프롬프트 일관성**:
+   - `detail`에 기준 트리(`기준: 릴리스 <sha7>` 또는 `기준: /app`)를 명시하여 AI 검토자가 판정 기준을 인지 가능.
+
+## 검증 결과
+1. **재현 테스트 (`test_release_tree_paths_exist_reproduction`)**:
+   - **수정 전 실패 확인**:
+     ```
+     FAILED tests/unit/test_doc_review_rubric.py::test_release_tree_paths_exist_reproduction
+     E   assert False is True
+     1 failed, 78 passed in 2.85s
+     ```
+   - **수정 후 통과 확인**:
+     ```
+     tests/unit/test_doc_review_rubric.py: 83 passed in 4.24s (100% 통과)
+     ```
+2. **전체 연계 단위 테스트 검증**:
+   - `bash scripts/run_unit_tests.sh tests/unit/test_release_migration_autoverify.py tests/unit/test_doc_auto_approval.py tests/unit/test_doc_auto_resolve.py tests/unit/test_doc_cross_review.py tests/unit/test_doc_review_rubric.py`
+   - **결과**: `431 passed in 12.85s` (종료코드 0, 통과)
+3. **정적 분석 및 구문 검사**:
+   - `python3 scripts/dup_guard.py`: 통과 (종료코드 0)
+   - `python3 -m compileall app/ tests/unit/test_doc_review_rubric.py`: 통과 (종료코드 0)
+4. **빌드 검증**: 승인 후 Runner 빌드 검증 대상 (직접 빌드 미실행)
+
+## 오류 사전 등록 결과 (R-ERRBOOK)
+- **명령**:
+  ```bash
+  python3 scripts/error_book.py register \
+    --key doc_review.paths_exist_checks_running_container \
+    --project AADS \
+    --symptom "배포 전 마이그레이션 승인 문서의 교차검토에서 paths_exist 가 릴리스 트리에 있는 파일을 \"저장소에 없음\"으로 판정함. 검토자가 이를 major 근거로 써서 reject → 배포 차단 순환" \
+    --cause "run_checks 기본 root 가 _app_root()='/app'(실행 중 구 릴리스 컨테이너)" \
+    --prevention "릴리스를 가리키는 문서는 해당 커밋 트리 기준으로 판정하고, 트리를 읽을 수 없으면 unverifiable 로 둔다" \
+    --signature "저장소에 없음 [0-9]+건" \
+    --fix-commit "runner-f42aaddd" \
+    --fix-file "app/services/doc_review_rubric.py" \
+    --fix-note "문서 교차검토 paths_exist 판정 시 릴리스 트리를 우선 조회하고, 접근 불가 시 unverifiable로 분류"
+  ```
+- **등록 상태**: `등록: doc_review.paths_exist_checks_running_container (active)`
+- **매칭 검증**:
+  ```bash
+  echo "확인한 경로 12건, 저장소에 없음 9건: migrations/..." | python3 scripts/error_book.py match -
+  # 출력: 알려진 오류: doc_review.paths_exist_checks_running_container (재발 1회)
+  ```
+
+## 기준 git commit 정보
+- `git log -1`:
+  ```
+  commit 6fb69a46ab8e4f12701e8a0433d5a6a948d48c7b (HEAD, origin/main, origin/HEAD)
+  Author: root <root@vmi3725547.contaboserver.net>
+  Date:   Sun Nov 15 04:21:22 2026 +0100
+
+      fix(pipeline-runner): runner-f7988bc6 — [P1/S] 마이그레이션 2건 되돌림 SQL 단일 트랜잭션화 + 삭제 전 객체 존재·정의 확인 가드 + 20261112 러너 롤백 설명 정정
+  ```
+
+---
+
 # 오비서 정지 소속 세션 재로그인 복구 결과
 
 ## FOOD 인사 M1 기존 목표 연결 보존 교정 결과 (runner-401e7e23)

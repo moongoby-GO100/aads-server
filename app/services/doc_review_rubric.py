@@ -8,6 +8,9 @@ import json
 import math
 import os
 import re
+import subprocess
+from pathlib import Path
+from typing import Any, Mapping
 
 REVIEW_MARKER = "\n\n[REVIEW_JSON]"
 REASON_LIMIT = 4000
@@ -59,6 +62,118 @@ _MEASURABLE = re.compile(
     r"`[^`\n]+`|\d+\s*(?:%|건|개|회|초|ms|분|줄|자|MB|KB)|종료코드|exit\s*code|pytest|ruff|curl|HTTP\s*\d{3}|"
     r"테스트|통과|이하|이상|미만|초과|==|>=|<=|\bPASS\b|\bFAIL\b", re.IGNORECASE)
 _ONE_LINE = re.compile(r"\s+")
+_RELEASE_SHA_RE = re.compile(
+    r'(?i)(?:'
+    r'\brelease_sha\s*[:=]\s*[`"]?([0-9a-f]{7,40})[`"]?|'
+    r'\bRELEASE\s+([0-9a-f]{7,40})\b|'
+    r'`release:([0-9a-f]{7,40})/|'
+    r'"release_sha"\s*:\s*"([0-9a-f]{7,40})"'
+    r')'
+)
+
+
+def extract_release_sha(content: str = "", title: str = "", metadata: Any = None) -> str | None:
+    """문서 메타데이터·본문·제목에서 릴리스 커밋 SHA 를 추출한다."""
+    if metadata and hasattr(metadata, "get"):
+        for key in ("release_sha", "commit_hash", "commit_sha"):
+            val = metadata.get(key)
+            if val and isinstance(val, str):
+                s = val.strip().lower()
+                if re.fullmatch(r"[0-9a-f]{7,40}", s):
+                    return s
+        task = metadata.get("source_task_id")
+        if task and isinstance(task, str):
+            s = task.strip().lower()
+            if re.fullmatch(r"[0-9a-f]{7,40}", s):
+                return s
+
+    for text in (content or "", title or ""):
+        if not text or not isinstance(text, str):
+            continue
+        m = _RELEASE_SHA_RE.search(text)
+        if m:
+            for g in m.groups():
+                if g:
+                    return g.lower()
+    return None
+
+
+def _find_git_repo(root: Path | str | None = None, repo_dir: Path | str | None = None) -> Path | None:
+    """로컬 파일시스템에서 git 저장소 디렉터리를 탐색한다 (DB/네트워크 없음)."""
+    candidates: list[Path] = []
+    if repo_dir:
+        candidates.append(Path(repo_dir))
+    env_repo = os.environ.get("AADS_SERVER_REPO_PATH", "").strip()
+    if env_repo:
+        candidates.append(Path(env_repo))
+    if root:
+        try:
+            r = Path(root)
+            candidates.append(r)
+            candidates.extend(r.parents)
+        except Exception:
+            pass
+    try:
+        from app.services.deploy_observability import PROJECT_REPO_PATHS
+        for p_str in PROJECT_REPO_PATHS.get("AADS", ()):
+            if p_str:
+                candidates.append(Path(p_str))
+    except Exception:
+        pass
+    try:
+        cur = Path.cwd().resolve()
+        candidates.append(cur)
+        candidates.extend(cur.parents)
+    except Exception:
+        pass
+    try:
+        module_root = Path(__file__).resolve().parents[2]
+        candidates.append(module_root)
+        candidates.extend(module_root.parents)
+    except Exception:
+        pass
+
+    seen: set[Path] = set()
+    for cand in candidates:
+        try:
+            resolved = cand.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if (resolved / ".git").exists():
+                r = subprocess.run(
+                    ["git", "-C", str(resolved), "rev-parse", "--git-dir"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if r.returncode == 0:
+                    return resolved
+        except Exception:
+            continue
+    return None
+
+
+def _verify_commit_in_repo(repo: Path, release_sha: str) -> bool:
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", f"{release_sha}^{{commit}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+def _check_path_in_tree(repo: Path, release_sha: str, path: str) -> bool:
+    try:
+        norm = path.replace("\\", "/").lstrip("/")
+        r = subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-e", f"{release_sha}:{norm}"],
+            capture_output=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
 
 
 def _sanitize(value, limit=None):
@@ -132,16 +247,59 @@ def approved_excerpt(content, limit=600):
     return "\n".join(part[:size] for part, size in zip(parts, sizes))[:limit]
 
 
-def _check_paths(content, root):
+def _check_paths(content, root, release_sha=None, repo_dir=None):
     seen, missing, redacted, unverifiable = set(), [], 0, 0
+    raw_paths = []
     for match in _PATH.finditer(content):
         path = match.group(1).rstrip(".,/")
         if not path or path in seen or ".." in path.split("/"):
             continue
         seen.add(path)
-        top = path.split("/", 1)[0]
         if "/" not in path:
             continue
+        raw_paths.append(path)
+
+    if release_sha:
+        sha7 = release_sha[:7]
+        repo = _find_git_repo(root=root, repo_dir=repo_dir)
+        tree_accessible = False
+        if repo and _verify_commit_in_repo(repo, release_sha):
+            tree_accessible = True
+
+        if not tree_accessible:
+            unverifiable = len(raw_paths)
+            detail = f"확인한 경로 {len(seen)}건 (기준: 릴리스 {sha7}), 저장소에 없음 0건"
+            if unverifiable:
+                detail += f" · 검토 서버에서 릴리스 {sha7} 트리를 확인할 수 없어 미확인 {unverifiable}건"
+            return {"id": "paths_exist", "ok": True, "detail": _sanitize(detail)}
+
+        for path in raw_paths:
+            top = path.split("/", 1)[0]
+            if not _check_path_in_tree(repo, release_sha, top):
+                unverifiable += 1
+                continue
+            if _check_path_in_tree(repo, release_sha, path):
+                continue
+            if _sanitize(path) != path or _secret_count(path):
+                redacted += 1
+            else:
+                missing.append(path)
+
+        shown = missing[:MAX_MISSING_PATHS]
+        detail = f"확인한 경로 {len(seen)}건 (기준: 릴리스 {sha7}), 저장소에 없음 {len(missing) + redacted}건"
+        if shown:
+            detail += ": " + ", ".join(shown)
+            if len(missing) > len(shown):
+                detail += f" 외 {len(missing) - len(shown)}건"
+        if redacted:
+            detail += f" (시크릿 패턴이 든 경로 {redacted}건은 표시 안 함)"
+        if unverifiable:
+            detail += f" · 검토 서버에 디렉터리가 없어 확인 못 한 경로 {unverifiable}건"
+        return {"id": "paths_exist", "ok": not missing and not redacted, "detail": _sanitize(detail)}
+
+    base_label = "/app" if root == "/app" or str(root).endswith("/app") else str(root)
+    for path in raw_paths:
+        top = path.split("/", 1)[0]
         if not os.path.isdir(os.path.join(root, top)):
             unverifiable += 1
             continue
@@ -151,8 +309,9 @@ def _check_paths(content, root):
             redacted += 1
         else:
             missing.append(path)
+
     shown = missing[:MAX_MISSING_PATHS]
-    detail = f"확인한 경로 {len(seen)}건, 저장소에 없음 {len(missing) + redacted}건"
+    detail = f"확인한 경로 {len(seen)}건 (기준: {base_label}), 저장소에 없음 {len(missing) + redacted}건"
     if shown:
         detail += ": " + ", ".join(shown)
         if len(missing) > len(shown):
@@ -164,13 +323,15 @@ def _check_paths(content, root):
     return {"id": "paths_exist", "ok": not missing and not redacted, "detail": _sanitize(detail)}
 
 
-def run_checks(kind, title, content, doc_tier, root=None):
+def run_checks(kind, title, content, doc_tier, root=None, metadata=None, release_sha=None, repo_dir=None):
     """모델 호출 없이 문서 본문만으로 얻는 결정적 검사. 시크릿 값은 결과에 넣지 않는다."""
     kind = (kind or "").strip().lower()
     content = content if isinstance(content, str) else ""
     if root is None:
         from app.services.doc_cross_review import _app_root
         root = _app_root()
+    if not release_sha:
+        release_sha = extract_release_sha(content=content, title=title or "", metadata=metadata)
     headings = _headings(content)
     checks = [{"id": "content_size", "ok": bool(content.strip()),
                "detail": f"본문 {len(content)}자, 등급 {doc_tier or '미정'}"}]
@@ -189,7 +350,7 @@ def run_checks(kind, title, content, doc_tier, root=None):
     secrets = _secret_count(content) + _secret_count(title or "")
     checks.append({"id": "secret_patterns", "ok": secrets == 0,
                    "detail": f"시크릿 패턴 {secrets}건 (값은 기록하지 않음)"})
-    checks.append(_check_paths(content, root))
+    checks.append(_check_paths(content, root, release_sha=release_sha, repo_dir=repo_dir))
 
     if kind in {"prd", "spec", "plan", "tasks"}:
         body = _section_body(content, headings, _CRITERIA)
