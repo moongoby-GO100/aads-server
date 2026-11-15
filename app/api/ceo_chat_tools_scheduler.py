@@ -19,9 +19,10 @@ import json
 import logging
 import os
 import re
+import regex
 import sys
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -189,11 +190,98 @@ def _job_report_session_id(job) -> str:
     return ""
 
 
+_REPORT_WHEN_MAX_LEN = 200
+_REPORT_WHEN_MAX_TARGET = 64 * 1024
+_REPORT_WHEN_TIMEOUT_SEC = 0.5
+_REPORT_WHEN_TIMEOUT_NOTE = "report_when 판정 시간 초과/오류"
+_TOOL_ERROR_RE = re.compile(r"""^\s*(?:\[(?:ERROR|BLOCKED)\b|\{\s*['"]error['"])""")
+
+
+def validate_report_when(report_when: Any) -> str:
+    """등록 시 report_when 검증. 오류 문자열을 반환하고, 정상이면 빈 문자열.
+
+    주의: 휴리스틱 정적 검사(_node_is_risky, _NESTED_QUANT_RE 등)는 우회 가능하므로
+    판정 안전성의 근거로 쓰지 않는다. ReDoS(지수 백트래킹) 방지와 안전성은
+    regex.search(..., timeout=0.5, concurrent=True)가 런타임에 보장한다.
+    여기서는 200자 상한과 regex.compile 문법 검증만 수행한다.
+    """
+    if report_when in (None, ""):
+        return ""
+    if not isinstance(report_when, str):
+        return "report_when 은 문자열(정규식)이어야 합니다"
+    if len(report_when) > _REPORT_WHEN_MAX_LEN:
+        return f"report_when 은 {_REPORT_WHEN_MAX_LEN}자 이하여야 합니다"
+    try:
+        regex.compile(report_when, flags=regex.MULTILINE)
+    except Exception as exc:
+        return f"report_when 정규식 오류: {exc}"
+    return ""
+
+
+def _is_tool_error_result(result: Any) -> bool:
+    """도구 오류 결과 여부: [ERROR]/[BLOCKED] 접두, {'error': ...} dict/JSON 문자열."""
+    if isinstance(result, dict):
+        return "error" in result
+    text = str(result if result is not None else "")
+    if _TOOL_ERROR_RE.match(text):
+        return True
+    if text.lstrip().startswith("{"):
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            return False
+        return isinstance(obj, dict) and "error" in obj
+    return False
+
+
+def _regex_search_sync(pattern: str, body: str) -> bool:
+    """regex.search 로 timeout=0.5초, concurrent=True 로 정규식 판정.
+
+    concurrent=True 는 GIL 을 release 하여 판정 중에도 이벤트 루프가 계속 동작한다.
+    지수 백트래킹 발생 시 timeout=0.5초에 TimeoutError 로 중단된다.
+    """
+    return regex.search(
+        pattern, body, flags=regex.MULTILINE, timeout=_REPORT_WHEN_TIMEOUT_SEC, concurrent=True
+    ) is not None
+
+
+async def _should_report_with_note(
+    job_id: str, report_when: str, result: Any, target: Optional[str]
+) -> Tuple[bool, Optional[str]]:
+    """(should_report, note) 반환. False 일 때만 보고를 억제한다.
+    판정 불가·오류·초과는 모두 True(fail-open).
+    TimeoutError 또는 기타 판정 예외 시 note="report_when 판정 시간 초과/오류" 를 반환한다.
+
+    target: 정규식을 적용할 문자열. None 이면 억제 금지 결과(항상 보고).
+    """
+    if not report_when or target is None or _is_tool_error_result(result):
+        return True, None
+    if len(target) > _REPORT_WHEN_MAX_TARGET:
+        logger.warning("scheduled_job_report_when_too_large: job=%s len=%d", job_id, len(target))
+        return True, None
+    try:
+        matched = await asyncio.to_thread(_regex_search_sync, report_when, target)
+    except (TimeoutError, Exception) as exc:
+        logger.warning("scheduled_job_report_when_error: job=%s err=%r", job_id, exc)
+        return True, _REPORT_WHEN_TIMEOUT_NOTE
+    if not matched:
+        logger.info("scheduled_job_report_suppressed job=%s report_when=%s", job_id, report_when[:80])
+    return matched, None
+
+
+async def _should_report(job_id: str, report_when: str, result: Any, target: Optional[str]) -> bool:
+    """하위 호환 및 단위 테스트용 bool 반환 헬퍼."""
+    should, _ = await _should_report_with_note(job_id, report_when, result, target)
+    return should
+
+
 async def _execute_scheduled_job(job_id: str, action_type: str, action_config: Dict[str, Any]):
     """예약 작업 실행 핸들러."""
     report_session_id = ""
     report_enabled = True
     trigger_session_reaction = False
+    report_when = ""
+    judge_target: Optional[str] = None  # report_when 판정 대상. None=억제 금지
     action_config = dict(action_config or {})
     callback_meta = {
         "job_id": job_id,
@@ -212,12 +300,20 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
             action_config.pop("trigger_session_reaction", False)
             or action_config.pop("react_to_session_report", False)
         )
+        report_when = str(action_config.pop("report_when", "") or "")
 
         if action_type == "remote_command":
-            from app.api.ceo_chat_tools import tool_run_remote_command
             project = action_config.get("project", "GO100")
             command = action_config.get("command", "")
-            result = await tool_run_remote_command(project, command)
+            if report_when:
+                # 구조화 결과의 stdout 에만 판정한다 — 명령 에코는 대상에 없다.
+                from app.api.ceo_chat_tools import run_remote_command_structured
+                rc = await run_remote_command_structured(project, command)
+                result = rc["text"]
+                judge_target = rc["stdout"] if rc["exit_code"] == 0 else None
+            else:
+                from app.api.ceo_chat_tools import tool_run_remote_command
+                result = await tool_run_remote_command(project, command)
 
         elif action_type == "health_check":
             from app.services.tool_executor import ToolExecutor
@@ -241,6 +337,17 @@ async def _execute_scheduled_job(job_id: str, action_type: str, action_config: D
         elif action_type == "automation_run":
             from app.services.automation_draft_flow import run_scheduled
             result = await run_scheduled(action_config)
+
+        if action_type != "remote_command":
+            judge_target = str(result if result is not None else "")
+        should_report, report_note = await _should_report_with_note(
+            job_id, report_when, result, judge_target
+        )
+        if not should_report:
+            logger.info(f"scheduled_job_executed: job={job_id} type={action_type}")
+            return
+        if report_note:
+            result = f"{report_note}\n{result}"
 
         if report_enabled and report_session_id:
             try:
@@ -310,6 +417,7 @@ async def schedule_task(
     report_session_id: str = "",
     report_to_session: bool = True,
     trigger_session_reaction: bool = True,
+    report_when: str = "",
 ) -> Dict[str, Any]:
     """예약 작업 등록. API 프로세스면 직접, 브리지면 API 에 위임한다."""
     scheduler = _ensure_scheduler()
@@ -317,7 +425,11 @@ async def schedule_task(
         return await schedule_task_on(
             scheduler, name, schedule_type, action_type, action_config, schedule_config,
             report_session_id, report_to_session, trigger_session_reaction,
+            report_when=report_when,
         )
+    rw_err = validate_report_when(report_when)
+    if rw_err:
+        return {"error": rw_err}
     action_config = action_config or {}
     session_id = str(
         report_session_id
@@ -335,6 +447,7 @@ async def schedule_task(
         "report_session_id": session_id,
         "report_to_session": report_to_session,
         "trigger_session_reaction": trigger_session_reaction,
+        "report_when": report_when or "",
     })
 
 
@@ -349,6 +462,7 @@ async def schedule_task_on(
     report_to_session: bool = True,
     trigger_session_reaction: bool = True,
     replace_same_session: bool = False,
+    report_when: str = "",
 ) -> Dict[str, Any]:
     """
     예약 작업 등록.
@@ -365,6 +479,7 @@ async def schedule_task_on(
         report_session_id: 실행 결과를 자동 보고할 chat_sessions.id
         report_to_session: False면 세션 자동보고 비활성화
         trigger_session_reaction: 세션 자동보고 후 해당 세션 AI 후속 반응 트리거
+        report_when: 비어 있지 않으면 remote_command 는 stdout, 그 외는 결과 전체에 이 정규식이 매치될 때만 보고
         replace_same_session: 같은 report_session_id 가 만든 동명 작업이면 교체(위임 재시도 멱등용)
     """
     if not name or not name.strip():
@@ -374,6 +489,10 @@ async def schedule_task_on(
     valid_actions = ("remote_command", "health_check", "db_query", "url_check", "automation_run")
     if action_type not in valid_actions:
         return {"error": f"action_type은 {valid_actions} 중 하나여야 합니다"}
+
+    rw_err = validate_report_when(report_when)
+    if rw_err:
+        return {"error": rw_err}
 
     restore_guard = check_restore_via_readonly_db_query(name, action_type, action_config)
     if restore_guard:
@@ -404,6 +523,10 @@ async def schedule_task_on(
     )
     effective_action_config["report_to_session"] = effective_report_to_session
     effective_action_config["trigger_session_reaction"] = effective_trigger_session_reaction
+    if report_when:
+        effective_action_config["report_when"] = report_when
+    else:
+        effective_action_config.pop("report_when", None)
 
     # 기존 작업 중복 체크
     existing = scheduler.get_job(job_id)
@@ -497,6 +620,7 @@ async def schedule_task_on(
             "report_session_id": effective_report_session_id,
             "report_to_session": effective_report_to_session,
             "trigger_session_reaction": effective_trigger_session_reaction,
+            "report_when": report_when or "",
             "persisted": persisted,
         }
         if not persisted:

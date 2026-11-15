@@ -1098,6 +1098,14 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
                     "type": "boolean",
                     "description": "자동 보고 후 해당 세션 AI 후속 반응을 트리거할지 여부. 기본 true.",
                 },
+                "report_when": {
+                    "type": "string",
+                    "description": (
+                        "조건부 보고 정규식(200자 이하, regex.MULTILINE). 비우면 항상 보고. 지정하면 remote_command 는 명령의 stdout 에만(명령 에코·헤더 제외), 그 외 액션은 결과 전체에 "
+                        "매치될 때만 세션·텔레그램 보고. 실패/exit≠0/도구 오류/정규식 판정 오류·시간 초과는 항상 보고(fail-open). "
+                        "예: (?m)^(ALERT|STOP_REQUIRED|EMERGENCY|CRITICAL)\\b."
+                    ),
+                },
             },
             "required": ["name", "schedule_type", "action_type", "action_config"],
         },

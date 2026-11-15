@@ -32,6 +32,7 @@ class ScheduleRequest(BaseModel):
     report_session_id: str = ""
     report_to_session: bool = True
     trigger_session_reaction: bool = True
+    report_when: str = ""
 
 
 class UnscheduleRequest(BaseModel):
@@ -57,6 +58,7 @@ async def schedule(req: ScheduleRequest, request: Request) -> Dict[str, Any]:
         report_session_id=req.report_session_id,
         report_to_session=req.report_to_session,
         trigger_session_reaction=req.trigger_session_reaction,
+        report_when=req.report_when,
         replace_same_session=True,
     )
 

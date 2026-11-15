@@ -1682,6 +1682,14 @@ TOOL_DEFINITIONS: List[Dict] = [
                     "type": "boolean",
                     "description": "자동 보고 후 해당 채팅 세션의 AI 후속 반응을 트리거할지 여부. 기본 true.",
                 },
+                "report_when": {
+                    "type": "string",
+                    "description": (
+                        "조건부 보고 정규식(200자 이하, regex.MULTILINE). 비우면 항상 보고. 지정하면 remote_command 는 명령의 stdout 에만(명령 에코·헤더 제외), 그 외 액션은 결과 전체에 "
+                        "매치될 때만 세션·텔레그램 보고. 실패/exit≠0/도구 오류/정규식 판정 오류·시간 초과는 항상 보고(fail-open). "
+                        "예: (?m)^(ALERT|STOP_REQUIRED|EMERGENCY|CRITICAL)\\b."
+                    ),
+                },
             },
             "required": ["name", "schedule_type", "action_type", "action_config"],
         },
@@ -3129,6 +3137,24 @@ async def tool_patch_remote_file(project: str, file_path: str, old_string: str, 
 
 async def tool_run_remote_command(project: str, command: str) -> str:
     """원격 서버 명령 실행 (허용 명령 화이트리스트 기반). Yellow 등급."""
+    r = await _run_remote_command_core(project, command)
+    return r["text"] if isinstance(r, dict) else r
+
+
+async def run_remote_command_structured(project: str, command: str) -> Dict[str, Any]:
+    """tool_run_remote_command 와 같은 실행 경로의 구조화 결과.
+
+    {exit_code:int, stdout:str, stderr:str, text:str}. text 는 tool_run_remote_command 의
+    반환 문자열과 동일. 실행 전 차단·오류·타임아웃은 exit_code=-1, stdout/stderr 빈 문자열,
+    text=오류 문자열([ERROR]/[BLOCKED] 접두)."""
+    r = await _run_remote_command_core(project, command)
+    if isinstance(r, dict):
+        return r
+    return {"exit_code": -1, "stdout": "", "stderr": "", "text": r}
+
+
+async def _run_remote_command_core(project: str, command: str) -> Any:
+    """실행부. 오류는 str, 실제 실행된 경우는 구조화 dict 를 돌려준다."""
     project = project.upper()
 
     if not command or not command.strip():
@@ -3232,7 +3258,10 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             if err_out.strip() and proc.returncode != 0:
                 result_parts.append(f"[STDERR] {err_out.strip()[:2000]}")
             logger.info(f"run_remote_command OK | project=AADS cmd={command[:80]} exit={proc.returncode}")
-            return "\n".join(result_parts)
+            return {
+                "exit_code": proc.returncode, "stdout": out, "stderr": err_out,
+                "text": "\n".join(result_parts),
+            }
         except asyncio.TimeoutError:
             # 좀비 SSH 프로세스 방지 — 타임아웃 시 즉시 kill
             try:
@@ -3297,7 +3326,10 @@ async def tool_run_remote_command(project: str, command: str) -> str:
             result_parts.append(f"[STDERR] {err_out.strip()[:2000]}")
 
         logger.info(f"run_remote_command OK | project={project} cmd={command[:80]} exit={proc.returncode}")
-        return "\n".join(result_parts)
+        return {
+            "exit_code": proc.returncode, "stdout": out, "stderr": err_out,
+            "text": "\n".join(result_parts),
+        }
 
     except asyncio.TimeoutError:
         try:
@@ -7385,6 +7417,7 @@ async def execute_tool(name: str, params: Dict[str, Any], dsn: str, chat_session
             report_session_id=_report_session_id,
             report_to_session=bool(params.get("report_to_session", True)),
             trigger_session_reaction=bool(params.get("trigger_session_reaction", True)),
+            report_when=str(params.get("report_when") or ""),
         )
         return json.dumps(result, ensure_ascii=False, default=str)
     elif name == "unschedule_task":
