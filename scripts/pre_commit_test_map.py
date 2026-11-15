@@ -60,6 +60,16 @@ GROUPS: tuple[Group, ...] = (
     ),
     Group(name="migration_direct_gate", tests=("tests/unit/test_apply_migration_direct_gate.py", "tests/unit/test_release_migration_autoverify.py"), globs=("scripts/apply_migration.sh", "scripts/apply_release_migrations.sh")),
     Group(
+        name="migration_rollback_guards",
+        tests=("tests/unit/test_migration_rollback_guards.py",),
+        globs=(
+            "migrations/rollback/20261111_canonical_document_approval_delegation.down.sql",
+            "migrations/20261111_canonical_document_approval_delegation_rollback.sql",
+            "migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql",
+            "migrations/20261112_code_review_requests_revert_of_verified_rollback.sql",
+        ),
+    ),
+    Group(
         name="tools",
         tests=("tests/unit/test_tools_and_pipeline.py",),
         py_regex=r"tool_executor|tool_registry|ceo_chat_tools|chat_tools|model_selector|system_prompt|test_tools",

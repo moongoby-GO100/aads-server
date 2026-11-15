@@ -449,3 +449,94 @@ change_summary: 반려된 계정 식별·quota 귀속·출시일 보존 구현�
 - 핸드오버: scripts/runner_handover_write.py의 http_fallback_write를 entry_key=runner:runner-8a862568로 호출 → ok=false, http_fallback_unconfigured (AADS_API_URL 및 쓰기키/monitor키 미설정). DB도 접근 실패하여 쓰기/재조회 불가. handover_db_write_failed: 핸드오버 DB 미기록. 서버 이벤트 원장 자체의 기록도 연결 불가로 미확인. HANDOVER.md는 수정하지 않았다.
 
 - 최종 검증 확정: 위 4개 공식 단위 파일 **118 passed, 2 skipped in 9.37s** (PostgreSQL DSN 미설정 1개, opt-in Chromium 통합 1개). ruff **All checks passed**, compileall exit 0, dup_guard exit 0, git diff --check exit 0. Node의 전체 admin script 구문 검사도 통과 테스트에 포함된다. 최종 변경 파일은 RESULT.md와 admin.html 및 테스트 2개, 총 4개다.
+
+
+## 마이그레이션 2건 되돌림 SQL 가드 및 단일 트랜잭션화 결과 (runner-f7988bc6)
+
+- TASK_ID: AADS-DEPLOY-MIGRATION-ROLLBACK-GUARD-20261115
+- document_key: aads-migration-rollback-guard-txn (정본 미등록(미완료), 열람 링크 미제공)
+- source_task_id: runner-f7988bc6
+- change_summary: 마이그레이션 2건 되돌림 SQL 단일 트랜잭션화 및 객체 보호 가드 보완
+
+### STEP 0 기존 구현 조사 및 분류
+
+| 대상 파일 / 모듈 | 기존 항목 | 분류 | 상세 사유 |
+|---|---|---|---|
+| `migrations/rollback/20261111_canonical_document_approval_delegation.down.sql` | 최상위 DDL (DROP TABLE, ALTER TABLE DROP COLUMN) | 유지/수정 | public 스키마 명시, CASCADE 제거 유지 |
+| `migrations/rollback/20261111_canonical_document_approval_delegation.down.sql` | 잠금 제한문 (SET LOCAL) | 수정 | BEGIN; ... COMMIT; 단일 트랜잭션 내부로 이동 |
+| `migrations/rollback/20261111_canonical_document_approval_delegation.down.sql` | 트랜잭션 래퍼 및 가드 DO 블록 | 신규 | `\set ON_ERROR_STOP on`, `BEGIN;`, DO 가드(schema_migrations 확인, 10개 열 및 metadata jsonb 정의 확인, pg_depend 의존성 확인, 멱등 NOTICE, 불일치 EXCEPTION), `COMMIT;` 추가 |
+| `migrations/rollback/20261111_canonical_document_approval_delegation.down.sql` | 헤더 백업 안내문 | 수정 | 서버 측 `COPY (` 구문 제거 및 psql 클라이언트 측 `\copy` 안내로 수정, 1차 롤백 무해성 및 정방향 서술 대체 명시 |
+| `migrations/20261111_canonical_document_approval_delegation_rollback.sql` | 위 down.sql 과 동일 항목 전체 | 수정/신규 | down.sql 과 100% 동일한 내용으로 동기화 (두 벌 동일성 유지) |
+| `migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql` | 최상위 DDL (ALTER TABLE DROP COLUMN 2건) | 유지/수정 | public 스키마 명시, CASCADE 제거 유지 |
+| `migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql` | 잠금 제한문 (SET LOCAL) | 수정 | BEGIN; ... COMMIT; 단일 트랜잭션 내부로 이동 |
+| `migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql` | 트랜잭션 래퍼 및 가드 DO 블록 | 신규 | `\set ON_ERROR_STOP on`, `BEGIN;`, DO 가드(schema_migrations 확인, revert_of_verified jsonb nullable 정의 확인, pg_depend 의존성 확인, 멱등 NOTICE, 불일치 EXCEPTION), `COMMIT;` 추가 |
+| `migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql` | 헤더 롤백/백업 안내문 | 수정 | scripts/pipeline-runner.sh 잔존 열 사용 명시, 러너 작업 0건 확인 쿼리 예시, 1차 롤백 무해성 명시, 클라이언트 `\copy` 안내 및 백업 행수 확인(`wc -l`) 절차 기재, 정방향 서술 대체 명시 |
+| `migrations/20261112_code_review_requests_revert_of_verified_rollback.sql` | 위 down.sql 과 동일 항목 전체 | 수정/신규 | down.sql 과 100% 동일한 내용으로 동기화 (두 벌 동일성 유지) |
+| `tests/unit/test_migration_rollback_guards.py` | 마이그레이션 되돌림 정적 계약 단위 테스트 10건 | 신규 | 4개 파일의 단일 트랜잭션, DO 가드, NO-CASCADE, NO-SERVER-COPY, 20261112 러너 설명, 정방향 불변 sha256 검증 |
+| `scripts/check_migration_txn.py` | `is_excluded_path` | 수정 | 지시서 외 변경 사유: migrations/ 직하 `*_rollback.sql` 파일에 BEGIN;/COMMIT; 추가 시 pre-commit 훅이 차단하지 않도록 `*rollback*` 제외 조건 보완 |
+| `scripts/pre_commit_test_map.py` | `GROUPS` | 수정 | 지시서 외 변경 사유: 되돌림 파일 변경 시 신규 단위 테스트 `test_migration_rollback_guards.py`가 pre-commit 에서 자동 실행되도록 그룹 매핑 추가 |
+| 삭제 항목 | 없음 | 유지 | 기존 테이블/열 및 호출처 삭제 없음 |
+
+### 주요 개선 내역
+
+1. **되돌림 SQL 단일 트랜잭션화**:
+   - `migrations/rollback/` 및 `migrations/` 내 4개 되돌림 파일 모두 맨 위에 `\set ON_ERROR_STOP on` 배치.
+   - 본문을 `BEGIN; ... COMMIT;` 으로 감싸고, `SET LOCAL lock_timeout = '5s';` 및 `SET LOCAL statement_timeout = '60s';` 를 `BEGIN;` 직후로 이동.
+   - psql 실행 안내(`psql -v ON_ERROR_STOP=1 -X -f <파일>`) 및 `--single-transaction` 병용 금지 주의 문구 1줄 명시.
+   - 배포 적용기(`scripts/apply_release_migrations.sh`)에서 `*.verify.sql|*rollback*` 및 `migrations/rollback` 하위 경로는 `EXCLUDE`로 분류되어 외부 트랜잭션으로 감싸지지 않음을 코드로 확인.
+
+2. **삭제 전 객체 존재·정의 확인 가드 (DO 블록)**:
+   - `public.schema_migrations` 에 해당 마이그레이션 적용 기록(`filename` 열)이 없으면 `RAISE EXCEPTION`으로 즉시 중단(정방향 미적용 상태에서 동일 이름 객체 임의 생성 시 삭제 방지).
+   - 대상 객체 정의 일치 검사:
+     - 20261111: `public.project_document_approval_delegations` 열 10개 구성 및 `public.project_document_events.metadata` 타입(`jsonb`), `is_nullable='YES'`, 기본값 없음 확인.
+     - 20261112: `public.code_review_requests.revert_of_verified` 및 `public.pipeline_jobs.revert_of_verified` 타입(`jsonb`), `is_nullable='YES'`, 기본값 없음 확인.
+   - 의존 객체 검사: `pg_depend` 및 `pg_constraint` 기준 외부 FK, 외부 뷰, 색인 등 정방향이 만들지 않은 의존 객체 존재 시 `RAISE EXCEPTION`으로 중단(연쇄 삭제 금지, `CASCADE` 미사용).
+   - 멱등성 보장: 이미 되돌려진 상태(객체 모두 부재)는 `RAISE NOTICE` 후 정상 종료(`RETURN;`).
+   - 불일치 보호: 대상 객체 중 일부만 남아있는 불완전 상태는 `RAISE EXCEPTION`으로 즉시 트랜잭션 롤백.
+   - 스키마 한정: 모든 대상 객체 및 카탈로그 조회를 `public.` 스키마로 명시하여 `search_path` 독립성 확보.
+
+3. **20261112 러너 롤백 설명 정정 및 백업 개선**:
+   - 구 API 는 해당 열을 읽지 않으나 `scripts/pipeline-runner.sh`는 계속 해당 열을 쓴다는 점을 명확히 서술.
+   - 1차 롤백(API 이전 판 복귀) 시 nullable 열이라 무해하며 down 이 필요 없다는 점을 1줄로 구분하여 명시.
+   - 스키마 열 삭제(down) 전 필수 선행 순서 명시: ① 러너 신규 작업 수락 중지 ② 실행 중 러너 작업 0건 확인(`SELECT count(*) FROM public.pipeline_jobs WHERE status = 'running';`) ③ 러너를 미사용 판으로 전환 ④ 클라이언트 백업 ⑤ down 실행 (실행·승인 주체: CEO 승인 후 운영 세션).
+   - 서버 측 `COPY (` 구문을 제거하고 psql 클라이언트 측 `\copy` (호스트 경로 `/root/aads/backups/...`)로 변경, 백업 파일 존재 및 행 수(`wc -l`) 검증 후 down 실행 절차 기재 (20261111도 동일 적용).
+
+4. **정방향 2파일 불변**:
+   - `migrations/20261111_canonical_document_approval_delegation.sql` sha256: `97a3e9edbbfed1d19e76f9c98a75fd93d54b7081348d53f5092cfb44142d9afa`
+   - `migrations/20261112_code_review_requests_revert_of_verified.sql` sha256: `6d9f90e8139434e72370c248bedef9d72d7158487fb47574bd27ac128f281a0e`
+   - `git diff --stat`에 두 파일 전혀 없음. 정방향 파일 헤더 주석의 서술은 되돌림 파일 헤더에서 "정방향 파일 N행의 설명은 이 파일의 설명으로 대체한다"로 정정.
+
+### 검증 결과
+
+1. **정방향 sha256 불변 검증**:
+   - `sha256sum migrations/20261111_canonical_document_approval_delegation.sql migrations/20261112_code_review_requests_revert_of_verified.sql`
+     - 20261111: `97a3e9edbbfed1d19e76f9c98a75fd93d54b7081348d53f5092cfb44142d9afa` (일치)
+     - 20261112: `6d9f90e8139434e72370c248bedef9d72d7158487fb47574bd27ac128f281a0e` (일치)
+   - `git diff --stat` 상 정방향 파일 변경 0건.
+
+2. **되돌림 파일 두 벌 동일성 검증**:
+   - 20261111 down.sql 및 _rollback.sql sha256: `a4d860b5a4590905e4d0ff9b115e2a357445ee21c980868260de92c8adf03972` (100% 동일)
+   - 20261112 down.sql 및 _rollback.sql sha256: `4c4ab5b155ac5d540f2e5805303fbdeb4769148a8fd26c745d4c96ccc80bd535` (100% 동일)
+
+3. **격리 DB 검증**:
+   - 환경 내 독립 postgresql 서비스 및 `initdb`/`pg_ctl` 바이너리 부재, 그리고 규칙 2(docker compose / restart 금지)에 의해 격리 DB 인스턴스를 직접 기동할 수 없음.
+   - 지시서 지침("격리 DB 를 못 띄우면 그 사실을 명시하고 정적 테스트로 대체")에 따라 정적 계약 단위 테스트(`test_migration_rollback_guards.py`)로 대체 검증함.
+
+4. **단위 테스트 실행 결과**:
+   - `bash scripts/run_unit_tests.sh tests/unit/test_migration_rollback_guards.py`
+     - **10 passed in 0.51s, 종료코드 0**
+   - 연관 마이그레이션 단위 테스트 전체 실행:
+     - `bash scripts/run_unit_tests.sh tests/unit/test_migration_rollback_guards.py tests/unit/test_check_migration_txn.py tests/unit/test_migration_delegation_gate.py tests/unit/test_apply_migration_direct_gate.py tests/unit/test_release_migration_autoverify.py`
+     - **241 passed in 7.31s, 종료코드 0**
+   - pre-commit 매핑 테스트 실행:
+     - `bash scripts/run_unit_tests.sh tests/unit/test_migration_rollback_guards.py tests/unit/test_dup_guard.py tests/unit/test_pre_commit_test_map.py tests/unit/test_precommit_rauth_check.py`
+     - **99 passed in 5.05s, 종료코드 0**
+   - `python3 -m compileall tests/unit/test_migration_rollback_guards.py scripts/check_migration_txn.py scripts/pre_commit_test_map.py`: **종료코드 0**
+   - `python3 scripts/dup_guard.py`: **종료코드 0**
+   - `git diff --check`: **종료코드 0**
+
+5. **커밋 확인**:
+   - `git log -1` 확인 완료 (HEAD: commit `673c6c309de03e62ccea498b732d27c19ae25717`).
+   - 규칙 2 및 4 준수: git commit, git push, docker build 직접 실행하지 않음. 승인 후 Runner 빌드 검증 대상.
+   - 규칙 7(R-AUTH) 준수: LLM 인증 토큰/키 수정 없음.
+   - 규칙 8(R-001) 준수: HANDOVER.md 수정 없음.

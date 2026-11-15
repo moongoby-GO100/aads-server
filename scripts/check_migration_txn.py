@@ -77,7 +77,13 @@ def _norm(s: str) -> str:
 def is_excluded_path(path: str | Path) -> bool:
     """rollback/ 등 검사 제외 대상 경로인지 확인한다."""
     posix = Path(path).as_posix()
-    return "rollback/" in posix or posix.startswith("rollback/")
+    name = Path(posix).name
+    return (
+        "rollback/" in posix
+        or posix.startswith("rollback/")
+        or "rollback" in name
+        or name.endswith(".down.sql")
+    )
 
 
 def is_migration_file(path: str | Path) -> bool:
