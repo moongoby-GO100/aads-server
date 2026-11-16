@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,20 @@ def db(tmp_path, monkeypatch):
         coro.close()
         return None
 
+    import asyncpg
+
+    def _block_asyncpg(*args, **kwargs):
+        raise AssertionError("단위 테스트에서 실제 DB 접속(asyncpg)이 호출되었습니다")
+
+    monkeypatch.setattr(asyncpg, "connect", _block_asyncpg)
+    monkeypatch.setattr(asyncpg, "create_pool", _block_asyncpg)
+
+    @asynccontextmanager
+    async def fake_employee_write_lock(email, *extra_keys):
+        yield
+
+    monkeypatch.setattr(svc, "_employee_write_lock", fake_employee_write_lock)
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_db_available", lambda: True)
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
@@ -204,7 +219,7 @@ def test_same_email_accepts_case_insensitively(db):
 
 def test_legacy_invite_without_email_accepts_any_account(db):
     svc._write_file_rows("employee_invites", [{
-        "id": "inv-old", "token": "tok-old", "name": "양재혁", "status": "pending",
+        "id": "inv-old", "token": "tok-old", "name": "양재혁", "phone": "010-1234-5678", "status": "pending",
         "targets": [{"business_id": "biz-sungshin", "branch": "성신여대점"}],
     }])
     result = svc.accept_invite({"token": "tok-old"}, STRANGER)
@@ -302,7 +317,7 @@ def test_multi_branch_same_person_is_linked(db):
 def test_legacy_invite_without_email_never_links_payroll(db):
     db.ledgers["payroll_statements"].append(_statement("s-sep", "양재혁"))
     svc._write_file_rows("employee_invites", [{
-        "id": "inv-old", "token": "tok-old", "name": "양재혁", "status": "pending",
+        "id": "inv-old", "token": "tok-old", "name": "양재혁", "phone": "010-1234-5678", "status": "pending",
         "targets": [{"business_id": "biz-sungshin", "branch": "성신여대점"}],
     }])
     result = svc.accept_invite({"token": "tok-old"}, EMPLOYEE)

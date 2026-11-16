@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,20 @@ def db(tmp_path, monkeypatch):
         coro.close()
         return None
 
+    import asyncpg
+
+    def _block_asyncpg(*args, **kwargs):
+        raise AssertionError("단위 테스트에서 실제 DB 접속(asyncpg)이 호출되었습니다")
+
+    monkeypatch.setattr(asyncpg, "connect", _block_asyncpg)
+    monkeypatch.setattr(asyncpg, "create_pool", _block_asyncpg)
+
+    @asynccontextmanager
+    async def fake_employee_write_lock(email, *extra_keys):
+        yield
+
+    monkeypatch.setattr(svc, "_employee_write_lock", fake_employee_write_lock)
+    monkeypatch.setattr(svc, "_serialized_employee_write", lambda email, operation, *lock_keys: operation())
     monkeypatch.setattr(svc, "_db_available", lambda: True)
     monkeypatch.setattr(svc, "_run_db", run_db)
     monkeypatch.setattr(svc, "_db_fetch_ledger", fake_fetch_ledger)
