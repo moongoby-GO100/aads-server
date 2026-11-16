@@ -3845,6 +3845,35 @@ commit_job_worktree_for_approval() {
             record_runner_event "$job_id" "handover_md_excluded" "info" "" "" "" "" "" "{\"files\":{${_ho_files}},\"lines\":${_ho_total}}" >/dev/null 2>&1 || true
         fi
     fi
+    # 러너 공용 루트 RESULT.md 는 커밋하지 않는다(2026-11-17, AADS-RUNNER-RESULT-MD-EXCLUDE-20261117).
+    # RESULT.md 변경은 스테이징에서만 뺀다 — 워크트리 파일은 그대로 둔다.
+    local _res_path _res_lines _res_files="" _res_total=0 _res_still=0
+    while IFS= read -r _res_path; do
+        case "$_res_path" in
+            RESULT.md) ;;
+            *) continue ;;
+        esac
+        _res_lines=$(git -C "$worktree_dir" diff --cached --numstat -- "$_res_path" 2>/dev/null | awk '{ if ($1 ~ /^[0-9]+$/) a += $1; if ($2 ~ /^[0-9]+$/) d += $2 } END { print a + d + 0 }')
+        if git -C "$worktree_dir" cat-file -e "HEAD:${_res_path}" 2>/dev/null; then
+            git -C "$worktree_dir" reset -q HEAD -- "$_res_path" >/dev/null 2>&1 || true
+        else
+            git -C "$worktree_dir" rm --cached -q --ignore-unmatch -- "$_res_path" >/dev/null 2>&1 || true
+        fi
+        if ! git -C "$worktree_dir" diff --cached --quiet -- "$_res_path" 2>/dev/null; then
+            _res_still=1
+            continue
+        fi
+        _res_total=$((_res_total + ${_res_lines:-0}))
+        _res_files+="${_res_files:+,}\"$(printf '%s' "$_res_path" | tr -d '"\\')\":${_res_lines:-0}"
+        log "  RESULT_MD_EXCLUDED job=$job_id file=$_res_path lines=${_res_lines:-0} — 스테이징에서 제외(워크트리 보존)" >&2
+    done < <(git -C "$worktree_dir" -c core.quotePath=false diff --cached --name-only 2>/dev/null)
+    if [[ "$_res_still" -eq 1 ]]; then
+        _fail_job "$job_id" "$session_id" "approval_commit_stage_failed" "awaiting_approval 거부 — RESULT.md 를 스테이징에서 제외하지 못함(워크트리 보존)"
+        return 1
+    fi
+    if [[ -n "$_res_files" ]]; then
+        record_runner_event "$job_id" "result_md_excluded" "info" "" "" "" "" "" "{\"files\":{${_res_files}},\"lines\":${_res_total}}" >/dev/null 2>&1 || true
+    fi
     # 워커가 격리 워크트리 안에서 자기 변경을 이미 커밋해 두는 경우가 있다.
     # 그러면 스테이징에 남는 것이 없어 git commit 이 1 을 반환하고, 그것을
     # 실패로 처리하면 멀쩡한 산출물이 통째로 버려진다 — 2026-09-17 13:08 KST

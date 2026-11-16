@@ -122,6 +122,18 @@ _TEST_FILE_PATH_RE = re.compile(r"(?:^|/)(?:tests?/|test_[^/]*\.py$|[^/]*_test\.
 _TEST_FUNCTION_RE = re.compile(r"(?:async[ \t]+def|def)[ \t]+test_[A-Za-z0-9_]*")
 _DIFF_HEADER_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)")
 _ASYNC_DEF_RE = re.compile(r"^async[ \t]+def[ \t]+")
+_DOC_FILE_PATH_RE = re.compile(r"\.(?:md|markdown|txt|rst)$", re.IGNORECASE)
+
+
+def _is_doc_diff(file_diff: str) -> bool:
+    """diff 파일 경로가 .md·.markdown·.txt·.rst 인지 판별한다 (_DIFF_HEADER_PATH_RE 재사용)."""
+    header = _DIFF_HEADER_PATH_RE.match(file_diff.lstrip())
+    if not header:
+        return False
+    return bool(
+        _DOC_FILE_PATH_RE.search(header.group(1))
+        and _DOC_FILE_PATH_RE.search(header.group(2))
+    )
 
 
 def _parse_review_json(raw: str) -> Optional[dict]:
@@ -1198,6 +1210,8 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 def _deleted_symbol_lines(file_diff: str) -> list[tuple[str, Optional[int]]]:
     """(삭제된 선언 심볼, 그 줄의 pre-image 줄 번호). hunk 헤더가 없으면 줄 번호는 None."""
+    if _is_doc_diff(file_diff):
+        return []
     old_line: Optional[int] = None
     found: list[tuple[str, Optional[int]]] = []
     for line in file_diff.split("\n"):
@@ -1234,6 +1248,8 @@ def _diff_symbol_scopes(
     file_diff: str,
 ) -> tuple[list[tuple[str, Optional[str], bool]], list[tuple[str, Optional[str], bool]]]:
     """Track old/new scope stacks independently; a hunk gap invalidates scope."""
+    if _is_doc_diff(file_diff):
+        return ([], [])
     stacks: list[list[tuple[int, str, str]]] = [[], []]
     records: tuple[list[tuple[str, Optional[str], bool]], list[tuple[str, Optional[str], bool]]] = ([], [])
     for line in file_diff.splitlines():
@@ -1295,6 +1311,8 @@ def _cross_file_moves(diff: str, count_diff: Optional[str] = None) -> dict[str, 
     added: dict[str, list[str]] = {}
     sections: dict[str, str] = {}
     for section in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        if _is_doc_diff(section):
+            continue
         paths = _extract_changed_files(section)
         if not paths:
             continue
@@ -1306,10 +1324,16 @@ def _cross_file_moves(diff: str, count_diff: Optional[str] = None) -> dict[str, 
                     for symbol in _DELETED_SYMBOL_RE.findall("-" + line[1:]):
                         records.setdefault(_signature_key(symbol), []).append(path)
     global_counts = []
+    target_diff = count_diff if count_diff is not None else diff
+    non_doc_sections = [
+        sec for sec in re.split(r"(?=^diff --git )", target_diff or "", flags=re.MULTILINE)
+        if not _is_doc_diff(sec)
+    ]
     for prefix in ("-", "+"):
         global_counts.append(Counter(
             _signature_key(symbol)
-            for line in (count_diff if count_diff is not None else diff).splitlines()
+            for sec in non_doc_sections
+            for line in sec.splitlines()
             if line.startswith(prefix) and not line.startswith(prefix * 3)
             for symbol in _DELETED_SYMBOL_RE.findall("-" + line[1:])
         ))
@@ -1366,6 +1390,8 @@ def _removed_preservation_symbol_records(
     removed: list[_RemovedSymbol] = []
     exempted_locals: list[str] = []
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        if _is_doc_diff(file_diff):
+            continue
         deleted_lines = _deleted_symbol_lines(file_diff)
         deletions = [symbol for symbol, _ in deleted_lines]
         # Only additions may cancel a removed declaration.
@@ -1578,6 +1604,8 @@ def _split_exempt_private_symbols(
     deleted_in: dict[str, set[str]] = {name: set() for name in names}
     referenced_by_diff: dict[str, set[str]] = {name: set() for name in names}
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        if _is_doc_diff(file_diff):
+            continue
         header = _DIFF_HEADER_PATH_RE.match(file_diff)
         if not header:
             continue
@@ -1984,6 +2012,8 @@ def _split_scope_exempt_symbols(
 
     file_diffs: dict[str, Optional[str]] = {}
     for file_diff in re.split(r"(?=^diff --git )", diff or "", flags=re.MULTILINE):
+        if _is_doc_diff(file_diff):
+            continue
         header = _DIFF_HEADER_PATH_RE.match(file_diff)
         if header:
             path = header.group(2)

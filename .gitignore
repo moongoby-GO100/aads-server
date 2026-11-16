@@ -141,3 +141,6 @@ docs/reports/*SECURITY_AUDIT*
 
 # Host-generated token-free account identity; never source-controlled.
 app/data/antigravity_identity.json
+
+# 러너 작업 결과 보고서 — 공용 루트 RESULT.md 는 git 추적에서 제외(2026-11-17)
+/RESULT.md
