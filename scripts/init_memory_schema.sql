@@ -173,6 +173,28 @@ CREATE TABLE IF NOT EXISTS monitored_services (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_monitored_services_unique
     ON monitored_services(server, service_name);
 
+-- M5: cafe24_114 ACCT 운영 상시 감시 시드 (비파괴 멱등)
+INSERT INTO monitored_services (
+    server,
+    service_name,
+    check_type,
+    check_target,
+    check_interval,
+    timeout,
+    auto_recovery_command,
+    enabled
+) VALUES (
+    'cafe24_114',
+    'acct-fb-public',
+    'http_health',
+    'https://fb.newtalk.kr/health/live',
+    60,
+    10,
+    NULL,
+    TRUE
+)
+ON CONFLICT (server, service_name) DO NOTHING;
+
 -- ======================================================
 -- AADS-186E-2: 4계층 메모리 — session_notes (Working Memory)
 -- ======================================================

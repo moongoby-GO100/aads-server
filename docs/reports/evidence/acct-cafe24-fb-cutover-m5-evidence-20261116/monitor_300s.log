@@ -1,0 +1,61 @@
+================================================================================
+ACCT 카페24 (fb.newtalk.kr) 300초 상시 감시 실측 로그 (M5)
+측정 시작: 2026-11-16 09:21:48 KST
+주기: 30초 간격, 총 11회 측정 (총 경과: 300초)
+타깃 1: https://fb.newtalk.kr/health/live (check_type=http_health, 기대값=200)
+타깃 2: https://fb.newtalk.kr/login (기대값=302 -> /static/apps/obys/index.html)
+User-Agent: aads-monitor-m5-evidence-20261116
+================================================================================
+
+[Sample 01/11] 2026-11-16 09:21:48 KST
+  /health/live : HTTP 200 | 0.098s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.085s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 02/11] 2026-11-16 09:22:18 KST
+  /health/live : HTTP 200 | 0.132s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.319s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 03/11] 2026-11-16 09:22:48 KST
+  /health/live : HTTP 200 | 0.148s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.150s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 04/11] 2026-11-16 09:23:19 KST
+  /health/live : HTTP 200 | 0.175s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.173s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 05/11] 2026-11-16 09:23:49 KST
+  /health/live : HTTP 200 | 0.203s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.126s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 06/11] 2026-11-16 09:24:19 KST
+  /health/live : HTTP 200 | 0.506s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.234s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 07/11] 2026-11-16 09:24:50 KST
+  /health/live : HTTP 200 | 0.123s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.073s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 08/11] 2026-11-16 09:25:20 KST
+  /health/live : HTTP 200 | 0.251s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.110s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 09/11] 2026-11-16 09:25:51 KST
+  /health/live : HTTP 200 | 0.212s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.186s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 10/11] 2026-11-16 09:26:21 KST
+  /health/live : HTTP 200 | 0.134s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.084s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+[Sample 11/11] 2026-11-16 09:26:51 KST
+  /health/live : HTTP 200 | 0.149s | body: {"status":"ok","service":"yeoljeong-finance"}
+  /login       : HTTP 302 | 0.077s | location: https://fb.newtalk.kr/static/apps/obys/index.html
+
+================================================================================
+감시 측정 요약:
+  - 총 측정 횟수: 11회 (300초 구간 완주)
+  - /health/live: 성공 11/11 (100%), 평균 응답시간: 0.194s, 오류 0건
+  - /login      : 정상 리디렉트 11/11 (100%, 302 -> /static/apps/obys/index.html), 평균 응답시간: 0.147s
+  - 측정 종료: 2026-11-16 09:26:52 KST
+  - 잔존 프로세스: 0 (정상 완료)
+================================================================================
