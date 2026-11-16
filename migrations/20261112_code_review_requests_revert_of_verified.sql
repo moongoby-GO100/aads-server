@@ -44,8 +44,19 @@
 --
 -- ■ 실패 시 복구 책임과 절차:
 --   적용기(apply_migration.sh)와 자동 검증기(release_migration_autoverify.py)는 단일 트랜잭션 안에서 이 파일을 실행한다.
---   적용 중 잠금 타임아웃 등 오류 발생 시 즉시 ROLLBACK 되므로 두 표 모두 열이 추가되지 않은 깨끗한 상태로 복구된다.
+--   적용 중 오류 발생 시 즉시 ROLLBACK 되므로 부분 적용 상태가 남지 않는다.
 --   내부 BEGIN/COMMIT 은 두지 않는다(적용기 트랜잭션과의 원자성 유지).
+--
+-- ■ postcheck 실패 시 복구 절차:
+--   1) COMMIT 전 실패(적용 SQL 오류 또는 <이름>.verify.sql 의 RAISE EXCEPTION):
+--      마이그레이션과 schema_migrations 적용 기록이 함께 자동 ROLLBACK 된다. 수동 조치 없음.
+--      재시도는 원인(정방향 SQL 또는 verify.sql)을 수정한 뒤 다음 릴리스에서만 한다.
+--   2) COMMIT 후 실패(적용기의 postcheck 단계, exit=5):
+--      API 전환을 하지 않는다(릴리스 중단). 잔존 스키마는 nullable·미참조라 그대로 둔다.
+--      적용 기록은 유지되며 지우지 않는다. down SQL 은 CEO 승인 후 운영 세션에서만 실행한다.
+--      담당은 CTO 세션이다. 재시도 조건: 원인 수정 후 다음 릴리스(파일 sha256 이 바뀌면 DRIFT 로 재적용되지 않으므로
+--      새 마이그레이션 파일로 보정한다).
+--   3) down 은 적용 기록의 note 에 {"precheck":"absent"} 가 있을 때만 객체를 지운다(기존 동명 객체 보호).
 --
 -- ■ 객체 정의 검증:
 --   적용 후 migrations/20261112_code_review_requests_revert_of_verified.verify.sql 을 실행하여

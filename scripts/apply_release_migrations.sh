@@ -22,7 +22,8 @@
 #
 # Exit codes: 0 ok, 2 usage, 4 destructive SQL in a pending file (nothing
 # applied), 5 a migration failed (later files not attempted), 6 ledger unreadable,
-# 7 CEO approval unavailable/mismatched and auto-verify failed, 8 schema inspection failed.
+# 7 CEO approval unavailable/mismatched and auto-verify failed, 8 schema inspection failed,
+# 9 precheck: an object the migration would create already exists (nothing applied for that file).
 
 set -euo pipefail
 
@@ -319,12 +320,23 @@ for path in "${pending[@]}"; do
         echo "PENDING $name"
         continue
     fi
+    # 적용 직전 precheck: 만들 객체가 이미 있으면 중단(소유권 미입증). 결과는 schema_migrations.note 에 남는다.
+    migration_note=""
+    precheck_bin="${ROOT}/scripts/release_migration_precheck.py"
+    if [[ -f "$precheck_bin" ]]; then
+        if ! migration_note="$(python3 "$precheck_bin" "$path")"; then
+            echo "BLOCK-PRECHECK $name: 이미 존재하는 객체가 있거나 카탈로그를 읽지 못해 적용하지 않습니다(위 PRECHECK 줄 참고)" >&2
+            exit 9
+        fi
+    else
+        echo "WARN-PRECHECK $name: scripts/release_migration_precheck.py 없음 — precheck 기록 없이 적용(down 소유권 가드가 삭제를 거부합니다)" >&2
+    fi
     echo "APPLY $name"
     # Approval above covers every pending file. Bind each invocation to exactly
     # the file passed to apply_migration.sh, including its current content hash.
     absolute="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
     gate_manifest="$(printf '%s:%s\n' "$absolute" "$(sha256sum "$path" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
-    if ! AADS_MIGRATION_GATE_MANIFEST="$gate_manifest" "$APPLY_BIN" "$path"; then
+    if ! AADS_MIGRATION_NOTE="$migration_note" AADS_MIGRATION_GATE_MANIFEST="$gate_manifest" "$APPLY_BIN" "$path"; then
         echo "FAILED $name; later migrations not attempted" >&2
         exit 5
     fi
@@ -333,7 +345,10 @@ done
 
 if ((auto_verified)) && ((applied)); then
     if ! python3 "${ROOT}/scripts/release_migration_autoverify.py" postcheck "${pending[@]}"; then
-        echo "FAILED postcheck: 적용 후 객체 확인 실패 — 백업: /root/aads/backups/migration-autoverify" >&2
+        # 이 시점은 이미 COMMIT 뒤다(verify.sql 실패였다면 apply_migration.sh 가 COMMIT 전에 ROLLBACK 했다).
+        # 복구 절차는 정방향 SQL 머리말 "postcheck 실패 시 복구 절차" 를 따른다: API 전환 금지, 잔존 스키마 유지,
+        # down 은 CEO 승인 후 운영 세션에서만, 담당은 CTO 세션.
+        echo "FAILED postcheck: 적용 후 객체 확인 실패(COMMIT 이후) — API 전환 금지, down 은 CEO 승인 후 CTO 세션 — 백업: /root/aads/backups/migration-autoverify" >&2
         exit 5
     fi
 fi

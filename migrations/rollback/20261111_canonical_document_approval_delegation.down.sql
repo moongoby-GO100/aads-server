@@ -27,19 +27,28 @@
 --
 -- ■ 의존 순서: 자식 표(project_document_approval_delegations) DROP -> 부모 표 열(metadata) DROP. IF EXISTS 사용.
 --
+-- ■ 소유권·의존 가드 (2026-11-16 교차검토 보강)
+--   - schema_migrations.note 에 {"precheck":"absent"} 가 없으면 삭제하지 않는다(적용 전부터 있던 동명 객체일 수 있음).
+--   - pg_depend 는 deptype n·a·i 전체를 보고, 정방향이 만들지 않은 색인·트리거·제약·뷰가 하나라도 있으면 중단한다.
+--
 
 BEGIN;
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
+-- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 심볼릭 링크).
+\ir release_object_fingerprint.verify.sql
 -- 삭제 전 객체 존재·정의 확인 가드 (기존 객체 보호)
 DO $$
 DECLARE
     v_table_exists boolean;
     v_col_exists boolean;
-    v_col_count integer;
-    v_meta_match integer;
+    v_recorded jsonb;
+    v_current jsonb;
+    v_n integer;
+    v_tbl regclass;
+    v_evt regclass;
 BEGIN
     -- 0. 대상 객체 존재 여부 확인 (public 스키마 한정)
     SELECT EXISTS (
@@ -52,10 +61,9 @@ BEGIN
         WHERE table_schema = 'public' AND table_name = 'project_document_events' AND column_name = 'metadata'
     ) INTO v_col_exists;
 
-    -- 이미 되돌려진 상태(둘 다 없음): NOTICE 후 정상 종료 (멱등성 보장)
+    -- 대상이 없으면 지문을 입증할 수 없으므로 DROP 문장까지 진행하지 않는다.
     IF NOT v_table_exists AND NOT v_col_exists THEN
-        RAISE NOTICE '20261111: 되돌릴 대상 객체(project_document_approval_delegations 표 및 project_document_events.metadata 열)가 존재하지 않습니다. 이미 되돌려진 상태입니다.';
-        RETURN;
+        RAISE EXCEPTION 'fingerprint 대상 객체 없음: 삭제 중단(이미 되돌려진 상태 포함)';
     END IF;
 
     -- 일부만 남은 불일치 상태: EXCEPTION 발생 및 트랜잭션 롤백
@@ -63,70 +71,52 @@ BEGIN
         RAISE EXCEPTION '20261111: 되돌림 대상 객체 중 일부만 존재합니다 (표 존재=%, 열 존재=%). 상태가 불일치하므로 되돌림을 중단합니다.', v_table_exists, v_col_exists;
     END IF;
 
-    -- a) schema_migrations 에 해당 마이그레이션 파일 기록이 있는가
-    IF NOT EXISTS (
-        SELECT 1 FROM public.schema_migrations
-        WHERE filename IN (
-            'migrations/20261111_canonical_document_approval_delegation.sql',
-            '20261111_canonical_document_approval_delegation.sql'
-        )
-    ) THEN
-        RAISE EXCEPTION '20261111: schema_migrations 에 해당 마이그레이션 적용 기록이 없습니다. 이 마이그레이션이 적용된 적 없음 — 같은 이름의 기존 객체일 수 있어 중단합니다.';
+    LOCK TABLE public.project_document_approval_delegations, public.project_document_events IN ACCESS EXCLUSIVE MODE;
+
+    -- 소유권 미입증 또는 지문 불일치는 어떤 DROP 보다 먼저 중단한다.
+    SELECT note::jsonb INTO STRICT v_recorded FROM public.schema_migrations
+    WHERE filename IN ('migrations/20261111_canonical_document_approval_delegation.sql', '20261111_canonical_document_approval_delegation.sql');
+    v_current := pg_temp.release_object_fingerprint('20261111_canonical_document_approval_delegation.sql');
+    IF v_recorded->>'precheck' IS DISTINCT FROM 'absent'
+       OR v_recorded->>'fingerprint' IS NULL
+       OR v_recorded->>'fingerprint' IS DISTINCT FROM v_current->>'fingerprint'
+       OR v_recorded->'objects' IS DISTINCT FROM v_current->'objects' THEN
+        RAISE EXCEPTION '소유권 미입증: fingerprint missing/mismatch — 삭제 중단';
     END IF;
 
-    -- b) 대상 객체가 정방향 정의와 같은가
-    -- project_document_approval_delegations 표 열 수(10개) 확인
-    SELECT count(*) INTO v_col_count
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'project_document_approval_delegations';
+    -- c) 삭제 대상 표/열에 정방향이 만들지 않은 의존 객체가 없을 것 (CASCADE 금지).
+    --    pg_depend 는 deptype 'n'(일반)·'a'(자동: 색인·제약·트리거·기본값)·'i'(내부) 전부, classid·refclassid 를 지정해 본다.
+    v_tbl := to_regclass('public.project_document_approval_delegations');
+    v_evt := to_regclass('public.project_document_events');
 
-    IF v_col_count <> 10 THEN
-        RAISE EXCEPTION '20261111: project_document_approval_delegations 표의 열 구성이 정방향 정의(10개)와 다릅니다 (실제: %개).', v_col_count;
+    -- 1) 표를 참조하는 외부 FK
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE confrelid = v_tbl) THEN
+        RAISE EXCEPTION '20261111: project_document_approval_delegations 표를 참조하는 외부 외래 키(FK)가 존재합니다. 중단합니다.';
     END IF;
 
-    -- project_document_events.metadata 타입(jsonb), nullable, 기본값 없음 확인
-    SELECT count(*) INTO v_meta_match
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'project_document_events'
-      AND column_name = 'metadata'
-      AND data_type = 'jsonb'
-      AND is_nullable = 'YES'
-      AND column_default IS NULL;
-
-    IF v_meta_match <> 1 THEN
-        RAISE EXCEPTION '20261111: project_document_events.metadata 열의 정의가 정방향(jsonb, nullable, no default)과 일치하지 않습니다.';
+    -- 3) 표를 refobjid 로 하는 pg_depend 중 허용 목록(자기 행 타입·기본값·제약·색인·TOAST) 밖의 객체
+    SELECT count(*) INTO v_n FROM pg_depend d
+    WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = v_tbl
+      AND d.deptype IN ('n', 'a', 'i')
+      AND NOT (
+            (d.classid = 'pg_type'::regclass AND d.deptype = 'i'
+               AND d.objid = (SELECT reltype FROM pg_class WHERE oid = v_tbl))
+         OR d.classid = 'pg_attrdef'::regclass
+         OR d.classid = 'pg_constraint'::regclass
+         OR (d.classid = 'pg_class'::regclass
+               AND EXISTS (SELECT 1 FROM pg_class x WHERE x.oid = d.objid AND x.relkind IN ('i', 't')))
+      );
+    IF v_n <> 0 THEN
+        RAISE EXCEPTION '20261111: project_document_approval_delegations 표에 정방향이 만들지 않은 의존 객체(뷰·정책·확장통계·트리거 등)가 %개 있습니다. 중단합니다.', v_n;
     END IF;
 
-    -- c) 삭제 대상 표/열에 정방향이 만들지 않은 의존 객체(뷰·FK·트리거 등, pg_depend 기준)가 없을 것 (CASCADE 금지)
-    -- 1) 외부 테이블에서 project_document_approval_delegations 를 참조하는 FK 검사
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE confrelid = to_regclass('public.project_document_approval_delegations')
-    ) THEN
-        RAISE EXCEPTION '20261111: project_document_approval_delegations 표를 참조하는 외부 외래 키(FK)가 존재합니다. 연쇄 삭제 금지 원칙에 따라 중단합니다.';
-    END IF;
-
-    -- 2) 외부 뷰 또는 다른 객체가 project_document_approval_delegations 표에 의존하는지 검사
-    IF EXISTS (
-        SELECT 1 FROM pg_depend dep
-        WHERE dep.refobjid = to_regclass('public.project_document_approval_delegations')
-          AND dep.deptype = 'n'
-          AND (to_regclass('public.project_document_approval_delegations_lookup_idx') IS NULL
-               OR dep.objid <> to_regclass('public.project_document_approval_delegations_lookup_idx'))
-    ) THEN
-        RAISE EXCEPTION '20261111: project_document_approval_delegations 표에 정방향이 만들지 않은 의존 객체(뷰 등)가 존재합니다. 중단합니다.';
-    END IF;
-
-    -- 3) project_document_events.metadata 열을 참조하는 의존 객체(뷰, 색인 등) 검사
-    IF EXISTS (
-        SELECT 1 FROM pg_depend dep
-        JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid
-        WHERE dep.refobjid = to_regclass('public.project_document_events')
-          AND att.attname = 'metadata'
-          AND dep.deptype = 'n'
-    ) THEN
-        RAISE EXCEPTION '20261111: project_document_events.metadata 열에 정방향이 만들지 않은 의존 객체(뷰, 색인 등)가 존재합니다. 중단합니다.';
+    -- 4) project_document_events.metadata 열에 걸린 모든 의존(색인·트리거·제약·뷰·기본값 등): 정방향은 아무것도 걸지 않는다
+    SELECT count(*) INTO v_n FROM pg_depend d
+    JOIN pg_attribute att ON att.attrelid = d.refobjid AND att.attnum = d.refobjsubid
+    WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = v_evt
+      AND att.attname = 'metadata' AND d.deptype IN ('n', 'a', 'i');
+    IF v_n <> 0 THEN
+        RAISE EXCEPTION '20261111: project_document_events.metadata 열에 정방향이 만들지 않은 의존 객체(색인·트리거·제약·뷰 등)가 %개 있습니다. 중단합니다.', v_n;
     END IF;
 END $$;
 

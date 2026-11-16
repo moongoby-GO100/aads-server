@@ -122,6 +122,17 @@ for input_file in "${files[@]}"; do
         continue
     fi
 
+    # precheck 결과(JSON, apply_release_migrations.sh 가 전달). 없으면 note 는 NULL.
+    note_sql="NULL"
+    if [[ -n "${AADS_MIGRATION_NOTE:-}" ]]; then
+        note_sql="$(sql_literal "$AADS_MIGRATION_NOTE")"
+    fi
+    # <이름>.verify.sql 이 있으면 COMMIT 전에 같은 트랜잭션에서 실행한다. RAISE EXCEPTION 이면
+    # ON_ERROR_STOP 으로 psql 이 COMMIT 없이 끝나 마이그레이션과 적용 기록이 함께 ROLLBACK 된다.
+    verify_file="${file%.sql}.verify.sql"
+    if [[ ! -f "$verify_file" ]]; then
+        echo "WARN $filename: ${verify_file##*/} 없음 — COMMIT 전 정의 검증 없이 적용" >&2
+    fi
     echo "APPLY $filename"
     {
         printf '%s\n' 'BEGIN;'
@@ -130,17 +141,30 @@ for input_file in "${files[@]}"; do
         printf "%s\n" "SELECT set_config('aads.migration_started_at', clock_timestamp()::text, false);"
         sed -e '$a\' "$file"
         printf '%s\n' \
-            "INSERT INTO schema_migrations (filename, sha256, applied_by, source, duration_ms)" \
+            "INSERT INTO schema_migrations (filename, sha256, applied_by, source, duration_ms, note)" \
             "VALUES (${filename_sql}, ${sha256_sql}, current_user, 'runtime'," \
-            "        GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp() - current_setting('aads.migration_started_at')::timestamptz)) * 1000)::integer)" \
+            "        GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp() - current_setting('aads.migration_started_at')::timestamptz)) * 1000)::integer," \
+            "        ${note_sql})" \
             "ON CONFLICT (filename) DO UPDATE" \
             "SET sha256 = EXCLUDED.sha256," \
             "    applied_at = now()," \
             "    applied_by = EXCLUDED.applied_by," \
             "    source = EXCLUDED.source," \
             "    duration_ms = EXCLUDED.duration_ms," \
-            "    note = NULL;" \
-            'COMMIT;'
+            "    note = EXCLUDED.note;"
+        if [[ -f "$verify_file" ]]; then
+            printf '%s\n' '-- verify.sql: 실패하면 COMMIT 에 도달하지 못한다'
+            sed -e '$a\' "$verify_file"
+        fi
+        # 검증 성공 직후 같은 트랜잭션에서 소유권 지문을 기록한다.
+        case "${file##*/}" in
+            20261111_canonical_document_approval_delegation.sql|20261112_code_review_requests_revert_of_verified.sql)
+                [[ -f "$verify_file" ]] || { echo "Required verify.sql missing" >&2; exit 8; }
+                cat "$REPO_ROOT/migrations/release_object_fingerprint.verify.sql"
+                printf '%s\n' "UPDATE schema_migrations SET note = (coalesce(note::jsonb, '{}'::jsonb) || pg_temp.release_object_fingerprint($(sql_literal "${file##*/}")))::text WHERE filename = ${filename_sql};"
+                ;;
+        esac
+        printf '%s\n' 'COMMIT;'
     } | docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$PGDATABASE"
     echo "APPLIED $filename"
 done

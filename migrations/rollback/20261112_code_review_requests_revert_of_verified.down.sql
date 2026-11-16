@@ -34,19 +34,27 @@
 --
 -- ■ 의존 순서: 두 열은 상호 독립적이므로 순서에 제약이 없습니다. IF EXISTS 를 사용합니다.
 --
+-- ■ 소유권·의존 가드 (2026-11-16 교차검토 보강)
+--   - schema_migrations.note 에 {"precheck":"absent"} 가 없으면 삭제하지 않는다(적용 전부터 있던 동명 객체일 수 있음).
+--   - pg_depend 는 deptype n·a·i 전체를 보고, 정방향이 만들지 않은 색인·트리거·제약·뷰가 하나라도 있으면 중단한다.
+--
 
 BEGIN;
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
+-- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 심볼릭 링크).
+\ir release_object_fingerprint.verify.sql
 -- 삭제 전 객체 존재·정의 확인 가드 (기존 객체 보호)
 DO $$
 DECLARE
     v_crr_col_exists boolean;
     v_pj_col_exists boolean;
-    v_crr_match integer;
-    v_pj_match integer;
+    v_recorded jsonb;
+    v_current jsonb;
+    v_dep_crr integer;
+    v_dep_pj integer;
 BEGIN
     -- 0. 대상 열 존재 여부 확인 (public 스키마 한정)
     SELECT EXISTS (
@@ -63,10 +71,9 @@ BEGIN
           AND column_name = 'revert_of_verified'
     ) INTO v_pj_col_exists;
 
-    -- 이미 되돌려진 상태(둘 다 없음): NOTICE 후 정상 종료 (멱등성 보장)
+    -- 대상이 없으면 지문을 입증할 수 없으므로 DROP 문장까지 진행하지 않는다.
     IF NOT v_crr_col_exists AND NOT v_pj_col_exists THEN
-        RAISE NOTICE '20261112: 되돌릴 대상 객체(code_review_requests.revert_of_verified 및 pipeline_jobs.revert_of_verified 열)가 존재하지 않습니다. 이미 되돌려진 상태입니다.';
-        RETURN;
+        RAISE EXCEPTION 'fingerprint 대상 객체 없음: 삭제 중단(이미 되돌려진 상태 포함)';
     END IF;
 
     -- 일부만 남은 불일치 상태: EXCEPTION 발생 및 트랜잭션 롤백
@@ -74,63 +81,40 @@ BEGIN
         RAISE EXCEPTION '20261112: 되돌림 대상 객체 중 일부만 존재합니다 (code_review_requests=%, pipeline_jobs=%). 상태가 불일치하므로 되돌림을 중단합니다.', v_crr_col_exists, v_pj_col_exists;
     END IF;
 
-    -- a) schema_migrations 에 해당 마이그레이션 파일 기록이 있는가
-    IF NOT EXISTS (
-        SELECT 1 FROM public.schema_migrations
-        WHERE filename IN (
-            'migrations/20261112_code_review_requests_revert_of_verified.sql',
-            '20261112_code_review_requests_revert_of_verified.sql'
-        )
-    ) THEN
-        RAISE EXCEPTION '20261112: schema_migrations 에 해당 마이그레이션 적용 기록이 없습니다. 이 마이그레이션이 적용된 적 없음 — 같은 이름의 기존 객체일 수 있어 중단합니다.';
+    LOCK TABLE public.code_review_requests, public.pipeline_jobs IN ACCESS EXCLUSIVE MODE;
+
+    -- 소유권 미입증 또는 지문 불일치는 어떤 DROP 보다 먼저 중단한다.
+    SELECT note::jsonb INTO STRICT v_recorded FROM public.schema_migrations
+    WHERE filename IN ('migrations/20261112_code_review_requests_revert_of_verified.sql', '20261112_code_review_requests_revert_of_verified.sql');
+    v_current := pg_temp.release_object_fingerprint('20261112_code_review_requests_revert_of_verified.sql');
+    IF v_recorded->>'precheck' IS DISTINCT FROM 'absent'
+       OR v_recorded->>'fingerprint' IS NULL
+       OR v_recorded->>'fingerprint' IS DISTINCT FROM v_current->>'fingerprint'
+       OR v_recorded->'objects' IS DISTINCT FROM v_current->'objects' THEN
+        RAISE EXCEPTION '소유권 미입증: fingerprint missing/mismatch — 삭제 중단';
     END IF;
 
-    -- b) 대상 객체가 정방향 정의와 같은가 (jsonb, nullable, no default)
-    SELECT count(*) INTO v_crr_match
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'code_review_requests'
-      AND column_name = 'revert_of_verified'
-      AND data_type = 'jsonb'
-      AND is_nullable = 'YES'
-      AND column_default IS NULL;
-
-    IF v_crr_match <> 1 THEN
-        RAISE EXCEPTION '20261112: code_review_requests.revert_of_verified 열의 정의가 정방향(jsonb, nullable, no default)과 일치하지 않습니다.';
+    -- c) 삭제 대상 열에 정방향이 만들지 않은 의존 객체가 없을 것 (CASCADE 금지).
+    --    pg_depend 는 deptype 'n'(일반)·'a'(자동: 색인·제약·트리거·기본값)·'i'(내부) 전부, refclassid=pg_class 로 본다.
+    --    정방향은 열만 추가하므로 이 열에 걸린 의존은 하나도 없어야 한다.
+    SELECT count(*) INTO v_dep_crr FROM pg_depend dep
+    JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid
+    WHERE dep.refclassid = 'pg_class'::regclass
+      AND dep.refobjid = to_regclass('public.code_review_requests')
+      AND att.attname = 'revert_of_verified'
+      AND dep.deptype IN ('n', 'a', 'i');
+    IF v_dep_crr <> 0 THEN
+        RAISE EXCEPTION '20261112: code_review_requests.revert_of_verified 열에 정방향이 만들지 않은 의존 객체(색인·트리거·제약·뷰 등)가 %개 있습니다. 중단합니다.', v_dep_crr;
     END IF;
 
-    SELECT count(*) INTO v_pj_match
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'pipeline_jobs'
-      AND column_name = 'revert_of_verified'
-      AND data_type = 'jsonb'
-      AND is_nullable = 'YES'
-      AND column_default IS NULL;
-
-    IF v_pj_match <> 1 THEN
-        RAISE EXCEPTION '20261112: pipeline_jobs.revert_of_verified 열의 정의가 정방향(jsonb, nullable, no default)과 일치하지 않습니다.';
-    END IF;
-
-    -- c) 삭제 대상 열에 정방향이 만들지 않은 의존 객체(뷰·FK·색인 등, pg_depend 기준)가 없을 것 (CASCADE 금지)
-    IF EXISTS (
-        SELECT 1 FROM pg_depend dep
-        JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid
-        WHERE dep.refobjid = to_regclass('public.code_review_requests')
-          AND att.attname = 'revert_of_verified'
-          AND dep.deptype = 'n'
-    ) THEN
-        RAISE EXCEPTION '20261112: code_review_requests.revert_of_verified 열에 정방향이 만들지 않은 의존 객체(뷰, 색인 등)가 존재합니다. 중단합니다.';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1 FROM pg_depend dep
-        JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid
-        WHERE dep.refobjid = to_regclass('public.pipeline_jobs')
-          AND att.attname = 'revert_of_verified'
-          AND dep.deptype = 'n'
-    ) THEN
-        RAISE EXCEPTION '20261112: pipeline_jobs.revert_of_verified 열에 정방향이 만들지 않은 의존 객체(뷰, 색인 등)가 존재합니다. 중단합니다.';
+    SELECT count(*) INTO v_dep_pj FROM pg_depend dep
+    JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid
+    WHERE dep.refclassid = 'pg_class'::regclass
+      AND dep.refobjid = to_regclass('public.pipeline_jobs')
+      AND att.attname = 'revert_of_verified'
+      AND dep.deptype IN ('n', 'a', 'i');
+    IF v_dep_pj <> 0 THEN
+        RAISE EXCEPTION '20261112: pipeline_jobs.revert_of_verified 열에 정방향이 만들지 않은 의존 객체(색인·트리거·제약·뷰 등)가 %개 있습니다. 중단합니다.', v_dep_pj;
     END IF;
 END $$;
 
