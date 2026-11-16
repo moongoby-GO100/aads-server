@@ -1,6 +1,7 @@
 -- 오비서(OBYS DB) 백필 승인 기록. 롤백: migrations/rollback/20261104_obys_backfill_approval.down.sql
 -- 적용 대상은 OBYS DB 뿐이다(AADS DB 아님). 멱등: 여러 번 실행해도 같은 결과.
 -- 백필(과거 구간 일괄 재수집)은 여기 승인된 회사·종류·기간 안에서만 실행된다. 정기 증분 수집은 이 표를 보지 않는다.
+-- target=acct_business
 BEGIN;
 DO $$ BEGIN
     IF current_database() <> 'obys' THEN

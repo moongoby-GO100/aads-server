@@ -56,6 +56,7 @@ DDL_KEYWORDS = {
 KNOWN_ACCT_BUSINESS_MIGRATIONS = {
     "migrations/20261030_obys_work_schedules.sql",
     "migrations/20261102_obys_attendance_corrections.sql",
+    "migrations/20261104_obys_backfill_approval.sql",
     "migrations/20261105_obys_attendance_self_entry.sql",
     "migrations/20261105_obys_app_install_status.sql",
 }
