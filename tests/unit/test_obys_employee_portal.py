@@ -95,7 +95,11 @@ class TestStaticWiring:
     def test_portal_uses_only_existing_api_paths(self):
         assert "fetch(" not in PORTAL_JS
         paths = set(re.findall(r'financeApi\(\s*[`"]([^`"]+)[`"]', PORTAL_JS))
-        assert paths == {"/contracts/signing", "/contracts/${encodeURIComponent(contractId)}/signing-view"}
+        assert paths == {
+            "/contracts/signing",
+            "/contracts/${encodeURIComponent(contractId)}/signing-view",
+            "/me/resignation",
+        }
         assert "/contracts/signing" in _function_source("submitContractSignature")
         assert "/signing-view" in _function_source("startPendingSigning")
 

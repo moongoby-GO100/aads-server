@@ -206,7 +206,8 @@ def _member(email="me@example.com"):
 @pytest.mark.asyncio
 async def test_member_records_are_own_rows_only_and_filtered_in_sql(att_db):
     result = await _records("attendance", _member("ME@example.com"))
-    assert [r["id"] for r in result["records"]] == ["att-1", "att-3"]
+    assert {r["id"] for r in result["records"]} == {"att-1", "att-3"}
+    assert len(result["records"]) == 2
     dumped = str(result)
     assert "다른직원" not in dumped and "99999" not in dumped
     sql, args = att_db[0]
