@@ -88,7 +88,7 @@
   <section id="loginView" class="panel" hidden>
     <h2>로그인이 필요합니다</h2>
     <p class="muted">오비서에 직원 계정으로 로그인한 뒤 이 화면으로 돌아오십시오.</p>
-    <a class="btn primary" href="/static/apps/obys/index.html">오비서 로그인</a>
+    <a class="btn primary" href="/static/apps/obys/login.html">오비서 로그인</a>
   </section>
 
   <!-- 사업자 선택(여러 곳에 소속된 경우) -->
@@ -160,7 +160,7 @@
   <footer>
     <button id="refreshBtn" class="link-btn" type="button">새로고침</button>
     <button id="consentToggleBtn" class="link-btn" type="button" hidden>위치 동의 철회</button>
-    <a class="link-btn" href="/static/apps/obys/index.html">오비서 전체 화면</a>
+    <a class="link-btn" href="/static/apps/obys/login.html">오비서 전체 화면</a>
   </footer>
 </main>
 
@@ -214,7 +214,7 @@
       for (const cookieName of ["aads_token", "fb_access_token"]) {
         document.cookie = `${cookieName}=; Max-Age=0; path=/; SameSite=Lax`;
       }
-      window.location.replace("/static/apps/obys/index.html#login");
+      window.location.replace("/static/apps/obys/login.html");
       throw Object.assign(new Error("다시 로그인해 주세요."), { status: 401 });
     }
     if (!response.ok) {

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>오비서 로그인</title>
+<style>
+  :root{--ink:#1b232e;--muted:#6b7684;--line:#e3e8ef;--bg:#f5f7fa;--blue:#2f6fed;--blue-ink:#1b4ec2;--red:#d1453b}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg);color:var(--ink);
+       font-family:Pretendard,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.55}
+  main{width:min(420px,100%);background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px 24px;box-shadow:0 2px 10px rgba(27,35,46,.06)}
+  h1{margin:0 0 4px;font-size:22px}
+  .sub{margin:0 0 18px;color:var(--muted);font-size:14px}
+  label{display:block;margin-top:12px;font-weight:600;font-size:14px}
+  input[type=email],input[type=password]{display:block;width:100%;min-height:44px;margin-top:4px;padding:0 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px}
+  input:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .keep{display:flex;align-items:center;gap:8px;min-height:44px;font-weight:400;margin-top:6px}
+  .keep input{width:20px;height:20px}
+  button.primary{width:100%;min-height:48px;margin-top:8px;border:0;border-radius:8px;background:var(--blue);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+  button.primary[disabled]{opacity:.6;cursor:wait}
+  .error{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:14px}
+  .links{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:14px}
+  .links a,.links button{display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:none;color:var(--blue-ink);font-size:14px;cursor:pointer;text-decoration:underline}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>오비서</h1>
+  <p class="sub" id="subtitle">이메일과 비밀번호로 로그인하십시오.</p>
+  <form id="loginForm" novalidate>
+    <label for="email">이메일</label>
+    <input id="email" name="email" type="email" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required>
+    <label for="password">비밀번호</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <label class="keep" for="keep"><input id="keep" name="keep" type="checkbox" checked> 로그인 유지 (이 기기에서 7일)</label>
+    <button class="primary" id="submit" type="submit">로그인</button>
+    <div class="error" id="error" role="alert" aria-live="assertive" hidden></div>
+  </form>
+  <div class="links">
+    <button type="button" data-ar-open="reset">비밀번호 찾기</button>
+    <button type="button" data-ar-open="find-id">아이디 찾기</button>
+    <a href="/static/apps/obys/signup.html">사업자 회원가입</a>
+  </div>
+</main>
+<script src="/static/apps/obys/modules/login-route.js"></script>
+<script src="/static/apps/obys/modules/account-recovery.js"></script>
+<script>
+(function () {
+  "use strict";
+  var KEYS = ["aads_token", "fb_access_token"];
+  var Route = window.ObysLoginRoute;
+  var redirect = Route.redirectFromSearch(window.location.search);
+  var form = document.getElementById("loginForm");
+  var errorBox = document.getElementById("error");
+  var submit = document.getElementById("submit");
+
+  function cookieValue(name) {
+    var hit = document.cookie.split("; ").find(function (row) { return row.indexOf(name + "=") === 0; });
+    return hit ? decodeURIComponent(hit.slice(name.length + 1)) : "";
+  }
+  function storedToken() {
+    return localStorage.getItem(KEYS[0]) || localStorage.getItem(KEYS[1]) || cookieValue(KEYS[0]) || cookieValue(KEYS[1]);
+  }
+  function clearToken() {
+    KEYS.forEach(function (key) {
+      localStorage.removeItem(key);
+      document.cookie = key + "=; path=/; max-age=0; SameSite=Lax";
+    });
+  }
+  function showError(text) { errorBox.textContent = text; errorBox.hidden = false; }
+  function hideError() { errorBox.hidden = true; errorBox.textContent = ""; }
+
+  // 로그인 유지: 체크하면 localStorage + 7일 쿠키, 해제하면 브라우저를 닫을 때 사라지는 세션 쿠키만 쓴다.
+  function saveToken(token, keep) {
+    var secure = window.location.protocol === "https:" ? "; Secure" : "";
+    KEYS.forEach(function (key) {
+      if (keep) localStorage.setItem(key, token); else localStorage.removeItem(key);
+      document.cookie = key + "=" + encodeURIComponent(token) + "; path=/;" + (keep ? " max-age=604800;" : "") + " SameSite=Lax" + secure;
+    });
+  }
+
+  async function postJson(path, body) {
+    var response;
+    try {
+      response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch (_error) {
+      throw Object.assign(new Error("서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주십시오."), { status: 0 });
+    }
+    var payload = await response.json().catch(function () { return {}; });
+    if (!response.ok) {
+      var detail = typeof payload.detail === "string" ? payload.detail : "";
+      var message = response.status === 401 ? (detail || "이메일 또는 비밀번호가 올바르지 않습니다.")
+        : response.status === 429 ? (detail || "시도가 너무 많습니다. 잠시 뒤 다시 시도해 주십시오.")
+        : response.status >= 500 ? "서버에 문제가 있습니다. 잠시 뒤 다시 시도해 주십시오." : (detail || "로그인하지 못했습니다.");
+      throw Object.assign(new Error(message), { status: response.status });
+    }
+    return payload;
+  }
+
+  // 서버 세션 확인(기존 경로). 결과: 정상 세션 객체 / {unauthorized:true}(401) / null(403·5xx·네트워크 실패 = 권한 불명).
+  async function fetchSession(token) {
+    try {
+      var response = await fetch("/api/v1/yeoljeong-finance/session", { headers: { Authorization: "Bearer " + token } });
+      if (response.status === 401) return { unauthorized: true };
+      return response.ok ? await response.json() : null;
+    } catch (_error) { return null; }
+  }
+
+  // 이동. 권한을 확인하지 못했으면(목적지 "") 이동하지 않고 false 를 돌려준다.
+  function go(session, isAdmin) {
+    var target = Route.destinationAfterLogin(session, redirect, isAdmin);
+    if (!target) return false;
+    window.location.replace(target);
+    return true;
+  }
+
+  // 로그인 시도 번호. 제출이 시작되면 올라가고, 그보다 먼저 시작한 자동 진입 결과는 버린다.
+  var attempt = 0;
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    hideError();
+    var email = form.email.value.trim();
+    var password = form.password.value;
+    if (!email || !password) { showError("이메일과 비밀번호를 모두 입력해 주십시오."); return; }
+    submit.disabled = true;
+    submit.textContent = "로그인 중…";
+    var myAttempt = ++attempt;
+    try {
+      var payload = await postJson("/api/v1/auth/login", { email: email, password: password });
+      var token = payload.token;
+      if (payload.must_change_password) {
+        token = await window.ObysAccountRecovery.forcePasswordChange(token);
+      }
+      saveToken(token, form.keep.checked);
+      if (payload.is_admin === true) { go(null, true); return; }
+      var session = await fetchSession(token);
+      if (myAttempt !== attempt) return;
+      if (session && session.unauthorized) { clearToken(); throw new Error("로그인 정보를 확인하지 못했습니다. 다시 시도해 주십시오."); }
+      if (!go(session, false)) throw new Error("계정 권한을 확인하지 못했습니다. 잠시 뒤 다시 로그인해 주십시오.");
+    } catch (error) {
+      showError(error.message || "로그인하지 못했습니다.");
+      submit.disabled = false;
+      submit.textContent = "로그인";
+      form.password.value = "";
+      form.password.focus();
+    }
+  });
+
+  // 이미 로그인된 브라우저는 폼을 보이지 않고 바로 들어간다. 만료(401)된 토큰이면 지우고 폼을 유지한다.
+  // 사용자가 그 사이 새로 로그인했거나 저장된 토큰이 바뀌었으면 이 결과는 버린다(새 토큰을 지우지 않는다).
+  (async function autoEnter() {
+    var token = storedToken();
+    if (!token) return;
+    var startedAttempt = attempt;
+    var subtitle = document.getElementById("subtitle");
+    subtitle.textContent = "로그인 상태를 확인하는 중입니다…";
+    var session = await fetchSession(token);
+    var stale = startedAttempt !== attempt || storedToken() !== token;
+    if (stale) return;
+    subtitle.textContent = "이메일과 비밀번호로 로그인하십시오.";
+    if (session && session.unauthorized) { clearToken(); showError("로그인이 만료되었습니다. 다시 로그인해 주십시오."); return; }
+    if (session && go(session, false)) return;
+    showError("계정 권한을 확인하지 못했습니다. 다시 로그인하거나 잠시 뒤 시도해 주십시오.");
+  })();
+})();
+</script>
+</body>
+</html>

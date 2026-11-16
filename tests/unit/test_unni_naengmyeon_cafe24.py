@@ -22,7 +22,7 @@ from app.api import unni_naengmyeon as unni_api
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "config" / "apache" / "fb-cafe24.conf"
 SCRIPT = ROOT / "scripts" / "deploy_unni_naengmyeon_cafe24.sh"
-LOGIN = "/static/apps/obys/index.html?redirect=/unni-naengmyeon/recipes"
+LOGIN = "/static/apps/obys/login.html?redirect=/unni-naengmyeon/recipes"
 
 _spec = importlib.util.spec_from_file_location("unni_site", ROOT / "scripts" / "unni_naengmyeon_site.py")
 site = importlib.util.module_from_spec(_spec)

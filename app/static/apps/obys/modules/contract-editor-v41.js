@@ -1038,7 +1038,7 @@
     dialog.innerHTML = `
       <div class="modal-head cv41-head"><div><h2 id="cv41Title">근로계약서 ${saved ? "관리" : "작성"}</h2><p>${esc(who)} · ${esc(where)}${saved ? ` · ${badge(statusOf(saved))}` : ""}</p></div><button class="close" type="button" data-cv41-close aria-label="닫기">×</button></div>
       <ol class="cv41-steps">${steps}</ol>
-      ${E.sessionLost ? `<div class="cv41-alert bad" role="alert"><b>로그인이 만료되었습니다.</b> 입력값은 이 창에 남아 있습니다. <a href="/static/apps/obys/index.html" target="_blank" rel="noopener">새 창에서 로그인</a>한 뒤 아래 버튼을 다시 누르십시오. 다른 계정으로 로그인하면 이 창을 닫고 새로 여십시오.</div>` : ""}
+      ${E.sessionLost ? `<div class="cv41-alert bad" role="alert"><b>로그인이 만료되었습니다.</b> 입력값은 이 창에 남아 있습니다. <a href="/static/apps/obys/login.html" target="_blank" rel="noopener">새 창에서 로그인</a>한 뒤 아래 버튼을 다시 누르십시오. 다른 계정으로 로그인하면 이 창을 닫고 새로 여십시오.</div>` : ""}
       ${E.error ? `<div class="cv41-alert bad" role="alert" id="cv41Error">${esc(E.error)}${E.missing.length ? `<ul>${E.missing.map(label => `<li>${esc(label)}</li>`).join("")}</ul>` : ""}</div>` : ""}
       <div class="cv41-body">${body}</div>
       <div class="cv41-foot">${footer(statusKey)}</div>`;

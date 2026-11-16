@@ -29,7 +29,7 @@
       <p>신청 자체는 실근태 변경이 아닙니다. 관리자 승인 후 반영됩니다. GPS 권한 없이 신청할 수 있습니다.</p>
       <p>원본 기록 없는 신규 누락은 근태 화면의 ‘근무 직접 입력’으로 신청하세요. 관리자 확인 후 반영됩니다.</p>
       <button type="button" class="btn" data-refresh>최신 상태 다시 조회</button>
-      <a href="/static/apps/obys/index.html#login" data-login hidden>다시 로그인</a>
+      <a href="/static/apps/obys/login.html" data-login hidden>다시 로그인</a>
       <p role="status" aria-live="polite" data-message></p>
       ${manager ? '' : `<form data-create><label>본인 기존 기록 (최근 31건)<select name="record_id" required></select></label>
       ${[['work_date','정정일','date'],['start_at','출근','time'],['end_at','퇴근','time'],['break_minutes','휴게(분)','number']].map(([name,label,type])=>`<label>${label}<input name="${name}" aria-label="${label}" type="${type}" ${type==='number'?'min="0" max="1439" step="1"':''} required></label>`).join('')}

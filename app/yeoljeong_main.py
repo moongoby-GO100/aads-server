@@ -127,6 +127,8 @@ _AUTH_EXEMPT_PREFIXES = (
 _AUTH_EXEMPT_EXACT_PATHS = frozenset(
     {
         "/api/v1/integrations/clobe/oauth/callback",
+        # 로그인 진입 주소(새 화면 login.html 로 보내는 리다이렉트만 한다).
+        "/login",
         # 직원 가입 화면(로그인 전)의 사업자·근무지 목록. 이름만 내보내는 읽기 전용 경로 하나만 면제한다.
         "/api/v1/yeoljeong-finance/public/join-workplaces",
         # 로그인 전 가입 화면의 이메일 오타 확인. 부수효과 없는 조회이며, 이메일을 URL·로그에 남기지 않으려고 POST 를 쓴다.
@@ -165,9 +167,21 @@ async def jwt_auth_middleware(request: Request, call_next):
     return JSONResponse(status_code=401, content={"detail": "인증이 필요합니다. Bearer 토큰을 제공하세요."})
 
 
+_OBYS_LOGIN_PATH = "/static/apps/obys/login.html"
+
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
-    return RedirectResponse("/static/apps/obys/index.html")
+    return RedirectResponse(_OBYS_LOGIN_PATH)
+
+
+# 레거시 화면(index.html)을 거치지 않고 새 로그인 화면으로 바로 보낸다. ?redirect= 는 login.html 이 검증한다.
+@app.get("/login", include_in_schema=False)
+async def login_redirect(request: Request):
+    target = _OBYS_LOGIN_PATH
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health/live", include_in_schema=False)
@@ -199,7 +213,7 @@ app.include_router(unni_naengmyeon.router, prefix="/api/v1", tags=["unni-naengmy
 # (/unni-naengmyeon/, brand/*) 과 이미지는 카페24 apache 가 정적 스냅샷에서 직접 낸다
 # (scripts/deploy_unni_naengmyeon_cafe24.sh, config/apache/fb-cafe24.conf BEGIN-UNNI).
 _UNNI_RECIPES_HTML = pathlib.Path(__file__).resolve().parent / "sites" / "unni_naengmyeon" / "recipes.html"
-_UNNI_RECIPES_LOGIN = "/static/apps/obys/index.html?redirect=/unni-naengmyeon/recipes"
+_UNNI_RECIPES_LOGIN = "/static/apps/obys/login.html?redirect=/unni-naengmyeon/recipes"
 
 
 @app.api_route("/unni-naengmyeon/recipes", methods=["GET", "HEAD"], include_in_schema=False)
