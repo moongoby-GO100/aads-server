@@ -63,13 +63,20 @@
     return ERROR_TEXT[error.code] || "자료를 불러오지 못했습니다. 잠시 뒤 다시 시도해 주세요.";
   }
 
+  function amountText(value, quality, field = "gross") {
+    const text = value == null ? "미수집" : field === "count" ? count(value) : won(value);
+    return esc(text) + (quality?.[field] === "partial" ? `<em class="od-tag warn">부분 미수집</em>` : "");
+  }
+
   function won(value) {
+    if (value == null) return "미수집";
     const number = Number(value);
     if (!Number.isFinite(number)) return "-";
     return `${Math.round(number).toLocaleString("ko-KR")}원`;
   }
 
   function count(value) {
+    if (value == null) return "미수집";
     return `${Number(value || 0).toLocaleString("ko-KR")}건`;
   }
 
@@ -162,7 +169,7 @@
     const collect = collectionSummary(companiesFor(status, ui.glance.business));
 
     const deliveryLines = services.length
-      ? services.map(item => `<li><span>${esc(item.label)}</span><b>${esc(won(item.gross))}</b><small>${esc(count(item.orders))}${item.stale ? ` · ${esc(item.last_date ? `${shortDate(item.last_date)} 이후 수집 멈춤` : "수집 멈춤")}` : ""}</small></li>`).join("")
+      ? services.map(item => `<li><span>${esc(item.label)}</span><b>${amountText(item.gross, item.amount_quality)}</b><small>${esc(count(item.orders))}${item.stale ? ` · ${esc(item.last_date ? `${shortDate(item.last_date)} 이후 수집 멈춤` : "수집 멈춤")}` : ""}</small></li>`).join("")
       : `<li class="od-none">최근 ${DAYS}일 배달앱 매출이 없습니다.</li>`;
     const settleLine = (label, bucket, tone) => `<li class="${tone}"><span>${esc(label)}</span><b>${esc(won(bucket?.amount))}</b><small>${esc(count(bucket?.count))}</small></li>`;
     const collectBody = collect.neverRun && !companiesFor(status, ui.glance.business).length
@@ -348,12 +355,11 @@
     if (d.clobeError) return stateBox("error", errorText(d.clobeError), "", `<button type="button" data-od-action="reload-clobe">다시 불러오기</button>`);
     const c = d.clobe;
     if (!c) return "";
-    const channels = c.summary?.by_channel || [];
-    const delivery = channels.filter(item => item.channel === "DELIVERY");
+    const delivery = (c.summary?.by_institution || []).filter(item => item.is_delivery ?? item.channel === "DELIVERY");
     if (c.connect_required || !c.total || !delivery.length) {
       return stateBox("empty", "클로브에서 배달앱 연결 필요", c.connect_required ? "클로브에 배달앱(판매채널)이 연결되어 있지 않아 이 탭에 보여줄 자료가 없습니다." : "선택한 기간에 클로브가 받은 배달앱 매출이 없습니다.", `<div class="od-actions"><button type="button" data-od-action="open-settings">자료 연결 보기</button></div>`);
     }
-    const lines = (c.summary.by_institution || []).filter(item => item.channel === "DELIVERY").map(item => `<tr><th scope="row">${esc(item.institution || "배달앱")}</th><td data-label="기준">${esc(basisLabel(item.date_basis))}</td><td data-label="매출" class="num">${esc(won(item.gross))}</td><td data-label="수수료" class="num">${esc(won(item.fee))}</td><td data-label="입금액" class="num">${esc(won(item.net))}</td><td data-label="건수" class="num">${esc(count(item.count))}</td></tr>`).join("");
+    const lines = delivery.map(item => `<tr><th scope="row">${esc(item.institution || "배달앱")}</th><td data-label="기준">${esc(basisLabel(item.date_basis))}</td><td data-label="매출" class="num">${amountText(item.gross, item.amount_quality)}</td><td data-label="수수료" class="num">${amountText(item.fee, item.amount_quality, "fee")}</td><td data-label="입금액" class="num">${amountText(item.net, item.amount_quality, "net")}</td><td data-label="건수" class="num">${amountText(item.count, item.amount_quality, "count")}</td></tr>`).join("");
     return `<section class="od-block"><h3>클로브 기준 배달앱 매출</h3><div class="od-table-wrap"><table class="od-table"><thead><tr><th>배달앱</th><th>기준</th><th class="num">매출</th><th class="num">수수료</th><th class="num">입금액</th><th class="num">건수</th></tr></thead><tbody>${lines}</tbody></table></div><p class="od-sub">클로브가 받은 판매채널 집계입니다. 자체 수집 숫자와 기준이 달라 차이가 날 수 있습니다.</p></section>`;
   }
 

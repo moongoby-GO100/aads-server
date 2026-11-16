@@ -1132,6 +1132,32 @@ _CHANNEL_LATEST_CTE = (
     " AND ($4::text IS NULL OR clobe_company_id=$4) ORDER BY source_key, first_seen_at DESC)")
 
 
+_CHANNEL_FIELDS = {"gross": "gross", "net": "net", "fee": "fee", "count": "cnt"}
+_CHANNEL_SUM_SQL = ", ".join(
+    f"sum({column}) AS {column}, count({column}) AS {column}_valid"
+    for column in _CHANNEL_FIELDS.values())
+
+
+def _channel_delivery(channel: Any, institution: Any) -> bool:
+    return channel == "DELIVERY" or (
+        channel == "MKP" and core.institution_name(institution) in {"배민", "요기요", "쿠팡이츠", "땡겨요"})
+
+
+def _channel_totals(items: list[Any]) -> dict[str, Any]:
+    collected = sum(int(g["n"]) for g in items)
+    valid = {field: sum(int(g[f"{column}_valid"]) for g in items)
+             for field, column in _CHANNEL_FIELDS.items()}
+    quality = {field: "missing" if n == 0 else "partial" if n < collected else "valid"
+               for field, n in valid.items()}
+    result = {}
+    for field, column in _CHANNEL_FIELDS.items():
+        values = [Decimal(g[column]) for g in items if g[column] is not None]
+        total = sum(values, Decimal(0)) if values else None
+        result[field] = (int(total) if field == "count" else str(total)) if total is not None else None
+    return {**result, "collected_row_count": collected, "valid_row_count": valid,
+            "amount_quality": quality, "recollection_required": any(q != "valid" for q in quality.values())}
+
+
 async def list_channel_revenue(
     tenant_id: Any, business_id: str, *, date_from: Any = None, date_to: Any = None, company_id: str | None = None,
     channel: str | None = None, date_basis: str | None = None, limit: int = 100, offset: int = 0,
@@ -1161,12 +1187,10 @@ async def list_channel_revenue(
         async with conn.transaction(isolation="repeatable_read", readonly=True):
             await _require_business(conn, tenant, business_id)
             groups = await conn.fetch(
-                f"{_CHANNEL_LATEST_CTE} SELECT channel, date_basis, count(*) AS n, COALESCE(sum(gross), 0) AS gross, "
-                f" COALESCE(sum(net), 0) AS net, COALESCE(sum(fee), 0) AS fee, COALESCE(sum(cnt), 0) AS cnt "
+                f"{_CHANNEL_LATEST_CTE} SELECT channel, date_basis, count(*) AS n, {_CHANNEL_SUM_SQL} "
                 f"FROM latest WHERE {where} GROUP BY channel, date_basis ORDER BY channel, date_basis", *args)
             institutions = await conn.fetch(
-                f"{_CHANNEL_LATEST_CTE} SELECT channel, institution, date_basis, COALESCE(sum(gross), 0) AS gross, "
-                f" COALESCE(sum(net), 0) AS net, COALESCE(sum(fee), 0) AS fee, COALESCE(sum(cnt), 0) AS cnt "
+                f"{_CHANNEL_LATEST_CTE} SELECT channel, institution, date_basis, count(*) AS n, {_CHANNEL_SUM_SQL} "
                 f"FROM latest WHERE {where} GROUP BY channel, institution, date_basis "
                 f"ORDER BY channel, institution, date_basis", *args)
             rows = await conn.fetch(
@@ -1185,10 +1209,8 @@ async def list_channel_revenue(
         return str(Decimal(value))
 
     def _totals(items: list[Any]) -> dict[str, Any]:
-        return {"gross": _money(sum((Decimal(g["gross"]) for g in items), Decimal(0))),
-                "net": _money(sum((Decimal(g["net"]) for g in items), Decimal(0))),
-                "fee": _money(sum((Decimal(g["fee"]) for g in items), Decimal(0))),
-                "count": int(sum(int(g["cnt"]) for g in items))}
+        # NULL 을 0 으로 바꾸지 않는 집계 — 실제 계산은 모듈 헬퍼 _channel_totals 가 한다.
+        return _channel_totals(items)
 
     connection = [{
         "company_id": st["clobe_company_id"], "status": st["status"],
@@ -1206,6 +1228,10 @@ async def list_channel_revenue(
             "fee": _money(r["fee"]) if r["fee"] is not None else None,
             "count": int(r["cnt"]) if r["cnt"] is not None else None,
             "source_key": r["source_key"],
+            "is_delivery": _channel_delivery(r["channel"], r["institution"]),
+            "amount_quality": {field: "valid" if r[column] is not None else "missing"
+                               for field, column in _CHANNEL_FIELDS.items()},
+            "recollection_required": any(r[column] is None for column in _CHANNEL_FIELDS.values()),
         } for r in rows],
         "total": sum(int(g["n"]) for g in groups), "limit": limit, "offset": offset,
         "summary": {
@@ -1213,7 +1239,8 @@ async def list_channel_revenue(
             "by_channel": [{"channel": g["channel"], "date_basis": g["date_basis"], "row_count": int(g["n"]),
                             **_totals([g])} for g in groups],
             "by_institution": [{"channel": g["channel"], "institution": g["institution"],
-                                "date_basis": g["date_basis"], **_totals([g])} for g in institutions],
+                                "date_basis": g["date_basis"], "is_delivery": _channel_delivery(g["channel"], g["institution"]),
+                                **_totals([g])} for g in institutions],
         },
         "connection": connection,
         "connect_required": bool(connection) and all(c["connect_required"] for c in connection),

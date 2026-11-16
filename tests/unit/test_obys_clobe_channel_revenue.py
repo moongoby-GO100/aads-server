@@ -532,3 +532,94 @@ async def test_no_legacy_row_means_plain_insert():
     conn = LegacyConn([])
     counts = await _upsert_all(conn)
     assert conn.updated == [] and counts["inserted"] == 3 and all(a[14] is None for _, a in conn.inserted)
+
+
+@pytest.mark.parametrize("values,valid,quality", [
+    ((None, None, None, None), (0, 0, 0, 0), ("missing",) * 4),
+    ((0, 0, 0, 0), (2, 2, 2, 2), ("valid",) * 4),
+    ((100, 70, 30, 2), (2, 1, 1, 1), ("valid", "partial", "partial", "partial")),
+])
+def test_channel_amount_quality_is_per_field(values, valid, quality):
+    columns = ("gross", "net", "fee", "cnt")
+    group = {"n": 2, **dict(zip(columns, values)),
+             **{f"{c}_valid": n for c, n in zip(columns, valid)}}
+    result = svc._channel_totals([group])
+    assert result["collected_row_count"] == 2
+    assert list(result["valid_row_count"].values()) == list(valid)
+    assert list(result["amount_quality"].values()) == list(quality)
+    assert result["recollection_required"] == (quality != ("valid",) * 4)
+    assert result["gross"] == (None if values[0] is None else str(values[0]))
+    assert svc._channel_totals([])["gross"] is None
+
+
+@pytest.mark.parametrize("channel,institution,expected", [
+    ("DELIVERY", "배달특급", True), ("DELIVERY", "", True),
+    ("MKP", "배달의민족", True), ("MKP", "땡겨요", True),
+    ("MKP", "배달특급", False), ("CARD", "배민", False),
+])
+def test_delivery_institution_mapping(channel, institution, expected):
+    assert svc._channel_delivery(channel, institution) is expected
+
+
+def test_glance_services_render_null_zero_and_partial_in_node():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    assert node, "Node is required for the glanceCards regression"
+    source = Path("app/static/apps/obys/modules/data-overview.js").read_text()
+    script = '''
+const assert = require('node:assert/strict');
+global.window = {};
+global.document = {readyState:'loading', addEventListener(){}};
+'''+source+'''
+const html = window.obysDataOverview.glanceCards({delivery:{services:[
+ {label:'배달특급',gross:100}, {label:'누락',gross:null},
+ {label:'영원',gross:0}, {label:'일부',gross:70,amount_quality:{gross:'partial'}}
+]}}, null);
+for (const text of ['배달특급','100원','미수집','0원','부분 미수집']) assert.ok(html.includes(text),text);
+'''
+    subprocess.run([node, "-e", script], check=True, timeout=15)
+
+
+def test_clobe_tab_date_basis_label_and_no_unconditional_warning():
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    source = Path("app/static/apps/obys/modules/data-overview.js").read_text()
+
+    # 1. basisLabel 함수 추출 및 Node 실행(또는 정적 검사)으로 매핑 검증
+    basis_match = re.search(r'function basisLabel\([^)]*\)\s*\{[\s\S]*?\n  \}', source)
+    assert basis_match, "basisLabel function must exist in data-overview.js"
+    basis_src = basis_match.group(0)
+
+    node = shutil.which("node")
+    if node:
+        script = f"""
+const assert = require('node:assert/strict');
+{basis_src}
+assert.equal(basisLabel('SETTLE'), '정산일 기준');
+assert.equal(basisLabel('settle_date'), '정산일 기준');
+assert.equal(basisLabel('SALE'), '매출일 기준');
+assert.equal(basisLabel('ORDER'), '매출일 기준');
+assert.equal(basisLabel('order_date'), '매출일 기준');
+assert.equal(basisLabel('sale_date'), '매출일 기준');
+assert.equal(basisLabel(null), '집계 기준 미상');
+assert.equal(basisLabel(''), '집계 기준 미상');
+assert.equal(basisLabel('UNKNOWN'), '집계 기준 미상');
+"""
+        subprocess.run([node, "-e", script], check=True, timeout=15)
+    else:
+        assert 'if (text.includes("SETTLE")) return "정산일 기준";' in basis_src
+        assert 'if (text.includes("SALE") || text.includes("ORDER")) return "매출일 기준";' in basis_src
+        assert 'return "집계 기준 미상";' in basis_src
+
+    # 2. clobeTab 기준 칸 렌더에 '기준미확인' 문자열을 무조건 붙이는 코드가 없는지 확인
+    tab_match = re.search(r'function clobeTab\(\)\s*\{[\s\S]*?\n  \}', source)
+    assert tab_match, "clobeTab function must exist in data-overview.js"
+    tab_src = tab_match.group(0)
+    assert "기준미확인" not in tab_src, "clobeTab must not contain '기준미확인'"
+    assert '<td data-label="기준">${esc(basisLabel(item.date_basis))}</td>' in tab_src

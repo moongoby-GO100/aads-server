@@ -1076,3 +1076,32 @@ async def test_source_type_migration_is_idempotent_and_rollback_is_guarded(vouch
             "INSERT INTO yeoljeong_journal_vouchers (id,tenant_id,business_id,voucher_no,transaction_date,status,source_type,"
             "source_id,total_amount,created_by) VALUES ($1,$2,'biz-danharu','X','2026-09-01','draft','clobe',$3,0,'t')",
             uuid.uuid4(), uuid.UUID(TENANT), uuid.uuid4())
+
+
+@pytest.mark.parametrize("case", ["missing", "zero", "partial"])
+async def test_channel_sql_null_zero_and_field_quality(db, case):
+    import json
+
+    values = {"missing": [(None, None, None, None)] * 2,
+              "zero": [(0, 0, 0, 0)] * 2,
+              "partial": [(100, 70, None, 2), (0, None, 30, None)]}[case]
+    for i, (gross, net, fee, cnt) in enumerate(values):
+        await db.execute(
+            "INSERT INTO obys_clobe_item (item_id,tenant_id,business_id,clobe_company_id,data_kind,"
+            "source_key,item_hash,institution,occurred_on,amount,direction,payload,first_run_id,last_run_id) "
+            "VALUES ($1,$2,'biz-danharu',$3,$4,$5,'h','배달특급','2026-09-01',$6,'DELIVERY',$7::jsonb,$8,$8)",
+            uuid.uuid4(), uuid.UUID(TENANT), C_DANHARU, core.KIND_CHANNEL, f"{case}:{i}", gross,
+            json.dumps({"net": net, "fee": fee, "count": cnt}), uuid.uuid4())
+    result = await svc.list_channel_revenue(TENANT, "biz-danharu", limit=1)
+    summary = result["summary"]
+    assert summary["collected_row_count"] == 2 and result["total"] == 2
+    assert summary["gross"] == {"missing": None, "zero": "0.00", "partial": "100.00"}[case]
+    expected = {"missing": {f: "missing" for f in ("gross", "net", "fee", "count")},
+                "zero": {f: "valid" for f in ("gross", "net", "fee", "count")},
+                "partial": {"gross": "valid", "net": "partial", "fee": "partial", "count": "partial"}}[case]
+    assert summary["amount_quality"] == expected
+    assert summary["recollection_required"] is (case != "zero")
+    assert summary["by_institution"][0]["is_delivery"] is True
+    assert summary["by_institution"][0]["amount_quality"] == expected
+    assert result["rows"][0]["is_delivery"] is True
+    assert (await svc.list_channel_revenue(OTHER_TENANT, "biz-other"))["total"] == 0
