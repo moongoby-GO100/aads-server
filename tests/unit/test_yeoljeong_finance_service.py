@@ -33,6 +33,20 @@ def _line_signature_png() -> bytes:
 
 
 @pytest.fixture(autouse=True)
+def approve_all_backfills(monkeypatch):
+    """이 파일의 full_backfill 테스트는 큐 동작을 본다. 승인 게이트 자체는 test_obys_backfill_approval.py 가 시험한다."""
+    from datetime import date
+
+    from app.services import obys_backfill_approval as approval
+
+    async def approved(source, scope_id, kind):
+        return [{"source": source, "scope_id": scope_id, "branch": "", "data_kind": kind,
+                 "period_start": date(2000, 1, 1), "period_end": date(2100, 1, 1), "revoked_at": None}]
+
+    monkeypatch.setattr(approval, "load_rows", approved)
+
+
+@pytest.fixture(autouse=True)
 def isolate_yeoljeong_storage(tmp_path, monkeypatch):
     """Never let unit tests read or write operational files or PostgreSQL."""
     def disable_db(coroutine):

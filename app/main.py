@@ -2094,6 +2094,20 @@ async def lifespan(app: FastAPI):
                     mode=mode,
                     reason=reason,
                 )
+                if mode == "full_backfill":
+                    # 백필은 승인된 사업자·매장·기간만. 미승인이면 수집기를 띄우지 않고 이번 회차를 접는다.
+                    from fastapi import HTTPException
+
+                    try:
+                        await asyncio.to_thread(yjf_svc._require_delivery_backfill_approval, payload)
+                    except HTTPException as _approval_err:
+                        logger.info(
+                            "delivery_auto_collect_skip: backfill_not_approved reason=%s status=%s detail=%s",
+                            reason,
+                            _approval_err.status_code,
+                            _approval_err.detail,
+                        )
+                        return
                 root_dir = Path(__file__).resolve().parents[1]
                 timeout_seconds = _env_int(
                     "YEOLJEONG_DELIVERY_AUTO_COLLECT_TIMEOUT_SECONDS",

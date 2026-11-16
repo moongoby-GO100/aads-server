@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user, require_internal_admin
 from app.services import clobe_mcp_client as clobe
+from app.services import obys_backfill_approval as approval
+from app.services import obys_collection_core as core
 from app.services import obys_collection_service as svc
 from app.services import obys_data_overview_service as overview
 
@@ -60,6 +62,16 @@ class RunRequest(BaseModel):
     period_start: str | None = Field(None, max_length=10)
     period_end: str | None = Field(None, max_length=10)
     mode: Literal["live", "shadow"] = "live"
+
+
+class BackfillApprovalRequest(BaseModel):
+    source: Literal["clobe", "delivery"]
+    scope_id: str = Field(min_length=1, max_length=128)
+    branch: str = Field("", max_length=128)
+    data_kind: str = Field(min_length=1, max_length=64)
+    period_start: date
+    period_end: date
+    reason: str = Field(min_length=5, max_length=500)
 
 
 class ItemsRequest(BaseModel):
@@ -148,11 +160,62 @@ async def start_run(company_id: str, body: RunRequest, user: dict[str, Any] = De
         else:
             _role_ok(user, _MANAGE_ROLES)
             await svc.require_company_tenant(company_id, user.get("tenant_id"))
+        await _require_backfill_approval(company_id, body)
         return await svc.run_collection(
             company_id, kinds=body.kinds, period_start=body.period_start, period_end=body.period_end, mode=body.mode,
             instance=svc.manual_instance_name())
+    except approval.BackfillNotApproved as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
     except (svc.CollectionError, clobe.ClobeError) as exc:
         raise _raise(exc) from None
+
+
+async def _require_backfill_approval(company_id: str, body: RunRequest) -> None:
+    """기본 수집 창(DEFAULT_WINDOW_DAYS)보다 과거로 시작하는 수동 실행은 백필이다. 기간 오류는 run_collection 이 400 으로 돌려준다."""
+    try:
+        start, end = core.resolve_period(body.period_start, body.period_end)
+    except ValueError:
+        return
+    if start >= date.today() - timedelta(days=core.DEFAULT_WINDOW_DAYS):
+        return
+    for kind in body.kinds or core.COLLECTION_KINDS:
+        await approval.require_approved(approval.SOURCE_CLOBE, company_id, kind, start, end)
+
+
+@router.get("/admin/backfill-approvals")
+async def list_backfill_approvals(
+    source: Literal["clobe", "delivery"] | None = None, include_revoked: bool = False,
+    limit: int = Query(100, ge=1, le=500), _: dict[str, Any] = Depends(require_internal_admin),
+) -> dict[str, Any]:
+    try:
+        return {"approvals": await approval.list_approvals(source=source, include_revoked=include_revoked, limit=limit)}
+    except Exception:  # noqa: BLE001 - 내부 오류 본문을 노출하지 않는다
+        logger.warning("backfill_approval_list_failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="backfill_approval_unavailable") from None
+
+
+@router.post("/admin/backfill-approvals", status_code=201)
+async def create_backfill_approval(body: BackfillApprovalRequest, admin: dict[str, Any] = Depends(require_internal_admin)) -> dict[str, Any]:
+    try:
+        return {"approval": await approval.create_approval(
+            source=body.source, scope_id=body.scope_id, branch=body.branch, kind=body.data_kind,
+            start=body.period_start, end=body.period_end, reason=body.reason, actor=_actor(admin))}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception:  # noqa: BLE001
+        logger.warning("backfill_approval_create_failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="backfill_approval_unavailable") from None
+
+
+@router.post("/admin/backfill-approvals/{approval_id}/revoke")
+async def revoke_backfill_approval(approval_id: str, admin: dict[str, Any] = Depends(require_internal_admin)) -> dict[str, Any]:
+    try:
+        return {"approval": await approval.revoke_approval(approval_id, actor=_actor(admin))}
+    except ValueError as exc:
+        raise HTTPException(status_code=404 if str(exc).startswith("approval_not_found") else 400, detail=str(exc)) from None
+    except Exception:  # noqa: BLE001
+        logger.warning("backfill_approval_revoke_failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="backfill_approval_unavailable") from None
 
 
 @router.get("/companies/{company_id}/runs")

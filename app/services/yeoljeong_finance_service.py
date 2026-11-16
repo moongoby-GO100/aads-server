@@ -13182,7 +13182,35 @@ def _delivery_select_baemin_backfill_statuses(
         and (str(row.get("business_id") or ""), str(row.get("branch") or "")) in scope_set
     ]
     queued.sort(key=_delivery_backfill_status_order_key, reverse=True)
-    return queued[: _delivery_backfill_batch_limit(payload)]
+    if not queued:
+        return []
+    # 큐 행은 요청 기간과 무관한 과거 작업일 수 있다 — 행에 저장된 실제 실행 기간으로 승인을 다시 확인한다.
+    from app.services import obys_backfill_approval as approval
+
+    fallback_from, fallback_to = _delivery_sync_window(payload)
+    limit = _delivery_backfill_batch_limit(payload)
+    selected: list[dict[str, Any]] = []
+    denied: approval.BackfillNotApproved | None = None
+    for row in queued:
+        run_from, run_to = _delivery_backfill_window_from_status(row, fallback_from, fallback_to)
+        try:
+            approval.require_approved_sync(
+                approval.SOURCE_DELIVERY,
+                str(row.get("business_id") or ""),
+                str(row.get("service") or "baemin"),
+                run_from,
+                run_to,
+                branch=str(row.get("branch") or ""),
+            )
+        except approval.BackfillNotApproved as exc:
+            denied = denied or exc
+            continue
+        selected.append(row)
+        if len(selected) >= limit:
+            break
+    if not selected and denied is not None:
+        raise HTTPException(status_code=denied.status, detail=denied.message)
+    return selected
 
 
 def _delivery_enqueue_baemin_backfill_continuation(
@@ -13407,9 +13435,41 @@ def _delivery_sync_busy_result(payload: dict[str, Any], user: dict[str, Any]) ->
     }
 
 
+DELIVERY_REGULAR_SYNC_LOOKBACK_DAYS = 62
+
+
+def _delivery_is_backfill_request(payload: dict[str, Any], date_from: date) -> bool:
+    """mode=full_backfill 이거나, 정기 수집이 닿는 범위(오늘 기준 62일 전)보다 과거를 요청하면 백필이다.
+
+    mode 를 생략하고 63일 이하로 쪼개 과거를 긁는 우회를 막는다. 정기 수집(월초~오늘, 3일 겹침)은 이 범위 안이다.
+    """
+    if _delivery_full_backfill_requested(payload):
+        return True
+    return date_from < datetime.now(KST).date() - timedelta(days=DELIVERY_REGULAR_SYNC_LOOKBACK_DAYS)
+
+
+def _require_delivery_backfill_approval(payload: dict[str, Any]) -> None:
+    """백필은 승인된 사업자·매장·플랫폼·기간만 실행한다. 정기 수집은 이 검사를 지나지 않는다."""
+    date_from, date_to = _delivery_sync_window(payload)
+    if not _delivery_is_backfill_request(payload, date_from):
+        return
+    from app.services import obys_backfill_approval as approval
+
+    services = _delivery_requested_services(payload)
+    accounts = _read("platform_accounts") if _delivery_all_scope_requested(payload) else []
+    try:
+        for business_id, branch in _delivery_sync_scopes(payload, services, accounts):
+            for service in services:
+                approval.require_approved_sync(
+                    approval.SOURCE_DELIVERY, business_id, service, date_from, date_to, branch=branch)
+    except approval.BackfillNotApproved as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+
+
 def queue_delivery_sync(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
+    _require_delivery_backfill_approval(payload)
 
     requested_services = _delivery_requested_services(payload)
     date_from, date_to = _delivery_sync_window(payload)
@@ -18391,6 +18451,7 @@ def _normalize_delivery_collection_result(service: str, result: dict[str, Any]) 
 def sync_delivery(payload: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     if not _is_admin(user):
         raise HTTPException(status_code=403, detail="자동 수집 실행 권한이 없습니다")
+    _require_delivery_backfill_approval(payload)
     _settle_stale_delivery_collection_statuses()
     from app.services.bank_collection_lock import bank_lock_is_active, default_bank_lock_path
     bank_lock_path = os.getenv("YEOLJEONG_BANK_AUTO_COLLECT_LOCK_PATH", default_bank_lock_path())

@@ -30,6 +30,7 @@ from app.services.yeoljeong_finance_service import (  # noqa: E402
     FINANCIAL_TRANSACTION_SERVICES,
     _delivery_browser_work_key,
     _delivery_requested_services,
+    _require_delivery_backfill_approval,
     _delivery_sync_scopes,
     _delivery_sync_window,
     _read,
@@ -1115,6 +1116,7 @@ def _scope_branch_id(branch: str, business_id: str = "") -> str:
 
 
 def _global_delivery_queue_items(payload: dict[str, Any], user: dict[str, Any]) -> list[dict[str, Any]]:
+    _require_delivery_backfill_approval(payload)
     requested_services = _delivery_requested_services(payload)
     date_from, date_to = _delivery_sync_window(payload)
     all_accounts = _read("platform_accounts")

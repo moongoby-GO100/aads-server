@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.services import clobe_mcp_client as clobe
+from app.services import obys_backfill_approval as approval
 from app.services import obys_collection_core as core
 from app.services import obys_collection_service as svc
 
@@ -287,7 +288,9 @@ async def run_backfill(
 
     run_collection 의 임대(lease)·기간 상한(MAX_WINDOW_DAYS)을 그대로 따른다. 적재는 source_key 멱등이라 다시 돌려도 안전하다.
     dry_run 은 대상 회사와 기간만 돌려주고 클로브·DB 쓰기를 하지 않는다.
+    대상 회사·종류·기간이 하나라도 승인 범위(obys_backfill_approval) 밖이면 아무것도 실행하지 않고 BackfillNotApproved 를 올린다.
     """
+    kinds = list(dict.fromkeys(kinds or core.COLLECTION_KINDS))
     if any(k not in core.COLLECTION_KINDS for k in kinds):
         raise ValueError("invalid_kind")
     start, end = core.resolve_period(start, end)
@@ -295,6 +298,9 @@ async def run_backfill(
     targets = [str(link["clobe_company_id"]) for link in links]
     if company_ids:
         targets = [c for c in targets if c in set(company_ids)]
+    for cid in targets:
+        for kind in kinds:
+            await approval.require_approved(approval.SOURCE_CLOBE, cid, kind, start, end)
     plan = {"kinds": kinds, "period": [start.isoformat(), end.isoformat()], "companies": len(targets), "dry_run": dry_run}
     if dry_run:
         return {"ok": True, **plan, "results": []}
@@ -353,6 +359,8 @@ async def _main_async(args: argparse.Namespace | None = None) -> int:
                 company_ids=args.company or None, dry_run=args.dry_run, pause_seconds=args.pause_seconds)
         else:
             result = await run_due()
+    except approval.BackfillNotApproved as exc:
+        result = {"ok": False, "error": "backfill_not_approved", "status": exc.status, "detail": exc.message, "companies": []}
     except Exception as exc:  # noqa: BLE001 - 대상 조회 자체가 실패한 경우도 JSON 한 줄로 남긴다
         result = {"ok": False, "error": type(exc).__name__, "companies": []}
     finally:

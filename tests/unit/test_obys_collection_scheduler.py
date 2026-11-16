@@ -19,6 +19,7 @@ import pytest
 from app.core import db_pool
 from app.core import obys_runtime
 from app.services import clobe_mcp_client as clobe
+from app.services import obys_backfill_approval as approval
 from app.services import obys_collection_core as core
 from app.services import obys_collection_scheduler as sched
 from app.services import obys_collection_service as svc
@@ -47,6 +48,7 @@ def world(monkeypatch):
     """links/states 를 채우고 run_collection 호출을 기록하는 가짜 세계."""
     w = type("W", (), {})()
     w.links, w.states, w.calls = [], {}, []
+    w.approvals = []  # 백필 승인 행(DB 대신). 로더는 걸러내지 않고 전부 돌려줘 check_rows 의 필터를 시험한다.
     w.behavior = {}  # company_id -> callable(kinds) | Exception
     w.reauth = False
 
@@ -68,11 +70,20 @@ def world(monkeypatch):
     async def load_recheck_candidates():
         return []
 
+    async def load_approvals(source, scope_id, kind):
+        return list(w.approvals)
+
+    monkeypatch.setattr(approval, "load_rows", load_approvals)
     monkeypatch.setattr(sched, "load_state", load_state)
     monkeypatch.setattr(sched, "load_recheck_candidates", load_recheck_candidates)
     monkeypatch.setattr(svc, "run_collection", run_collection)
     monkeypatch.setattr(clobe, "get_status", get_status)
     return w
+
+
+def grant(w, company, kind=core.KIND_CHANNEL, start=date(2026, 1, 1), end=date(2026, 12, 31), source="clobe", branch=""):
+    w.approvals.append({"source": source, "scope_id": company, "branch": branch, "data_kind": kind,
+                        "period_start": start, "period_end": end, "revoked_at": None})
 
 
 # (a) 링크 3개 중 1개가 예외여도 나머지 2개는 실행된다
@@ -379,6 +390,7 @@ def test_cli_load_failure_is_json_and_exit_1(monkeypatch, capsys):
 
 def test_backfill_runs_each_company_in_order_with_the_requested_kind_and_period(world):
     world.links = ["c1", "c2"]
+    grant(world, "c1"), grant(world, "c2")
     out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
     assert [(c["company_id"], c["kinds"], c["period_start"], c["period_end"], c["mode"]) for c in world.calls] == [
         ("c1", [core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), "live"),
@@ -388,6 +400,8 @@ def test_backfill_runs_each_company_in_order_with_the_requested_kind_and_period(
 
 def test_backfill_dry_run_and_company_filter_make_no_calls_or_only_chosen_calls(world):
     world.links = ["c1", "c2", "c3"]
+    for c in world.links:
+        grant(world, c)
     dry = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), dry_run=True))
     assert world.calls == [] and dry["companies"] == 3 and dry["results"] == []
     run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), company_ids=["c2"], pause_seconds=0))
@@ -396,6 +410,8 @@ def test_backfill_dry_run_and_company_filter_make_no_calls_or_only_chosen_calls(
 
 def test_backfill_isolates_failures_and_busy_lease_and_stops_on_reauth(world):
     world.links = ["c1", "c2", "c3"]
+    for c in world.links:
+        grant(world, c)
     world.behavior["c1"] = svc.CollectionError("collection_in_progress", 409)
     world.behavior["c2"] = RuntimeError("secret")
     out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 10, 1), date(2026, 10, 2), pause_seconds=0))
@@ -417,6 +433,7 @@ def test_backfill_rejects_bad_kind_and_too_long_period(world):
 
 def test_cli_backfill_flag_prints_one_json_line_and_default_kind_is_channel(world, monkeypatch, capsys):
     world.links = ["c1"]
+    grant(world, "c1")
 
     async def close():
         return None
@@ -427,6 +444,109 @@ def test_cli_backfill_flag_prints_one_json_line_and_default_kind_is_channel(worl
     assert out["kinds"] == [core.KIND_CHANNEL] and world.calls[0]["period_start"] == date(2026, 7, 16)
     with pytest.raises(SystemExit):
         sched.main(["--once", "--backfill-to", "2026-10-16"])
+
+
+# ── 백필 승인 게이트 ─────────────────────────────────────────
+
+def test_backfill_without_approval_is_409_and_runs_nothing(world):
+    world.links = ["c1", "c2"]
+    with pytest.raises(approval.BackfillNotApproved, match="승인되지 않은 회사·기간입니다\\(승인 범위: 없음") as ei:
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert ei.value.status == 409 and world.calls == []
+
+
+def test_backfill_inside_approved_range_runs(world):
+    world.links = ["c1"]
+    grant(world, "c1", start=date(2026, 7, 1), end=date(2026, 10, 31))
+    out = run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert out["ok"] is True and [c["company_id"] for c in world.calls] == ["c1"]
+
+
+def test_backfill_partly_outside_approved_range_is_409_and_names_the_approved_range(world):
+    world.links = ["c1"]
+    grant(world, "c1", start=date(2026, 8, 1), end=date(2026, 10, 31))
+    with pytest.raises(approval.BackfillNotApproved, match="2026-08-01~2026-10-31"):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert world.calls == []
+
+
+def test_another_companys_approval_cannot_be_borrowed_and_one_gap_stops_the_whole_run(world):
+    world.links = ["c1", "c2"]
+    grant(world, "c1")
+    with pytest.raises(approval.BackfillNotApproved):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert world.calls == []
+    world.approvals.clear()
+    grant(world, "c1", kind=core.KIND_BANK)  # 다른 종류의 승인도 대신하지 못한다
+    with pytest.raises(approval.BackfillNotApproved):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), company_ids=["c1"]))
+    assert world.calls == []
+
+
+def test_backfill_with_empty_kinds_means_every_kind_and_needs_every_kind_approved(world):
+    world.links = ["c1"]
+    grant(world, "c1")  # channel_revenue 만 승인
+    with pytest.raises(approval.BackfillNotApproved):
+        run(sched.run_backfill([], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert world.calls == []
+    for kind in core.COLLECTION_KINDS:
+        grant(world, "c1", kind=kind)
+    out = run(sched.run_backfill([], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert out["kinds"] == list(core.COLLECTION_KINDS) and world.calls[0]["kinds"] == list(core.COLLECTION_KINDS)
+
+
+def test_backfill_channel_revenue_partial_month_approval_is_409(world):
+    world.links = ["c1"]
+    grant(world, "c1", start=date(2026, 1, 10), end=date(2026, 1, 15))
+    with pytest.raises(approval.BackfillNotApproved, match="실제 조회 범위: 2026-01-01~2026-01-31"):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 1, 10), date(2026, 1, 15), pause_seconds=0))
+    assert world.calls == []
+
+
+def test_revoked_and_delivery_source_approvals_do_not_count(world):
+    world.links = ["c1"]
+    grant(world, "c1")
+    world.approvals[0]["revoked_at"] = NOW
+    grant(world, "c1", source="delivery")
+    with pytest.raises(approval.BackfillNotApproved):
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), dry_run=True))
+    assert world.calls == []
+
+
+def test_regular_incremental_run_never_consults_approvals(world, monkeypatch):
+    world.links = ["c1", "c2"]
+
+    async def boom(*a, **k):
+        raise AssertionError("approval must not be read by the regular run")
+
+    monkeypatch.setattr(approval, "load_rows", boom)
+    out = run(sched.run_due(NOW))
+    assert out["ok"] is True and [c["company_id"] for c in world.calls] == ["c1", "c2"]
+
+
+def test_unreadable_approval_store_fails_closed_as_503_without_leaking_the_error(world, monkeypatch):
+    world.links = ["c1"]
+
+    async def down(*a, **k):
+        raise ConnectionError("postgres://user:secret@host/db")
+
+    monkeypatch.setattr(approval, "load_rows", down)
+    with pytest.raises(approval.BackfillApprovalUnavailable) as ei:
+        run(sched.run_backfill([core.KIND_CHANNEL], date(2026, 7, 16), date(2026, 10, 16), pause_seconds=0))
+    assert ei.value.status == 503 and "secret" not in ei.value.message and world.calls == []
+
+
+def test_cli_backfill_without_approval_prints_409_json_and_exits_1(world, monkeypatch, capsys):
+    world.links = ["c1"]
+
+    async def close():
+        return None
+
+    monkeypatch.setattr(clobe, "close_store_pool", close)
+    assert sched.main(["--once", "--backfill-from", "2026-07-16", "--backfill-to", "2026-10-16"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"] == "backfill_not_approved" and out["status"] == 409
+    assert out["detail"].startswith("승인되지 않은 회사·기간입니다(승인 범위:") and world.calls == []
 
 
 def test_scheduler_never_confirms_ledger_or_touches_app_startup():
@@ -789,6 +909,11 @@ def test_backfill_skips_company_held_by_manual_run_with_real_lease_logic_and_doe
     async def load_state():
         return [{"clobe_company_id": "c1"}, {"clobe_company_id": "c2"}], {}
 
+    async def approved(source, scope_id, kind):
+        return [{"source": source, "scope_id": scope_id, "branch": "", "data_kind": kind,
+                 "period_start": date(2026, 1, 1), "period_end": date(2026, 12, 31), "revoked_at": None}]
+
+    monkeypatch.setattr(approval, "load_rows", approved)
     monkeypatch.setattr(sched, "load_state", load_state)
     real = svc.run_collection
 
