@@ -38,7 +38,7 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
 -- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 심볼릭 링크).
-\ir release_object_fingerprint.verify.sql
+-- 실행은 scripts/run_migration_down.sh 로만 한다(지문 함수 선주입)
 -- 삭제 전 객체 존재·정의 확인 가드 (기존 객체 보호)
 DO $$
 DECLARE

@@ -302,3 +302,91 @@ def test_verify_exact_catalog_definitions_without_normalization():
     assert 'pg_get_indexdef(i.indexrelid)' in verify
     assert 'PostgreSQL 15' in verify
     assert "''^[A-Z0-9][A-Z0-9_-]{0,63}$''::text" in verify
+
+
+# ── 2026-11-17 P2/S: down/rollback \ir 의존 제거 및 run_migration_down.sh 실행기 검증 ──
+
+def test_down_and_rollback_sql_have_no_psql_include():
+    root = migration_tests.ROOT
+    files = [
+        root / 'migrations/rollback/20261111_canonical_document_approval_delegation.down.sql',
+        root / 'migrations/20261111_canonical_document_approval_delegation_rollback.sql',
+        root / 'migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql',
+        root / 'migrations/20261112_code_review_requests_revert_of_verified_rollback.sql',
+    ]
+    for path in files:
+        text = path.read_text()
+        assert r'\ir' not in text, f'{path.name} contains \\ir'
+        assert r'\i ' not in text, f'{path.name} contains \\i '
+        assert '실행은 scripts/run_migration_down.sh 로만 한다(지문 함수 선주입)' in text
+
+
+def test_run_migration_down_execute_requires_approval_env():
+    root = migration_tests.ROOT
+    script = root / 'scripts/run_migration_down.sh'
+    env_without_appr = {k: v for k, v in os.environ.items() if k != 'AADS_DOWN_APPROVED'}
+
+    # --execute without AADS_DOWN_APPROVED must fail with non-zero exit code
+    res = subprocess.run(
+        ['bash', str(script), '--execute', '20261111_canonical_document_approval_delegation.sql'],
+        capture_output=True, text=True, check=False, env=env_without_appr,
+    )
+    assert res.returncode != 0
+    assert 'AADS_DOWN_APPROVED' in res.stderr or '승인' in res.stderr
+
+    # empty AADS_DOWN_APPROVED must also fail
+    env_empty = dict(env_without_appr, AADS_DOWN_APPROVED='')
+    res2 = subprocess.run(
+        ['bash', str(script), '--execute', '20261111_canonical_document_approval_delegation.sql'],
+        capture_output=True, text=True, check=False, env=env_empty,
+    )
+    assert res2.returncode != 0
+
+
+def test_run_migration_down_static_script_structure():
+    root = migration_tests.ROOT
+    src = (root / 'scripts/run_migration_down.sh').read_text()
+    assert 'release_object_fingerprint.verify.sql' in src
+    assert 'set -euo pipefail' in src
+    assert 'mode="print"' in src or "mode='print'" in src
+    assert 'AADS_DOWN_APPROVED' in src
+    assert 'docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1' in src
+
+    # Verify that helper function file is cat'ed before down file
+    cat_helper_idx = src.index('cat "$helper_file"')
+    cat_down_idx = src.index('cat "$down_file"')
+    assert cat_helper_idx < cat_down_idx
+
+    # Verify BEGIN / COMMIT handling
+    assert 'BEGIN' in src and 'COMMIT' in src
+
+
+@pytest.mark.parametrize('stem,tag', DOWN_FILES)
+def test_run_migration_down_dry_run_prepends_fingerprint_helper(stem, tag):
+    root = migration_tests.ROOT
+    script = root / 'scripts/run_migration_down.sh'
+
+    # Run with default (which is --print)
+    res_default = subprocess.run(
+        ['bash', str(script), f'{stem}.sql'],
+        capture_output=True, text=True, check=True,
+    )
+    # Run with explicit --print
+    res_print = subprocess.run(
+        ['bash', str(script), '--print', f'{stem}.sql'],
+        capture_output=True, text=True, check=True,
+    )
+    assert res_default.stdout == res_print.stdout
+
+    stdout = res_print.stdout
+    fp_idx = stdout.index('CREATE OR REPLACE FUNCTION pg_temp.release_object_fingerprint')
+    if tag == '20261111':
+        down_idx = stdout.index('DROP TABLE IF EXISTS public.project_document_approval_delegations;')
+    else:
+        down_idx = stdout.index('ALTER TABLE IF EXISTS public.code_review_requests DROP COLUMN IF EXISTS revert_of_verified;')
+
+    assert fp_idx < down_idx
+    # Ensure there is no duplicated BEGIN
+    assert stdout.count('BEGIN;') == 1
+    assert stdout.count('COMMIT;') == 1
+
