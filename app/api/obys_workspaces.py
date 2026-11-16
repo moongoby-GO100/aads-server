@@ -281,7 +281,12 @@ def _employee_label(kind: str, value: dict[str, Any]) -> str:
     return f"{name} ({masked})" if kind == "employees" and name and masked else name
 
 
+DERIVED_RECORD_KINDS = frozenset({"report", "order", "receivable", "deposit"})
+
+
 def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any]:
+    if kind in DERIVED_RECORD_KINDS:
+        return _derived_record(kind, row, business_name)
     value = {key: _json_value(item) for key, item in row.items()}
     record_id = str(value.get("id") or value.get("voucher_no") or "")
     amount = _amount(row)
@@ -637,14 +642,10 @@ async def _fetch_legacy_people(sql, *, parameters):
         await connection.close()
 
 
-async def _legacy_people_rows(user, business_id, route, start=None, end=None, email=None, limit=500, include_history: bool = False):
-    """Read legacy source only for its owning tenant and an exact canonical identity."""
-    from app.core.obys_tenant import is_legacy_obys_tenant
+def _legacy_business_id(business: dict[str, Any]) -> str | None:
+    """V4.1 사업자를 승인된 기존(레거시) 사업자 id 하나에 대응시킨다. 대응이 하나가 아니면 None."""
     from app.services.yeoljeong_finance_service import CANONICAL_BUSINESSES
 
-    if not is_legacy_obys_tenant(user):
-        return []
-    business = await _business(user, business_id)
     def digits(value):
         return re.sub(r"\D", "", str(value or ""))
     registration = digits(business.get("registration_no"))
@@ -658,8 +659,20 @@ async def _legacy_people_rows(user, business_id, route, start=None, end=None, em
                    if (registration and registration == digits(item.get("registrationNo")))
                    or (not registration and business.get("name") == item["name"])]
     if len(matches) != 1:
+        return None
+    return str(matches[0]["id"])
+
+
+async def _legacy_people_rows(user, business_id, route, start=None, end=None, email=None, limit=500, include_history: bool = False):
+    """Read legacy source only for its owning tenant and an exact canonical identity."""
+    from app.core.obys_tenant import is_legacy_obys_tenant
+
+    if not is_legacy_obys_tenant(user):
         return []
-    legacy_id = matches[0]["id"]
+    business = await _business(user, business_id)
+    legacy_id = _legacy_business_id(business)
+    if not legacy_id:
+        return []
     if legacy_id not in acct_purchase._acct_company_map():
         return []
     # SQL text is a fixed literal per route; every value (including dates/email) is a bind parameter.
@@ -706,6 +719,485 @@ async def _with_payroll_settlement_state(user: dict[str, Any], rows: list[Any]) 
     return [{**dict(row), **states.get(str(row["id"]), {})} for row in rows]
 
 
+# ── V4.1 미연결 메뉴 ①: 경영 리포트·주문·취소·입금 예정·미수·입금 미매칭 ─────────────────
+# 새 테이블을 만들지 않고 기존 원장을 읽기 전용으로 조합한다.
+#   orders      ← yeoljeong_delivery_sales (배달앱 수집 주문 원문, 레거시 사업자만)
+#   receivables ← yeoljeong_delivery_settlements(입금 예정) × 통장 입금, 매칭은
+#                 finance_svc.match_bank_to_settlements(일자+금액) 재사용
+#   unmatched   ← 통장 입금 × 배달 정산, 같은 매칭 함수
+#   reports     ← 월 단위로 배달 매출·매입 원장·급여 총지급·통장 입출금을 같은 기간으로 나란히 둔다
+# 원칙: 수집되지 않은 값은 0 이 아니라 None(화면 '수집 전'). 금액을 추정하지 않는다.
+DERIVED_V41_ROUTES = frozenset({"reports", "orders", "receivables", "unmatched"})
+DELIVERY_ROW_LIMIT = 20000
+REPORT_MAX_MONTHS = 24
+_DELIVERY_SQL = {
+    "sales": (
+        "SELECT row_id AS id,branch,payload,updated_at FROM yeoljeong_delivery_sales"
+        " WHERE business_id=$1 AND deleted_at IS NULL"
+        " AND ($2::text IS NULL OR payload->>'occurred_on' >= $2)"
+        " AND ($3::text IS NULL OR payload->>'occurred_on' <= $3)"
+        " ORDER BY payload->>'occurred_on' DESC NULLS LAST,row_id LIMIT $4"
+    ),
+    "settlements": (
+        "SELECT row_id AS id,branch,payload,updated_at FROM yeoljeong_delivery_settlements"
+        " WHERE business_id=$1 AND deleted_at IS NULL"
+        " AND ($2::text IS NULL OR payload->>'occurred_on' >= $2)"
+        " AND ($3::text IS NULL OR payload->>'occurred_on' <= $3)"
+        " ORDER BY payload->>'occurred_on' DESC NULLS LAST,row_id LIMIT $4"
+    ),
+}
+_CANCEL_WORDS = re.compile(r"취소|환불|cancel|refund", re.IGNORECASE)
+NOT_COLLECTED = "수집 전"
+
+
+def _nullable_amount(value: Any) -> Decimal | None:
+    """원천 금액을 그대로 옮긴다. 비어 있거나 숫자가 아니면 None — 0 으로 바꾸지 않는다."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        amount = Decimal(str(value).replace(",", "").strip())
+    except (ArithmeticError, ValueError):
+        return None
+    return amount if amount.is_finite() else None
+
+
+def _money_text(value: Decimal | None) -> str:
+    return NOT_COLLECTED if value is None else f"{value:,.0f}원"
+
+
+def _strict_sum(values: list[Decimal | None]) -> Decimal | None:
+    """자료가 없거나 하나라도 금액이 비어 있으면 None. 일부만 더한 값을 합계로 내지 않는다."""
+    if not values or any(value is None for value in values):
+        return None
+    return sum(values, Decimal("0"))
+
+
+def _kst_today() -> date:
+    return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+
+def _period_bounds(date_from: str | None, date_to: str | None) -> tuple[date | None, date | None]:
+    _filter_source_dates([], date_from, date_to)  # 형식·순서 검증(422)
+    return (date.fromisoformat(date_from) if date_from else None,
+            date.fromisoformat(date_to) if date_to else None)
+
+
+def _in_period(day: str, start: date | None, end: date | None) -> bool:
+    if not day:
+        return start is None and end is None
+    try:
+        value = date.fromisoformat(day[:10])
+    except ValueError:
+        return False
+    return (start is None or value >= start) and (end is None or value <= end)
+
+
+async def _delivery_rows(user: dict[str, Any], business: dict[str, Any], kind: str,
+                         date_from: str | None, date_to: str | None) -> list[dict[str, Any]] | None:
+    """배달 원장 행(payload 펼침). 레거시 소유 테넌트·사업자 대응이 아니면 None(=미연동)."""
+    from app.core.obys_tenant import is_legacy_obys_tenant
+
+    if not is_legacy_obys_tenant(user):
+        return None
+    legacy_id = _legacy_business_id(business)
+    if not legacy_id:
+        return None
+    connection = await upload_svc._connect()
+    try:
+        async with connection.transaction(readonly=True):
+            fetched = await connection.fetch(_DELIVERY_SQL[kind], legacy_id, date_from or None,
+                                             date_to or None, DELIVERY_ROW_LIMIT + 1)
+    finally:
+        await connection.close()
+    if len(fetched) > DELIVERY_ROW_LIMIT:
+        raise HTTPException(status_code=413, detail=f"배달 원장이 {DELIVERY_ROW_LIMIT:,}건을 넘습니다. 조회 기간을 줄여 주세요")
+    rows: list[dict[str, Any]] = []
+    for row in fetched:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        # 식별 가능한 원문은 금액이 없거나 0인 취소 행도 보존한다.
+        # 금액 기반 수집 필터만 사용하면 null 자료가 조회 단계에서 사라진다.
+        identity_keys = ("order_id", "order_no", "source_id") if kind == "sales" else (
+            "settlement_id", "order_id", "order_no", "source_id")
+        identified = any(str(payload.get(key) or "").strip() for key in identity_keys)
+        if not identified and not finance_svc._delivery_record_is_meaningful(kind, payload):
+            continue
+        rows.append({**payload, "id": str(row["id"]), "branch": str(row["branch"] or payload.get("branch") or "")})
+    return rows
+
+
+def _order_row(row: dict[str, Any]) -> dict[str, Any]:
+    raw_status = str(row.get("order_status") or "").strip()
+    if raw_status == "dashboard_summary":
+        state = "일 집계(주문 단위 아님)"
+    elif _CANCEL_WORDS.search(raw_status):
+        state = "취소"
+    elif raw_status:
+        state = "주문"
+    else:
+        state = "상태 미수집"
+    return {
+        "id": row["id"],
+        "occurred_on": str(row.get("occurred_on") or "")[:10],
+        "order_no": str(row.get("order_id") or row.get("order_no") or ""),
+        "channel": str(row.get("platform") or row.get("service") or ""),
+        "branch": row.get("branch") or "",
+        "order_status": raw_status or None,
+        "gross_amount": _nullable_amount(row.get("gross_amount")),
+        "discount_amount": _nullable_amount(row.get("discount_amount")),
+        "delivery_fee": _nullable_amount(row.get("delivery_fee")),
+        "order_count": _nullable_amount(row.get("order_count")),
+        "status": state,
+    }
+
+
+def _settlement_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "occurred_on": str(row.get("occurred_on") or "")[:10],
+        "settlement_no": str(row.get("settlement_id") or row.get("source_id") or ""),
+        "channel": str(row.get("platform") or row.get("service") or ""),
+        "branch": row.get("branch") or "",
+        "sales_amount": _nullable_amount(row.get("sales_amount")),
+        "fee_amount": _nullable_amount(row.get("fee_amount")),
+        "settlement_amount": _nullable_amount(row.get("settlement_amount")),
+        "settlement_status": str(row.get("settlement_status") or "").strip() or None,
+    }
+
+
+def _uploaded_bank_direction(row: dict[str, Any]) -> str | None:
+    """업로드 통장 행은 입금액·출금액 열로 부호가 정해진 경우만 방향을 안다. 단일 금액 열은 모른다(None)."""
+    payload = row.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = None
+    if not isinstance(payload, dict) or payload.get("amount") not in (None, "") or payload.get("금액") not in (None, ""):
+        return None
+    amount = _nullable_amount(row.get("amount"))
+    if amount is None or amount == 0:
+        return None
+    return "in" if amount > 0 else "out"
+
+
+async def _bank_flows(user: dict[str, Any], business_id: str, date_from: str | None,
+                      date_to: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    manual = await upload_svc.list_bank_transactions(
+        user=user, business_id=business_id, date_from=date_from, date_to=date_to, limit=None,
+    )
+    uploaded = await upload_svc.list_ledger_rows(
+        user=user, business_id=business_id, category="transaction", limit=None,
+        date_from=date_from, date_to=date_to,
+    )
+    flows: dict[str, list[dict[str, Any]]] = {"in": [], "out": []}
+    for row in manual:
+        direction = str(row.get("direction") or "")
+        if direction not in flows:
+            continue
+        amount = _nullable_amount(row.get("amount"))
+        flows[direction].append({
+            "id": str(row.get("id") or ""), "occurred_on": _date_text(row),
+            "amount": None if amount is None else abs(amount),
+            "counterparty": str(row.get("counterparty") or ""), "memo": str(row.get("memo") or ""),
+            "account_label": str(row.get("account_label") or ""), "category": row.get("category"),
+            "source": "manual",
+        })
+    for row in uploaded:
+        direction = _uploaded_bank_direction(row)
+        if direction is None:
+            continue
+        flows[direction].append({
+            "id": str(row.get("id") or ""), "occurred_on": _date_text(row),
+            "amount": abs(_nullable_amount(row.get("amount")) or Decimal("0")),
+            "counterparty": str(row.get("counterparty") or ""), "memo": str(row.get("description") or ""),
+            "account_label": "업로드 통장", "category": None, "source": "upload",
+        })
+    return flows["in"], flows["out"]
+
+
+def _match_deposits(deposits: list[dict[str, Any]], settlements: list[dict[str, Any]]) -> dict[str, str]:
+    """입금 id → 정산 id. 일자+금액 일치(finance_svc.match_bank_to_settlements). 금액·일자 없는 행은 대상이 아니다."""
+    def whole(value: Decimal | None) -> bool:
+        # 원 단위 정수 금액만 비교한다. int() 절사로 소수 금액이 다른 금액과 맞는 일을 막는다.
+        return value is not None and value == value.to_integral_value()
+    bank = [{"id": item["id"], "occurred_at": item["occurred_on"], "amount": int(item["amount"])}
+            for item in sorted(deposits, key=lambda item: (item["occurred_on"], item["id"]))
+            if whole(item["amount"]) and item["occurred_on"]]
+    expected = [{"id": item["id"], "occurred_on": item["occurred_on"], "settlement_amount": int(item["settlement_amount"])}
+                for item in sorted(settlements, key=lambda item: (item["occurred_on"], item["id"]))
+                if whole(item["settlement_amount"]) and item["occurred_on"]]
+    if not bank or not expected:
+        return {}
+    result = finance_svc.match_bank_to_settlements(bank, expected)
+    return {item["bank_transaction_id"]: item["settlement_id"] for item in result["matched"]}
+
+
+def _receivable_status(row: dict[str, Any], matched: bool, deposits_collected: bool, today: date) -> tuple[str, int | None]:
+    if row["settlement_amount"] is None:
+        return "금액 수집 전", None
+    if matched:
+        return "입금 확인", None
+    if not deposits_collected:
+        return "입금 자료 수집 전", None
+    try:
+        due = date.fromisoformat(row["occurred_on"])
+    except ValueError:
+        return "예정일 확인 필요", None
+    if due > today:
+        return "입금 예정", None
+    if due == today:
+        return "입금 예정(오늘)", None
+    return "미입금 · 확인 필요", (today - due).days
+
+
+def _report_periods(start: date, end: date) -> list[tuple[date, date, bool]]:
+    """[start,end] 를 달력 월로 자른다. (구간 시작, 구간 끝, 그 달 전체인지)."""
+    periods: list[tuple[date, date, bool]] = []
+    cursor = start.replace(day=1)
+    while cursor <= end:
+        following = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+        month_end = following - timedelta(days=1)
+        lo, hi = max(cursor, start), min(month_end, end)
+        periods.append((lo, hi, lo == cursor and hi == month_end))
+        cursor = following
+    return periods
+
+
+def _report_range(date_from: str | None, date_to: str | None) -> tuple[date, date]:
+    start, end = _period_bounds(date_from, date_to)
+    end = end or _kst_today()
+    if start is None:
+        month = end.replace(day=1)
+        for _ in range(5):
+            month = (month - timedelta(days=1)).replace(day=1)
+        start = month
+    if start > end:
+        raise HTTPException(status_code=422, detail="시작일은 종료일보다 늦을 수 없습니다")
+    if len(_report_periods(start, end)) > REPORT_MAX_MONTHS:
+        raise HTTPException(status_code=422, detail=f"경영 리포트는 최대 {REPORT_MAX_MONTHS}개월까지 조회합니다")
+    return start, end
+
+
+async def _report_rows(user: dict[str, Any], business: dict[str, Any], business_id: str,
+                       date_from: str | None, date_to: str | None) -> tuple[list[dict[str, Any]], str]:
+    start, end = _report_range(date_from, date_to)
+    lo, hi = start.isoformat(), end.isoformat()
+    deliveries = await _delivery_rows(user, business, "sales", lo, hi)
+    purchases = await _ledger_records(user=user, business_id=business_id, category="purchase",
+                                      date_from=lo, date_to=hi)
+    deposits, withdrawals = await _bank_flows(user, business_id, lo, hi)
+    role = upload_svc.tenant_session_for_user(user)["permissions"]["role"]
+    payroll: list[dict[str, Any]] | None = None
+    if role in _MANAGER_ROLES:
+        payroll_rows, _ = await _source_rows(route="payroll", user=user, business_id=business_id,
+                                             date_from=lo, date_to=hi)
+        payroll = [row for _, row in payroll_rows]
+    orders = None if deliveries is None else [_order_row(row) for row in deliveries]
+    # 주문이 존재하는 날에는 취소 여부와 무관하게 일 집계를 제외한다.
+    order_days = {row["occurred_on"] for row in orders or []
+                  if row["order_status"] != "dashboard_summary"}
+    reports: list[dict[str, Any]] = []
+    for seg_start, seg_end, full_month in reversed(_report_periods(start, end)):
+        def within(day: str) -> bool:
+            return _in_period(day, seg_start, seg_end)
+        missing: list[str] = []
+        sales = None
+        if orders is not None:
+            sales = _strict_sum([row["gross_amount"] for row in orders
+                                 if within(row["occurred_on"]) and row["status"] != "취소"
+                                 and (row["order_status"] != "dashboard_summary"
+                                      or row["occurred_on"] not in order_days)])
+        purchase = _strict_sum([_nullable_amount(row.get("total_amount") if kind == "ledger" else row.get("amount"))
+                                for kind, row in purchases if within(_date_text(row))])
+        labor = None
+        labor_note = ""
+        if payroll is None:
+            labor_note = "관리자 전용"
+        elif not full_month:
+            labor_note = "급여는 월 단위 — 일부 기간은 비교하지 않음"
+        else:
+            month = seg_start.isoformat()[:7]
+            labor = _strict_sum([_nullable_amount(row.get("gross_pay")) for row in payroll
+                                 if str(row.get("payroll_month") or "")[:7] == month])
+        bank_in = _strict_sum([row["amount"] for row in deposits if within(row["occurred_on"])])
+        bank_out = _strict_sum([row["amount"] for row in withdrawals if within(row["occurred_on"])])
+        for label, value in (("배달앱 매출", sales), ("매입", purchase), ("인건비", labor),
+                             ("통장 입금", bank_in), ("통장 출금", bank_out)):
+            if value is None:
+                missing.append(label)
+        reports.append({
+            "id": seg_start.isoformat()[:7],
+            "period_start": seg_start.isoformat(),
+            "period_end": seg_end.isoformat(),
+            "full_month": full_month,
+            "delivery_sales_amount": sales,
+            "purchase_amount": purchase,
+            "payroll_gross_amount": labor,
+            "payroll_note": labor_note or None,
+            "bank_in_amount": bank_in,
+            "bank_out_amount": bank_out,
+            "missing": missing,
+            "status": "일부 수집 전" if missing else "집계 완료",
+        })
+    source = "obys_report:delivery_sales+obys_ledger+payroll+bank"
+    if deliveries is None:
+        source += ":배달앱_미연동"
+    return reports, source
+
+
+async def _derived_rows(*, route: str, user: dict[str, Any], business_id: str,
+                        date_from: str | None, date_to: str | None) -> tuple[list[tuple[str, dict[str, Any]]], str]:
+    business = await _business(user, business_id)
+    if route == "reports":
+        reports, source = await _report_rows(user, business, business_id, date_from, date_to)
+        return [("report", row) for row in reports], source
+    start, end = _period_bounds(date_from, date_to)
+    if route == "orders":
+        deliveries = await _delivery_rows(user, business, "sales", date_from, date_to)
+        if deliveries is None:
+            return [], "not_configured"
+        orders = [_order_row(row) for row in deliveries]
+        return [("order", row) for row in orders if _in_period(row["occurred_on"], start, end)], "yeoljeong_delivery_sales"
+    settlements_raw = await _delivery_rows(user, business, "settlements", date_from, date_to)
+    settlements = None if settlements_raw is None else [
+        row for row in map(_settlement_row, settlements_raw) if _in_period(row["occurred_on"], start, end)]
+    if route == "receivables" and settlements is None:
+        return [], "not_configured"
+    deposits, _ = await _bank_flows(user, business_id, date_from, date_to)
+    matches = _match_deposits(deposits, settlements or [])
+    if route == "receivables":
+        settlements = settlements or []
+        deposits_by_settlement = {sid: bank for bank, sid in matches.items()}
+        settled = set(deposits_by_settlement)
+        today = _kst_today()
+        rows = []
+        for row in settlements:
+            status, overdue = _receivable_status(row, row["id"] in settled, bool(deposits), today)
+            matched_deposit = deposits_by_settlement.get(row["id"])
+            rows.append(("receivable", {**row, "status": status, "overdue_days": overdue,
+                                        "matched_bank_transaction_id": matched_deposit}))
+        return rows, "yeoljeong_delivery_settlements+obys_bank_transactions"
+    rows = []
+    for deposit in deposits:
+        if deposit["id"] in matches:
+            status = "정산 매칭"
+        elif deposit.get("category"):
+            status = "분류됨 · 정산 미매칭"
+        elif not settlements:
+            status = "미매칭 · 정산 자료 없음"
+        else:
+            status = "미매칭"
+        rows.append(("deposit", {**deposit, "status": status,
+                                 "matched_settlement_id": matches.get(deposit["id"])}))
+    rows.sort(key=lambda item: (item[1]["occurred_on"], item[1]["id"]), reverse=True)
+    source = "obys_bank_transactions+yeoljeong_delivery_settlements"
+    if settlements is None:
+        source = "obys_bank_transactions:정산_미연동"
+    return rows, source
+
+
+def _derived_record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any]:
+    """DERIVED_V41_ROUTES 전용 표시. 금액이 None 이면 amount 도 None, 화면 값은 '수집 전'."""
+    status = str(row.get("status") or "")
+    if kind == "report":
+        amount = row.get("delivery_sales_amount")
+        period = f"{row['period_start']} ~ {row['period_end']}"
+        display = {
+            "보고기간": period, "사업자": business_name,
+            "배달앱 매출": _money_text(row.get("delivery_sales_amount")),
+            "매입": _money_text(row.get("purchase_amount")),
+            "인건비": (_money_text(row.get("payroll_gross_amount")) if row.get("payroll_gross_amount") is not None
+                    else f"{NOT_COLLECTED}" + (f" ({row['payroll_note']})" if row.get("payroll_note") else "")),
+            "통장 입금": _money_text(row.get("bank_in_amount")),
+            "통장 출금": _money_text(row.get("bank_out_amount")),
+            "수집 전 항목": ", ".join(row.get("missing") or []) or "없음",
+            "상태": status,
+        }
+        date_text, title, counterparty = row["period_end"], f"{row['id']} 경영 리포트", ""
+    elif kind == "order":
+        amount = row.get("gross_amount")
+        display = {
+            "주문번호": row.get("order_no") or "주문번호 미수집", "사업자": business_name,
+            "일자": row.get("occurred_on") or "일자 미수집", "매출처·채널": row.get("channel") or "채널 미수집",
+            "지점": row.get("branch") or "", "주문·취소": row.get("order_status") or "상태 미수집",
+            "금액": _money_text(amount), "상태": status,
+        }
+        date_text, title, counterparty = row.get("occurred_on") or "", row.get("order_no") or "", row.get("channel") or ""
+    elif kind == "receivable":
+        amount = row.get("settlement_amount")
+        display = {
+            "예정번호": row.get("settlement_no") or row["id"], "사업자": business_name,
+            "계좌": NOT_COLLECTED, "입금처": row.get("channel") or "정산처 미수집",
+            "예정일": row.get("occurred_on") or "예정일 미수집", "금액": _money_text(amount),
+            "연체일수": f"{row['overdue_days']}일" if row.get("overdue_days") is not None else "-",
+            "정산상태(원천)": row.get("settlement_status") or "미수집",
+            "지점": row.get("branch") or "", "상태": status,
+        }
+        date_text, title, counterparty = row.get("occurred_on") or "", row.get("settlement_no") or "", row.get("channel") or ""
+    else:
+        amount = row.get("amount")
+        display = {
+            "거래번호": row["id"], "사업자": business_name,
+            "계좌": row.get("account_label") or "계좌 미등록", "입금처": row.get("counterparty") or "입금처 미기재",
+            "매칭·미매칭": status, "금액": _money_text(amount), "일자": row.get("occurred_on") or "",
+            "적요": row.get("memo") or "", "상태": status,
+        }
+        date_text, title, counterparty = row.get("occurred_on") or "", row.get("memo") or row.get("counterparty") or "", row.get("counterparty") or ""
+    return {
+        "id": str(row["id"]),
+        "kind": kind,
+        "date": date_text,
+        "title": title or str(row["id"]),
+        "counterparty": counterparty,
+        "amount": None if amount is None else str(amount),
+        "status": status,
+        "display": display,
+        "employee_key": None,
+        "raw": _public_raw(row),
+    }
+
+
+def _derived_metrics(route: str, source_rows: list[tuple[str, dict[str, Any]]], source: str) -> list[dict[str, str]]:
+    rows = [row for _, row in source_rows]
+    if source == "not_configured":
+        return [{"label": "데이터 원천", "value": "원천 미연동"}]
+    if route == "reports":
+        partial = sum(1 for row in rows if row["missing"])
+        return [{"label": "보고 기간", "value": f"{len(rows):,}개월"},
+                {"label": "일부 수집 전", "value": f"{partial:,}개월"},
+                {"label": "데이터 원천", "value": source}]
+    if route == "orders":
+        cancelled = sum(1 for row in rows if row["status"] == "취소")
+        no_amount = sum(1 for row in rows if row["gross_amount"] is None)
+        return [{"label": "주문 건수", "value": f"{len(rows):,}건"},
+                {"label": "취소", "value": f"{cancelled:,}건"},
+                {"label": "금액 수집 전", "value": f"{no_amount:,}건"},
+                {"label": "데이터 원천", "value": source}]
+    if route == "receivables":
+        overdue = [row for row in rows if row["status"] == "미입금 · 확인 필요"]
+        pending = sum(1 for row in rows if row["status"].startswith("입금 예정"))
+        return [{"label": "예정 건수", "value": f"{len(rows):,}건"},
+                {"label": "미입금 · 확인 필요", "value": f"{len(overdue):,}건"},
+                {"label": "미입금 금액", "value": _money_text(_strict_sum([row["settlement_amount"] for row in overdue]))
+                 if overdue else ("0원" if rows and all(
+                     row["status"] in {"입금 확인", "입금 예정", "입금 예정(오늘)"} for row in rows
+                 ) else NOT_COLLECTED)},
+                {"label": "입금 예정", "value": f"{pending:,}건"},
+                {"label": "데이터 원천", "value": source}]
+    unmatched = [row for row in rows if row["status"].startswith("미매칭")]
+    return [{"label": "입금 건수", "value": f"{len(rows):,}건"},
+            {"label": "미매칭", "value": f"{len(unmatched):,}건"},
+            {"label": "미매칭 금액", "value": _money_text(_strict_sum([row["amount"] for row in unmatched]))
+             if unmatched else ("0원" if rows else NOT_COLLECTED)},
+            {"label": "데이터 원천", "value": source}]
+
+
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
@@ -723,6 +1215,9 @@ async def _source_rows(
             return [("generic", dict(row)) for row in rows], "yeoljeong_attendance_records"
         finally:
             await connection.close()
+    if route in DERIVED_V41_ROUTES:
+        return await _derived_rows(route=route, user=user, business_id=business_id,
+                                   date_from=date_from, date_to=date_to)
     if route == "tax-gap":
         rows: list[tuple[str, dict[str, Any]]] = []
         for category in ("sales", "purchase"):
@@ -894,6 +1389,13 @@ async def workspace_summary(
         date_from=date_from, date_to=date_to, own_email=own_email,
         include_history=include_history,
     )
+    if selected_route in DERIVED_V41_ROUTES:
+        return {
+            "business": {"id": business["id"], "name": business["name"]},
+            "route": selected_route,
+            "metrics": _derived_metrics(selected_route, source_rows, source),
+            "source": {"name": source, "live": source != "not_configured", "record_count": len(source_rows)},
+        }
     if selected_route == "payroll":
         _filter_source_dates([], date_from, date_to)
         if not include_history:
@@ -3061,6 +3563,8 @@ async def workspace_record_detail(
     route: str,
     record_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
     selected_route = _route(route)
     business = await _business(current_user, business_id)
@@ -3077,6 +3581,33 @@ async def workspace_record_detail(
             "record": _record("acct-source", source_rows[0], business["name"]),
             "source": {"name": source, "live": True},
         }
+    if selected_route in DERIVED_V41_ROUTES:
+        # 목록과 같은 기간 집합으로 상세 상태와 매칭을 다시 계산한다.
+        detail_from, detail_to = date_from, date_to
+        if selected_route == "reports":
+            if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", record_id):
+                raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
+            first = date.fromisoformat(record_id + "-01")
+            last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            detail_from, detail_to = first.isoformat(), min(last, max(first, _kst_today())).isoformat()
+            if date_from or date_to:
+                start, end = _period_bounds(date_from, date_to)
+                start = max(first, start or first)
+                end = min(last, end or last)
+                if start > end:
+                    raise HTTPException(status_code=404, detail="현재 조회 기간의 내역을 찾을 수 없습니다")
+                detail_from, detail_to = start.isoformat(), end.isoformat()
+        source_rows, source = await _source_rows(
+            route=selected_route, user=current_user, business_id=business_id,
+            date_from=detail_from, date_to=detail_to, own_email=own_email,
+        )
+        record = next((_record(kind, row, business["name"]) for kind, row in source_rows
+                       if str(row.get("id")) == record_id), None)
+        if not record:
+            raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
+        return {"business": {"id": business["id"], "name": business["name"]},
+                "route": selected_route, "record": record,
+                "source": {"name": source, "live": source != "not_configured"}}
     if selected_route in LEDGER_ROUTES or selected_route in CARD_ROUTES or selected_route in BANK_ROUTES:
         try:
             local_id = UUID(record_id)
