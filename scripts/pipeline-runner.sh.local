@@ -220,6 +220,17 @@ mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
 # ── 유틸리티 ──────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_DIR/runner.log"; }
 
+# 작업 산출물 폴더 보장 (AADS-RUNNER-ARTIFACT-DIR-PER-JOB-20261116)
+# 러너 가동 중 /tmp 가 청소되거나 소실되어도 매 작업 시작 시 폴더를 보장한다.
+ensure_artifact_dir() {
+    local target="${1:-${ARTIFACT_DIR:-/tmp/aads_pipeline_artifacts}}"
+    if [[ -d "$target" && -w "$target" ]]; then
+        return 0
+    fi
+    mkdir -p "$target" 2>/dev/null && [[ -d "$target" && -w "$target" ]]
+}
+
+
 # >>> temp-pg-reap (reclaim_runner_worktrees.sh 가 이 블록을 잘라 써서 같은 로직을 공유한다 — 마커를 지우지 말 것)
 # 러너 job 이 /tmp 에 띄운 임시 PostgreSQL 클러스터 회수 (AADS-RUNNER-REAP-ORPHAN-TMP-PG-20261015, R-BG).
 # 2026-10-15 contabo14: `postgres -D /tmp/...` 고아 10개가 ppid=1 로 최장 13일 남아 있었다. worktree 만 지우고
@@ -6709,6 +6720,14 @@ acct_repo_is_aads_server() {
 
 run_job() {
     local job_id="$1" project="$2" instruction="$3" session_id="$4" max_cycles="$5" job_model="${6:-auto}" job_size="${7:-M}" parallel_group="${8:-}"
+
+    # 작업 시작마다 산출물 폴더 보장 (AADS-RUNNER-ARTIFACT-DIR-PER-JOB-20261116)
+    if ! ensure_artifact_dir; then
+        log "  ARTIFACT_DIR_MKDIR_FAIL job=$job_id dir=$ARTIFACT_DIR"
+        _fail_job "$job_id" "$session_id" "artifact_dir_unavailable" "산출물 디렉터리 생성 실패: $ARTIFACT_DIR"
+        return 1
+    fi
+
     local output_file="$ARTIFACT_DIR/${job_id}.out" err_file="$ARTIFACT_DIR/${job_id}.err"
     local workdir
     if ! workdir=$(resolve_project_workdir "$project" "$instruction"); then

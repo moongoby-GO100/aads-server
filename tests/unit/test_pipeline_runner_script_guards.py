@@ -174,7 +174,7 @@ def test_pipeline_runner_preserves_exact_claude_versions():
     assert "normalize_claude_cli_model()" in script
     assert 'python3 "$CLAUDE_MODEL_CONTRACT"' in script
     assert 'effective_model="unverified"' in script
-    assert "claude_cli_model=$(normalize_claude_cli_model \"$current_model\")" in script
+    assert "claude_cli_model=$(authorize_claude_model \"$current_model\")" in script
     # AADS-LLM-M9-COST-BASIS: json 으로 받아 사용량을 적고, 결과는 text 로 되돌린다.
     # 되돌릴 헬퍼가 없으면 json 으로 띄우지 않는다(rework 1, 리뷰 지적 1).
     assert "local claude_args=(--model \"$claude_cli_model\" -p --output-format \"$claude_output_format\")" in script
@@ -502,4 +502,56 @@ def test_every_hold_storage_branch_writes_needs_retry_false_for_diff_truncated()
         update_window = script[review_trunc_check:first_update + 500]
         assert 'review_needs_retry="false"' in update_window
         assert 'review_needs_retry=$([[ "$review_needs_retry" == "true" ]] && echo TRUE || echo FALSE)' in update_window
+
+
+def test_pipeline_runner_run_job_ensures_artifact_dir_before_writes():
+    """run_job 시작부에서 ensure_artifact_dir가 첫 ARTIFACT_DIR 쓰기보다 먼저 나오는지 정적 검사."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+        assert "ensure_artifact_dir()" in script
+
+        run_job_body = _extract_function(script, "run_job")
+        ensure_pos = run_job_body.find("ensure_artifact_dir")
+        assert ensure_pos != -1, f"ensure_artifact_dir not found in run_job in {script_name}"
+
+        # ARTIFACT_DIR_MKDIR_FAIL 로그 및 artifact_dir_unavailable error_detail 처리 확인
+        assert "ARTIFACT_DIR_MKDIR_FAIL" in run_job_body
+        assert "artifact_dir_unavailable" in run_job_body
+
+        # 첫 산출물 쓰기(aaginst / output_file 리다이렉션)보다 앞에 위치하는지 확인
+        write_targets = [
+            run_job_body.find('> "$aag_ins"'),
+            run_job_body.find('> "$output_file"'),
+            run_job_body.find('"$ARTIFACT_DIR/'),
+        ]
+        valid_writes = [pos for pos in write_targets if pos != -1]
+        assert valid_writes, f"No write positions found in run_job in {script_name}"
+        first_write_pos = min(valid_writes)
+        assert ensure_pos < first_write_pos, (
+            f"ensure_artifact_dir (pos={ensure_pos}) must appear before first write (pos={first_write_pos}) in {script_name}"
+        )
+
+
+def test_ensure_artifact_dir_recreates_missing_directory(tmp_path):
+    """bash로 ensure_artifact_dir 함수만 떼어 임시 ARTIFACT_DIR을 지운 뒤 호출해 폴더가 다시 생기는지 실행 검사."""
+    for script_name in ("pipeline-runner.sh", "pipeline-runner.sh.local"):
+        script = _read_script(script_name)
+        func = _extract_function(script, "ensure_artifact_dir") + "\n}\n"
+
+        target_dir = tmp_path / f"test_art_{script_name.replace('.', '_')}"
+        if target_dir.exists():
+            import shutil
+            shutil.rmtree(target_dir)
+
+        # 1. 디렉터리가 없을 때 호출하여 재생성 확인
+        cmd = f'{func}\nARTIFACT_DIR="{target_dir}" ensure_artifact_dir'
+        proc = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+        assert proc.returncode == 0, f"ensure_artifact_dir failed: {proc.stderr}"
+        assert target_dir.is_dir(), f"Expected {target_dir} to be created"
+
+        # 2. 이미 존재하는 경우에도 정상 0 반환 확인
+        proc_exist = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+        assert proc_exist.returncode == 0, f"ensure_artifact_dir on existing dir failed: {proc_exist.stderr}"
+        assert target_dir.is_dir()
+
 
