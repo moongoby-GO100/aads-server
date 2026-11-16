@@ -5692,6 +5692,8 @@
     const SERVER_AUTH_TOKEN_KEY = "aads_token";
     const FB_ACCESS_TOKEN_KEY = "fb_access_token";
     const V41_APP_PATH = "/static/apps/obys/admin.html";
+    // 직원 화면(새 화면). 직원 계정은 이 레거시 화면이 아니라 여기로 간다(2026-11-16 대표 지시).
+    const EMPLOYEE_APP_PATH = "/static/apps/obys/employee.html";
     const typeLabels = {
       sales: "매출",
       bank: "입금",
@@ -13787,6 +13789,32 @@
       return hasServerAuth();
     }
 
+    // 직원 계정은 새 직원 화면(employee.html)으로 보낸다. 판정은 서버 /session 응답(session.permissions)만 쓴다 —
+    // 이 화면의 로컬 가입 기록(authPermissions)을 섞으면 employee.html 의 판정과 어긋나 두 화면을 오갈 수 있다.
+    // admin.html leaveForEmployeeEntryV41·employee-app.js isEmployeeSession 과 같은 기준(직원 역할 또는 가입요청 상태, 관리 권한 없음).
+    // 초대 링크·명시적 legacy 진입·레시피 이동·관리자 미리보기는 이 화면이 처리하므로 보내지 않는다.
+    function shouldOpenEmployeeApp(session) {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("legacy") === "1" && params.get("view") === "legacy") return false;
+      if (params.get("employee_preview") === "1") return false;
+      if (readPostLoginRedirectFromUrl()) return false;
+      if (params.has("yf_invite_token") || params.has("invite_token")) return false;
+      const hash = String(window.location.hash || "").replace(/^#/, "");
+      if (hash.startsWith("invite") || pendingPhoneInviteToken) return false;
+      if (!hasServerAuth()) return false;
+      const permissions = session?.permissions || {};
+      const role = String(permissions.role || "").trim().toLowerCase();
+      const employee = ["employee", "employee_pending", "employee_rejected"].includes(role) || Boolean(permissions.employee_request_status);
+      return employee && permissions.can_manage_onboarding !== true;
+    }
+
+    // 서명 링크(yf_contract_token)로 왔으면 그 토큰을 그대로 넘긴다 — 직원 화면이 그 계약서를 연다.
+    function openEmployeeApp() {
+      const token = new URLSearchParams(window.location.search).get("yf_contract_token") || "";
+      window.location.replace(`${EMPLOYEE_APP_PATH}${token ? `?yf_contract_token=${encodeURIComponent(token)}` : ""}`);
+      return true;
+    }
+
     // /auth/login 응답에는 권한이 없어 sessionFromAuthPayload 가 직원도 role "member" 로 만든다.
     // 서버 /session 으로 확인한 적이 없으면(permissions_verified 없음) 먼저 한 번 확인한 뒤 판정한다.
     // 확인이 실패하면 기존 동작(V4.1)을 유지해 관리자가 권한 로드 지연으로 못 들어가는 일이 없게 한다.
@@ -18348,6 +18376,7 @@
         authSession = {...session, permissions_verified: true};
         localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authSession));
         if (await followEntryTenantRedirect(session)) return false;
+        if (shouldOpenEmployeeApp(session)) return !openEmployeeApp();
         if (session.legacy_access === true || isEmployeeAccount()) return true;
         if (shouldOpenV41App()) return !openV41App();
         return true; // Invitation/signature/approved redirect stays on this entry.

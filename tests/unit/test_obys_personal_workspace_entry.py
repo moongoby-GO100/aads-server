@@ -179,16 +179,16 @@ def test_admin_guard_sends_employee_sessions_to_employee_screen():
     const organizationApi=async(path,options)=>{if(failSwitch)throw Error('403');switched=[path,options.method];return {token:'employer'}};
     """ + _function_source(admin, "leaveForEmployeeEntryV41") + """
     (async()=>{
-      // 승인 후: 서버가 준 시작 조직으로 토큰을 바꾸고 직원 화면으로 간다.
+      // 승인 후: 서버가 준 시작 조직으로 토큰을 바꾸고 직원 화면(employee.html, 2026-11-16 새 화면 이전)으로 간다.
       assert.equal(await leaveForEmployeeEntryV41({entry_tenant_redirect:{tenant_id:'t-emp'},permissions:{role:'owner'}}),true);
       assert.deepEqual(switched,['/tenants/t-emp/switch','POST']);assert.equal(store.aads_token,'employer');
-      assert.equal(replaced,'/static/apps/obys/index.html');
+      assert.equal(replaced,'/static/apps/obys/employee.html');
       // 전환 실패: 기존 화면 유지
       replaced=null;failSwitch=true;
       assert.equal(await leaveForEmployeeEntryV41({entry_tenant_redirect:{tenant_id:'t-emp'}}),false);assert.equal(replaced,null);
       // 승인 전 대기 직원: 직원 화면
       assert.equal(await leaveForEmployeeEntryV41({permissions:{role:'employee_pending',employee_request_status:'pending'}}),true);
-      assert.equal(replaced,'/static/apps/obys/index.html');
+      assert.equal(replaced,'/static/apps/obys/employee.html');
       // 실제 사장·관리 권한 직원·레거시는 그대로
       replaced=null;
       assert.equal(await leaveForEmployeeEntryV41({permissions:{role:'owner',can_manage_onboarding:true}}),false);

@@ -4,6 +4,8 @@
  * 보내는 값은 display_mode·platform·event 뿐이며 UA 원문·IP·위치는 보내지 않는다. */
 (() => {
   if (window.ObysAppInstallPing) return;
+  // 관리자의 읽기 전용 직원 화면 미리보기(?preview=1)에서는 접속 기록을 남기지 않는다(쓰기 금지).
+  try { if (new URLSearchParams(location.search).get("preview") === "1") return; } catch (_e) { /* 판단 불가 시 계속 */ }
   const script = document.currentScript;
   const keys = ((script && script.dataset.businessKeys) || "obys_v41_business_id,obys_clock_business_id,yeoljeong-finance-settings-business")
     .split(",").map(x => x.trim()).filter(Boolean);

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2457d6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="오비서">
+  <link rel="manifest" href="/static/apps/obys/manifest-app.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/apps/obys/icons/obys-app-32.png">
+  <link rel="icon" type="image/svg+xml" href="/static/apps/obys/icons/obys-app.svg">
+  <link rel="apple-touch-icon" href="/static/apps/obys/icons/obys-app-180.png">
+  <title>오비서 · 직원 화면</title>
+  <link rel="stylesheet" href="/static/apps/obys/modules/employee-portal.css?v=20261116-r1">
+  <style>
+    /* V4.1(admin.html) 과 같은 색·간격 체계. 직원 화면 전용 선택자는 em- 접두를 쓴다. */
+    :root{--line:#e2e8f0;--ink:#172033;--muted:#667085;--blue:#2457d6;--blue2:#eef4ff;--bg:#f4f6f9;--green:#16845b;--orange:#c56a16;--red:#c93645;--shadow:0 16px 44px rgba(15,23,42,.14)}
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:Pretendard,"Noto Sans KR",Arial,sans-serif}
+    button,input,select,textarea{font:inherit}
+    button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #93c5fd;outline-offset:2px}
+    [hidden]{display:none!important}
+    /* 한 손 조작: 누르는 것은 모두 44px 이상 */
+    .ep-btn,.ep-pc-nav button,.ep-link,.em-btn,.em-field,.em-pick,.em-day,.em-details summary{min-height:44px}
+    .ep-root .ep-btn{min-height:44px}
+    .em-loading{position:fixed;inset:0;display:grid;place-content:center;gap:10px;background:var(--bg);color:var(--muted);font-size:15px;z-index:60;text-align:center}
+    .em-recovery{max-width:520px;margin:12vh auto 0;padding:28px 24px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:var(--shadow)}
+    .em-recovery h1{margin:14px 0 8px;font-size:21px}.em-recovery p{margin:0;color:var(--muted);line-height:1.6}
+    .em-logo{display:flex;align-items:center;gap:8px;font-weight:850}.em-logo i{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--blue);color:#fff;font-style:normal;font-size:13px}
+    .em-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+    .em-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 16px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font-weight:750;font-size:14px;cursor:pointer;text-decoration:none;white-space:nowrap}
+    .em-btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+    .em-btn.block{width:100%}
+    .em-btn:disabled{opacity:.6;cursor:not-allowed}
+    .em-alert{position:sticky;top:0;z-index:45;display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:12px 18px;background:#fdecee;border-bottom:1px solid #f5c2c8;color:#8f1d2b;font-size:14px;line-height:1.5}
+    .em-alert .em-actions{margin:0 0 0 auto}
+    body.employee-preview .em-alert{top:44px}
+    .em-preview-banner{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;background:#111827;color:#fff;font-size:13px}
+    .em-preview-banner span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .em-preview-banner .em-btn{min-height:36px;padding:0 10px;font-size:12px;background:#1f2937;border-color:#374151;color:#fff}
+    body.em-preview-mode{padding-top:44px}
+    .em-picker{max-width:640px;margin:24px auto;padding:20px}
+    .em-picker h1{margin:0 0 6px;font-size:20px}
+    .em-pick-list{display:grid;gap:8px;margin-top:12px}
+    .em-pick{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:#fff;text-align:left;cursor:pointer}
+    .em-pick span{color:var(--muted);font-size:12px}
+    .em-section{display:none;max-width:1080px;margin:0 auto;padding:20px 22px 40px}
+    body.ep-on.ep-legacy .em-section{display:block}
+    .em-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}
+    .em-head h2{margin:0;font-size:20px}.em-head p{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.5}
+    .em-head-actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+    .em-card{border:1px solid var(--line);border-radius:13px;background:#fff;padding:16px}
+    .em-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+    .em-card-top{display:flex;align-items:center;gap:8px;margin-bottom:10px}.em-card-top b{font-size:16px}.em-card-top .em-badge{margin-left:auto}
+    .em-kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0 0 12px;font-size:14px}
+    .em-kv dt{color:var(--muted)}.em-kv dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.em-kv .em-strong{font-weight:850;font-size:16px;color:var(--blue)}
+    .em-badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:12px;font-weight:750;background:#f1f5f9;color:#475467;white-space:nowrap}
+    .em-badge.ok{background:#e3f5ec;color:#0f5c43}.em-badge.info{background:var(--blue2);color:var(--blue)}.em-badge.warn{background:#fff1e3;color:#8a4509}.em-badge.muted{background:#f1f5f9;color:#667085}
+    .em-note{margin:8px 0;color:var(--muted);font-size:13px;line-height:1.55}
+    .em-warn{padding:10px 12px;border-radius:10px;background:#fff8e7;color:#7c4a03}
+    .em-empty{padding:28px 20px;border:1px dashed #cbd5e1;border-radius:13px;background:#fff;text-align:center}.em-empty p{color:var(--muted);font-size:13px;line-height:1.6}
+    .em-alert-box{padding:14px 16px;border:1px solid #f5c2c8;border-radius:12px;background:#fdecee;color:#8f1d2b}.em-alert-box p{margin:6px 0 0;font-size:13px;line-height:1.55}
+    .em-month{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.em-month b{font-size:17px}
+    .em-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+    .em-metrics div{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff}.em-metrics small{display:block;color:var(--muted);font-size:12px}.em-metrics b{font-size:18px;font-variant-numeric:tabular-nums}
+    .em-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;padding:10px;border:1px solid var(--line);border-radius:13px;background:#fff}
+    .em-week{padding:4px 0;text-align:center;color:var(--muted);font-size:12px;font-weight:750}
+    .em-day{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:2px;min-width:0;min-height:52px;padding:6px 2px;border:1px solid transparent;border-radius:9px;background:#f8fafc;color:var(--ink);cursor:pointer}
+    .em-day.empty{background:transparent;cursor:default}
+    .em-day small{font-size:11px;color:var(--green);font-variant-numeric:tabular-nums}
+    .em-day.has{background:#eef8f3}.em-day.pending{background:#fff7e6}.em-day.pending small{color:var(--orange)}
+    .em-day.on{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue2)}
+    .em-day[aria-current=date] span{font-weight:850;color:var(--blue)}
+    .em-day-detail{margin-top:10px}.em-shift{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 0;border-top:1px solid #edf0f5;font-size:14px}.em-shift small{width:100%;color:var(--muted)}
+    .em-fix{margin-top:14px}.em-fix h3,.em-upload h3,.em-sub{margin:0 0 6px;font-size:16px}
+    .em-fix-slot{overflow-wrap:anywhere}.em-fix-slot h2{font-size:15px}.em-fix-slot h3,.em-fix-slot h4{font-size:14px}.em-fix-slot label{display:flex;flex-direction:column;gap:4px;font-size:13px}
+    .em-details{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}.em-details summary{display:flex;align-items:center;cursor:pointer;font-weight:750}
+    .em-progress{margin:0 0 8px;font-size:14px}
+    .em-doc{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #edf0f5}
+    .em-doc>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}.em-doc small{width:100%;color:var(--orange);font-size:12px}
+    .em-doc-actions{display:flex;gap:6px;margin-left:auto}
+    .em-sub{margin-top:14px}
+    .em-upload{display:grid;gap:12px;margin-top:14px}
+    .em-upload label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;min-width:0}
+    .em-field{width:100%;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:15px}
+    input[type=file].em-field{padding:9px 10px}
+    .em-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .em-error{margin:0;color:var(--red);font-size:13px;min-height:1em}
+    .em-toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:70;max-width:min(520px,calc(100vw - 24px));padding:12px 16px;border-radius:12px;background:#111827;color:#fff;font-size:14px;line-height:1.5;box-shadow:var(--shadow)}
+    @media(max-width:760px){
+      .em-section{padding:14px 14px calc(96px + env(safe-area-inset-bottom))}
+      .em-head{flex-direction:column}.em-head-actions{margin-left:0;justify-content:flex-start}
+      .em-list{grid-template-columns:1fr}
+      .em-two{grid-template-columns:1fr}
+      .em-doc{flex-direction:column;align-items:stretch}.em-doc-actions{margin-left:0}.em-doc-actions .em-btn{flex:1}
+      .em-day{min-height:48px}
+      .em-alert .em-actions{margin-left:0}
+      .em-recovery{margin:8vh 14px 0}
+    }
+  </style>
+</head>
+<body>
+  <div id="emPreviewBanner" class="em-preview-banner" role="status" aria-live="polite" hidden>
+    <span id="emPreviewText"></span>
+    <button type="button" class="em-btn" id="emPreviewSwitch" data-em-preview-switch hidden>다른 직원</button>
+    <button type="button" class="em-btn" data-em-preview-exit>관리자 화면으로 돌아가기</button>
+  </div>
+  <div id="emAlert" class="em-alert" role="alert" hidden></div>
+  <div id="emLoading" class="em-loading" role="status" aria-live="polite">로그인 정보를 확인하는 중입니다.</div>
+  <div id="emRecovery" hidden></div>
+  <div id="emPicker" hidden></div>
+  <div id="employeePortal" class="ep-root hidden" aria-live="polite"></div>
+  <main id="emSection" class="em-section" aria-live="polite"></main>
+  <div id="emToast" class="em-toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p style="padding:24px">오비서 직원 화면은 자바스크립트가 필요합니다.</p></noscript>
+
+  <script src="/static/apps/obys/modules/company-seal.js"></script>
+  <script src="/static/apps/obys/modules/contract-core.js?v=20261116-r1"></script>
+  <script src="/static/apps/obys/modules/employee-portal.js?v=20261116-r1"></script>
+  <script src="/static/apps/obys/modules/attendance-corrections.js?v=20261116-r1"></script>
+  <script src="/static/apps/obys/modules/employee-app.js?v=20261116-r1"></script>
+  <script>
+    (function () {
+      "use strict";
+      function storageOf(name) {
+        try { return window[name] || null; } catch (_) { return null; }
+      }
+      var preview = new URLSearchParams(window.location.search).get("preview") === "1";
+      document.body.classList.toggle("em-preview-mode", preview);
+      var employeeApp = window.obysEmployeeApp.createApp({
+        document: document,
+        window: window,
+        fetch: window.fetch.bind(window),
+        sessionStorage: storageOf("sessionStorage"),
+        localStorage: storageOf("localStorage"),
+        portal: window.obysEmployeePortal,
+        contractCore: window.ObysContractCore,
+        corrections: window.ObysAttendanceCorrections
+      });
+      employeeApp.bind();
+      employeeApp.start();
+      // 앱 접속 기록(POST /app-install/ping)은 직원 본인 접속에서만 보낸다.
+      // 관리자의 읽기 전용 미리보기(?preview=1)에서는 수집 모듈을 아예 불러오지 않는다.
+      if (!preview) {
+        var ping = document.createElement("script");
+        ping.src = "/static/apps/obys/modules/app-install-ping.js?v=20261116-r2";
+        ping.setAttribute("data-business-keys", "obys_clock_business_id,obys_v41_business_id");
+        ping.setAttribute("data-em-install-ping", "");
+        document.body.appendChild(ping);
+      }
+    })();
+  </script>
+</body>
+</html>

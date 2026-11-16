@@ -1,9 +1,9 @@
 /* 오비서 직원 포털 — mockup-employee-contract-v1.html 화면 1~5 (직원 홈 / 내 계약서 / 계약서 읽기 / 동의·서명 / 서명 완료).
  *
- * index.html 이 직원(또는 관리자 '직원 화면 보기')일 때 #employeePortal 에 그린다. 서버 API 는 새로 만들지 않는다:
- * 목록은 index.html 이 이미 불러온 계약(visibleContracts), 전문은 contractPreviewHtml, 서명은 POST /contracts/signing
- * (submitContractSignature 와 같은 페이로드), 서명본은 downloadSignedContractPdf 를 index.html 의 bridge 로 받아 쓴다.
- * 급여명세·근태·입사서류는 기존 직원 보기(setView)로 넘긴다.
+ * 화면을 띄우는 쪽(직원 화면 employee.html — modules/employee-app.js, 또는 레거시 index.html)이 bridge 를 넘기면
+ * #employeePortal 에 그린다. 이 모듈은 어느 화면의 전역 변수·함수도 직접 부르지 않는다 — 모두 bridge 로만 받는다.
+ * 서버 API 는 새로 만들지 않는다: 목록은 bridge.contracts, 전문은 bridge.contractPreviewHtml, 서명은 POST /contracts/signing,
+ * 서명본은 bridge.downloadPdf 를 쓴다. 급여명세·근태·입사서류는 bridge.setView 로 띄우는 쪽 화면에 넘긴다.
  *
  * 화면 로직(정렬·필터·읽음·제출 조건)은 DOM 없이 돌도록 core 로 나누고, 그리기는 HTML 문자열로 만든다.
  */
@@ -250,7 +250,7 @@
   }
 
   function mobileHeadHtml(model) {
-    if (model.screen === "home") return `<div class="ep-m-head"><h3>오비서</h3><span style="margin-left:auto;color:var(--ep-sub);font-size:13px">${esc(model.employeeName)} 님</span></div>`;
+    if (model.screen === "home") return `<div class="ep-m-head"><h3>오비서</h3><span style="margin-left:auto;color:var(--ep-sub);font-size:13px">${esc(model.employeeName)} 님</span><button type="button" class="ep-btn ghost" data-ep-logout>로그아웃</button></div>`;
     if (model.screen === "list") return '<div class="ep-m-head"><h3>내 계약서</h3></div>';
     if (model.screen === "read") return `<div class="ep-m-head"><button type="button" class="ep-back" data-ep-nav="contracts" aria-label="내 계약서로">‹</button><h3>${esc(documentKind(model.contract))}</h3><span style="margin-left:auto">${badgeHtml(contractCategory(model.contract))}</span></div>`;
     if (model.screen === "sign") return `<div class="ep-m-head"><button type="button" class="ep-back" data-ep-back-read aria-label="계약서로">‹</button><h3>${esc(documentKind(model.contract))}</h3></div>`;

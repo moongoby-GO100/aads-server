@@ -222,6 +222,7 @@ const store = Object.assign({aads_token: 'tok-abcdefghijklmnop'}, scenario.store
 global.localStorage = {getItem: k => (k in store ? store[k] : null)};
 global.document = {cookie: '', hidden: false, currentScript: {dataset: {businessKeys: 'k1'}}, addEventListener(){}};
 global.window = {addEventListener(){}};
+global.location = {search: scenario.search || ''};
 global.navigator = {userAgent: 'Mozilla Android', standalone: false};
 global.matchMedia = () => ({matches: true});
 Date.now = () => now;
@@ -240,6 +241,7 @@ eval(fs.readFileSync(process.argv[2], 'utf8'));
 (async () => {
   for (const step of scenario.steps) {
     if (step.advance) now += step.advance;
+    if (!window.ObysAppInstallPing) continue;
     await window.ObysAppInstallPing.send('launch', false);
   }
   console.log(JSON.stringify(calls.map(c => c.replace('/api/v1/', ''))));
@@ -275,3 +277,20 @@ def test_ping_falls_back_when_stored_business_is_rejected():
 def test_ping_resends_after_ttl_expires():
     calls = _run_ping({"store": {"k1": "good"}, "steps": [{}, {"advance": 1000}, {"advance": 7 * 3600 * 1000}]})
     assert calls == ["obys/good/app-install/ping", "obys/good/app-install/ping"]
+
+
+def test_employee_app_loads_ping_only_outside_preview():
+    """새 직원 화면(employee.html)은 직원 본인 접속에서만 수집 모듈을 불러온다(미리보기 제외)."""
+    html = (STATIC / "employee.html").read_text(encoding="utf-8")
+    assert not re.search(r'<script[^>]*modules/app-install-ping\.js', html)
+    block = html[html.index("if (!preview) {"):]
+    assert "app-install-ping.js" in block[:block.index("}")]
+    assert "obys_v41_business_id" in block[:block.index("}")]
+
+
+def test_ping_sends_nothing_in_read_only_preview():
+    """?preview=1 이면 모듈이 접속 기록 POST 도, 사업자 목록 조회도 하지 않는다."""
+    calls = _run_ping({"search": "?preview=1", "store": {"k1": "good"}, "steps": [{}, {"advance": 31000}]})
+    assert calls == []
+    # 같은 조건에서 preview 가 아니면 정상적으로 보낸다(대조군).
+    assert _run_ping({"search": "?tab=home", "store": {"k1": "good"}, "steps": [{}]}) == ["obys/good/app-install/ping"]

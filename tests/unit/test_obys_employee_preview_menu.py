@@ -125,10 +125,11 @@ class TestV41Entry:
         assert 'state.canManageOnboarding===true?"":"hidden"' in nav
         assert "min-height:44px" in V41 and "data-employee-preview-entry]" in V41
 
-    def test_v41_navigates_to_index_without_personal_data_in_url(self):
+    def test_v41_navigates_to_employee_app_without_personal_data_in_url(self):
         opener = _line_starting(V41, "function openEmployeePreviewV41")
-        assert 'window.location.href="/static/apps/obys/index.html?employee_preview=1"' in opener
-        # index.html 이 로그인 상태를 V4.1 로 되돌리지 않도록 legacy 진입 URL 을 쓴다.
+        # 2026-11-16: 직원 화면이 새 화면(employee.html)으로 옮겨졌다. 미리보기도 그 화면을 읽기 전용(?preview=1)으로 연다.
+        assert 'window.location.href="/static/apps/obys/employee.html?preview=1"' in opener
+        assert "index.html" not in opener
         assert "email" not in re.search(r'window\.location\.href="([^"]*)"', opener).group(1)
         assert "encodeURIComponent" not in opener
         assert 'sessionStorage.setItem(EMPLOYEE_PREVIEW_REQUEST_KEY_V41' in opener
@@ -417,6 +418,8 @@ const ctx = {
   JSON, Date, Promise, Map, console, process,
   state: {},
   renderNav: () => {},
+  // V4.1 퇴사 처리 화면 갱신(별도 작업에서 loadEmployeePreviewPermissionV41 에 추가됨) — 이 검증과 무관해 빈 함수로 둔다.
+  renderEmployeeSeparationV41: () => {},
   window: { location, obysContractV41: { rerender() { ctx.rerendered = (ctx.rerendered || 0) + 1; } } },
   document: { getElementById: () => ({hidden:false}), querySelectorAll: sel => (sel === '[data-employee-preview-entry]' ? entries : []) },
   sessionStorage: { setItem: (k, v) => store.set(k, v), getItem: k => store.get(k) ?? null },
@@ -447,7 +450,7 @@ V41_CHECKS = r"""
 
   // 메뉴 → 선택창 요청, 행 버튼 → 직원 지정 요청. URL 에는 개인정보가 없다.
   assert.equal(openEmployeePreviewV41({ open: 'picker' }), true);
-  assert.equal(location.href, '/static/apps/obys/index.html?employee_preview=1');
+  assert.equal(location.href, '/static/apps/obys/employee.html?preview=1');
   let saved = JSON.parse(store.get('obys.employeePreviewRequest'));
   assert.equal(saved.open, 'picker');
   assert.equal(Math.abs(Date.now() - saved.createdAt) < 5000, true, '생성시각 포함');

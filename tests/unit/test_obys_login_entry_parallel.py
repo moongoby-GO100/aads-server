@@ -43,16 +43,30 @@ def test_boot_entry_employee_admin_expired_and_token_preservation():
     const openV41App=()=>{redirected=true;return true},clearServerAuthToken=()=>{cleared=true};
     let switched=null, stored=null, reloaded=false;
     const authApi=async(path,options)=>{switched=[path,options.method];return {token:'employer-token'}};
-    const persistServerAuthToken=token=>{stored=token}, window={location:{reload(){reloaded=true}}};
-    ''' + _function_source(HTML, 'followEntryTenantRedirect') + _function_source(HTML, 'verifyLegacyEntry') + '''
+    let replaced=null;
+    const persistServerAuthToken=token=>{stored=token}, window={location:{search:'',hash:'',reload(){reloaded=true},replace(url){replaced=url}}};
+    const pendingPhoneInviteToken='', readPostLoginRedirectFromUrl=()=>'', EMPLOYEE_APP_PATH='/static/apps/obys/employee.html';
+    ''' + _function_source(HTML, 'followEntryTenantRedirect') + _function_source(HTML, 'shouldOpenEmployeeApp') + _function_source(HTML, 'openEmployeeApp') + _function_source(HTML, 'verifyLegacyEntry') + '''
     (async()=>{
       // 개인 워크스페이스 토큰의 직원: 서버가 준 시작 조직으로 토큰을 바꾸고 V4.1 을 열지 않는다.
       employee=false;payload={legacy_access:false,entry_tenant_redirect:{tenant_id:'t-employer'}};
       assert.equal(await verifyLegacyEntry(),false);
       assert.deepEqual(switched,['/tenants/t-employer/switch','POST']);
       assert.equal(stored,'employer-token');assert.equal(reloaded,true);assert.equal(redirected,false);
+      // 직원(서버 /session 기준)은 레거시에 머물지 않고 새 직원 화면(employee.html)으로 간다(2026-11-16).
       employee=true;
-      payload={legacy_access:false};assert.equal(await verifyLegacyEntry(),true);
+      payload={legacy_access:false,permissions:{role:'employee',employee_request_status:'approved'}};
+      assert.equal(await verifyLegacyEntry(),false);assert.equal(replaced,'/static/apps/obys/employee.html');assert.equal(redirected,false);
+      // 서명 링크 토큰은 그대로 넘긴다.
+      replaced=null;window.location.search='?yf_contract_token=a%2Fb';
+      assert.equal(await verifyLegacyEntry(),false);assert.equal(replaced,'/static/apps/obys/employee.html?yf_contract_token=a%2Fb');
+      // 초대 링크·명시적 legacy 진입은 이 화면이 처리한다(기존 동작 유지).
+      for(const search of ['?yf_invite_token=x','?legacy=1&view=legacy']){replaced=null;window.location.search=search;assert.equal(await verifyLegacyEntry(),true);assert.equal(replaced,null);}
+      window.location.search='';
+      // 관리 권한이 있는 직원 역할(매장 관리자)은 직원 화면으로 보내지 않는다.
+      replaced=null;payload={legacy_access:false,permissions:{role:'store_manager',employee_request_status:'approved',can_manage_onboarding:true}};
+      assert.equal(await verifyLegacyEntry(),true);assert.equal(replaced,null);
+      payload={legacy_access:false};
       employee=false;assert.equal(await verifyLegacyEntry(),false);assert.equal(redirected,true);
       failed=true;assert.equal(await verifyLegacyEntry(),true);assert.equal(cleared,true);assert.equal(authSession,null);
     })().catch(e=>{console.error(e);process.exitCode=1});
