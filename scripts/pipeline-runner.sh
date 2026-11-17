@@ -5408,11 +5408,26 @@ pre_validate() {
 # Submission gate: instruction text is data, never shell source.
 self_verify_extract() {
     python3 -c '
-import re, shlex, sys
+import glob, os, re, shlex, sys
+workdir = sys.argv[1]
+lines = sys.stdin.readlines()
+header = re.compile(r"^## (?:검증 명령|검증명령|Verification commands)\s*$")
+has_section = any(header.match(line.rstrip("\r\n")) for line in lines)
+if has_section:
+    selected = []
+    active = False
+    for line in lines:
+        if header.match(line.rstrip("\r\n")):
+            active = True
+        elif line.startswith("## "):
+            active = False
+        elif active:
+            selected.append(line)
+    lines = selected
 seen = set()
 count = 0
-prefix = re.compile(r"^(?:bash scripts/run_unit_tests\.sh|scripts/run_unit_tests\.sh|pytest|python3 -m pytest|npx vitest run|npm test|npm run test|npx tsc --noEmit|ruff check)(?:\s|$)")
-for line in sys.stdin:
+prefix = re.compile(r"^(?:bash scripts/run_unit_tests\.sh|scripts/run_unit_tests\.sh|pytest|python(?:3)? -m pytest|npx vitest run|npm test|npm run test|npx tsc --noEmit|ruff check)(?:\s|$)")
+for line in lines:
     line = line.rstrip("\r\n")
     chunks = re.findall(r"`([^`\n]+)`", line)
     backticked = bool(chunks)
@@ -5431,10 +5446,36 @@ for line in sys.stdin:
         if unsafe or not args or not prefix.match(candidate):
             if backticked and re.match(r"^(?:bash|scripts/run_unit_tests\.sh|pytest|python3|npx|npm|ruff)(?:\s|$)", candidate):
                 print("skipped_unsafe\t" + candidate.replace("\t", " "))
-        elif count < 3:
-            count += 1
-            print("command\t" + shlex.join(args))
-'
+        else:
+            test_args = None
+            if args[0] == "pytest":
+                test_args = args[1:]
+            elif args[:3] in (["python", "-m", "pytest"], ["python3", "-m", "pytest"]):
+                test_args = args[3:]
+            if test_args is not None and not has_section:
+                options_with_value = {"-k", "--keyword", "-m", "--mark", "-c", "--config", "--config-file", "-o", "--override-ini", "-p", "-r", "--report", "-W", "--warning", "-n", "--numprocesses", "--rootdir", "--ignore", "--ignore-glob", "--deselect", "--import-mode", "--capture", "--tb", "--color", "--maxfail"}
+                targets = []
+                skip = False
+                end_options = False
+                for arg in test_args:
+                    if skip:
+                        skip = False
+                    elif not end_options and arg == "--":
+                        end_options = True
+                    elif not end_options and arg.startswith("-"):
+                        skip = arg in options_with_value
+                    else:
+                        targets.append(arg.split("::", 1)[0])
+                if not targets:
+                    print("skipped_no_target\t" + shlex.join(args))
+                    continue
+                if any(not glob.glob(os.path.join(workdir, target)) for target in targets):
+                    print("skipped_missing_path\t" + shlex.join(args))
+                    continue
+            if count < 3:
+                count += 1
+                print("command\t" + shlex.join(args))
+' "$1"
 }
 
 # 프로젝트 디렉터리($1) 또는 git-common-dir 에 연결된 주 작업트리에서 가상환경 인터프리터를 찾는다.
@@ -5595,6 +5636,11 @@ pre_review_self_verify() {
     local -a argv=()
     while IFS=$'\t' read -r kind cmd; do
         [[ -n "$kind" ]] || continue
+        if [[ "$kind" == skipped_missing_path || "$kind" == skipped_no_target ]]; then
+            record_runner_event "$jid" "self_verify_${kind}" || true
+            summary+="[Runner self-verify] $kind: $cmd; AI 검수 진행"$'\n'
+            continue
+        fi
         if [[ "$kind" != command ]]; then
             unsafe_count=$((unsafe_count + 1))
             if (( unsafe_count <= 3 )); then unsafe_examples+="$cmd"$'\n'; fi
@@ -5673,7 +5719,7 @@ pre_review_self_verify() {
         if [[ "$verdict" == unavailable ]]; then
             db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "$feedback"), updated_at=NOW() WHERE job_id=$(sql_escape "$jid");"
         fi
-    done < <(printf '%s\n' "$inst" | self_verify_extract)
+    done < <(printf '%s\n' "$inst" | self_verify_extract "$dir")
     if (( unsafe_count > 0 )); then
         metadata=$(python3 -c 'import json,sys; print(json.dumps({"count":int(sys.argv[1]), "examples":sys.argv[2].splitlines()[:3]}))' "$unsafe_count" "$unsafe_examples")
         record_runner_event "$jid" "skipped_unsafe" "" "" "" "" "" "" "$metadata" || true

@@ -33,8 +33,10 @@ def run(body, instruction='', **env):
                           env={**os.environ, **env})
 
 
-def test_extraction_order_limit_and_duplicates():
-    result = run('self_verify_extract', 'pytest a\n`pytest a`\n`ruff check .`\n'
+def test_extraction_order_limit_and_duplicates(tmp_path):
+    (tmp_path / "a").touch()
+    (tmp_path / "b").touch()
+    result = run(f'self_verify_extract {tmp_path}', 'pytest a\n`pytest a`\n`ruff check .`\n'
                  'python3 -m pytest b\nnpm test\n')
     assert result.returncode == 0
     assert result.stdout.splitlines() == ['command\tpytest a', 'command\truff check .',
@@ -45,7 +47,7 @@ def test_extraction_order_limit_and_duplicates():
                                     'pytest x | cat', 'pytest > x', 'pytest $(id)',
                                     'python3 -c evil', 'npm run build'])
 def test_unsafe_commands_not_selected(command):
-    result = run('self_verify_extract', f'`{command}`')
+    result = run('self_verify_extract .', f'`{command}`')
     assert result.stdout.startswith('skipped_unsafe\t')
     assert 'command\t' not in result.stdout
 
@@ -60,6 +62,7 @@ def test_rc_table(command, rc, expected):
 
 
 def gate(tmp_path, instruction, **env):
+    (tmp_path / 'target').touch(exist_ok=True)
     return run('pre_review_self_verify job session "$DIR" "$INST"; '
                'printf "PREFIX:%s" "$SELF_VERIFY_PREFIX"',
                DIR=str(tmp_path), INST=instruction, RUNNER_HEAVY_DIR=str(tmp_path / 'lane'), **env)
@@ -151,6 +154,7 @@ def test_failure_feedback_keeps_only_last_eighty_lines(tmp_path):
 
 
 def test_busy_lock_fails_open_and_reaches_review(tmp_path):
+    (tmp_path / 'target').touch()
     import fcntl
     lane = tmp_path / 'lane'
     lane.mkdir()
@@ -208,6 +212,7 @@ def test_prose_noise_and_unsafe_aggregation(tmp_path):
 @pytest.mark.parametrize('enabled', ['1', '0'])
 @pytest.mark.parametrize('diff_prefix', ['', 'diff truncated'])
 def test_output_and_review_instruction_preserved(tmp_path, enabled, diff_prefix):
+    (tmp_path / 'target').touch()
     # Execute the production gate and request construction, with transport/DB stubbed.
     start = SRC.index('            if ! pre_review_self_verify')
     end = SRC.index('            while [[ $review_attempt', start)
@@ -269,6 +274,7 @@ review_fixture
 
 
 def test_failure_summary_includes_recall_skip_reason(tmp_path):
+    (tmp_path / 'target').touch()
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     executable = bin_dir / 'pytest'
@@ -296,6 +302,7 @@ def test_flock_error_fails_open(tmp_path):
 
 
 def test_test_rc125_is_not_mistaken_for_lock_failure(tmp_path):
+    (tmp_path / 'target').touch()
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     executable = bin_dir / 'pytest'
@@ -309,6 +316,7 @@ def test_test_rc125_is_not_mistaken_for_lock_failure(tmp_path):
 
 @pytest.mark.parametrize('bad_lane', [False, True])
 def test_bad_directory_fails_open(tmp_path, bad_lane):
+    (tmp_path / 'target').touch()
     lane = tmp_path / 'lane'
     if bad_lane:
         lane.write_text('not a directory')
@@ -316,7 +324,7 @@ def test_bad_directory_fails_open(tmp_path, bad_lane):
                  DIR=str(tmp_path if bad_lane else tmp_path / 'missing'),
                  RUNNER_HEAVY_DIR=str(lane))
     assert result.returncode == 0
-    assert 'self_verify_skipped_bad_dir' in result.stdout
+    assert ('self_verify_skipped_bad_dir' if bad_lane else 'self_verify_skipped_missing_path') in result.stdout
     assert 'self_verify_lock_unavailable' not in result.stdout
     assert 'self_verify_failed' not in result.stdout
     assert 'AI_REVIEW' in result.stdout
@@ -365,6 +373,8 @@ def test_pre_review_self_verify_runs_with_venv_and_records_interpreter(tmp_path)
     py.parent.mkdir(parents=True)
     py.write_text('#!/bin/sh\necho "ARGS:$*"\nexit 0\n')
     py.chmod(0o755)
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / 'tests/x.py').touch()
     heavy = tmp_path / 'lane'
     result = run(f'pre_review_self_verify j s {tmp_path} "$(cat)"; echo "SUMMARY:$SELF_VERIFY_PREFIX"',
                  '`pytest tests/x.py`\n', RUNNER_HEAVY_DIR=str(heavy))
@@ -433,7 +443,7 @@ def test_glob_zero_matches_retains_pattern_and_reports_summary(tmp_path):
     executable.chmod(0o755)
 
     # 1. Gate fails with rc=4 and reports fail fast with error feedback
-    result = gate(tmp_path, 'pytest -q tests/a/test_missing_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    result = gate(tmp_path, '## 검증 명령\npytest -q tests/a/test_missing_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
     assert result.returncode == 1
     assert 'self_verify_failed' in result.stdout
     assert 'rc=4' in result.stdout
@@ -442,7 +452,7 @@ def test_glob_zero_matches_retains_pattern_and_reports_summary(tmp_path):
     # 2. Verify SELF_VERIFY_PREFIX explicitly captures the zero match summary
     result_prefix = run('if pre_review_self_verify job session "$DIR" "$INST"; then exit 9; fi; '
                         'printf "PREFIX:%s" "$SELF_VERIFY_PREFIX"',
-                        DIR=str(tmp_path), INST='pytest -q tests/a/test_missing_*.py',
+                        DIR=str(tmp_path), INST='## 검증 명령\npytest -q tests/a/test_missing_*.py',
                         RUNNER_HEAVY_DIR=str(tmp_path / 'lane'),
                         PATH=f'{bin_dir}:{os.environ["PATH"]}')
     assert result_prefix.returncode == 0
@@ -458,14 +468,14 @@ def test_glob_dotdot_and_absolute_patterns_not_expanded(tmp_path):
     executable.chmod(0o755)
 
     # .. pattern
-    res1 = gate(tmp_path, 'pytest -q ../test_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    res1 = gate(tmp_path, '## 검증 명령\npytest -q ../test_*.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
     assert res1.returncode == 0
     assert (tmp_path / 'executed_args').read_text().strip() == '-q ../test_*.py'
     assert 'glob 확장' not in res1.stdout
 
     # absolute pattern
     abs_pattern = f'{tmp_path}/test_*.py'
-    res2 = gate(tmp_path, f'pytest -q {abs_pattern}', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    res2 = gate(tmp_path, f'## 검증 명령\npytest -q {abs_pattern}', PATH=f'{bin_dir}:{os.environ["PATH"]}')
     assert res2.returncode == 0
     assert (tmp_path / 'executed_args').read_text().strip() == f'-q {abs_pattern}'
     assert 'glob 확장' not in res2.stdout
@@ -481,8 +491,63 @@ def test_glob_option_argument_not_expanded(tmp_path):
     (tmp_path / 'a1.py').write_text('# a1\n')
     (tmp_path / 'a2.py').write_text('# a2\n')
 
-    result = gate(tmp_path, "pytest -k 'a*'", PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    result = gate(tmp_path, "pytest -k 'a*' a1.py", PATH=f'{bin_dir}:{os.environ["PATH"]}')
     assert result.returncode == 0
-    assert (tmp_path / 'executed_args').read_text().strip() == '-k a*'
+    assert (tmp_path / 'executed_args').read_text().strip() == '-k a* a1.py'
     assert 'glob 확장' not in result.stdout
     assert 'glob 매치 0건' not in result.stdout
+
+
+def test_prose_is_skipped_as_missing_path(tmp_path):
+    result = run(f'self_verify_extract {tmp_path}', 'pytest PASS(출력 첨부), 개선 전후 1개월 처리 시간 실측표')
+    assert result.stdout.startswith('skipped_missing_path\t')
+
+
+@pytest.mark.parametrize('command', ['pytest', 'python3 -m pytest', 'python -m pytest -k expression'])
+def test_no_target_skipped(tmp_path, command):
+    result = run(f'self_verify_extract {tmp_path}', f'`{command}`')
+    assert result.stdout.startswith('skipped_no_target\t')
+
+
+@pytest.mark.parametrize('heading', ['검증 명령', '검증명령', 'Verification commands'])
+def test_section_restricts_candidates(tmp_path, heading):
+    (tmp_path / 'inside').touch()
+    (tmp_path / 'outside').touch()
+    instruction = f'pytest outside\n## {heading}\n`pytest inside`\n## 완료\npytest outside'
+    assert run(f'self_verify_extract {tmp_path}', instruction).stdout.splitlines() == ['command\tpytest inside']
+
+
+def test_missing_path_gate_proceeds_to_review(tmp_path):
+    result = gate(tmp_path, 'pytest missing')
+    assert result.returncode == 0
+    assert 'EVENT:self_verify_skipped_missing_path' in result.stdout
+    assert 'skipped_missing_path: pytest missing; AI 검수 진행' in result.stdout
+    assert 'self_verify_failed' not in result.stdout
+
+
+def test_no_target_gate_proceeds_to_review(tmp_path):
+    result = gate(tmp_path, '`pytest`')
+    assert result.returncode == 0
+    assert 'EVENT:self_verify_skipped_no_target' in result.stdout
+    assert 'AI 검수 진행' in result.stdout
+
+
+def test_node_id_and_python_module_and_legacy(tmp_path):
+    (tmp_path / 'test_a.py').touch()
+    for command in ('pytest test_a.py::test_one', 'python -m pytest test_a.py',
+                    'python3 -m pytest -k name test_a.py'):
+        result = run(f'self_verify_extract {tmp_path}', f'설명\n`{command}`')
+        assert result.stdout.strip() == f'command\t{command}'
+
+
+def test_section_missing_file_fails(tmp_path):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    executable = bin_dir / 'pytest'
+    executable.write_text('#!/bin/bash\nexit 4\n')
+    executable.chmod(0o755)
+    result = gate(tmp_path, '## 검증 명령\npytest missing.py', PATH=f'{bin_dir}:{os.environ["PATH"]}')
+    assert result.returncode == 1
+    assert 'self_verify_failed' in result.stdout
+    assert 'rc=4' in result.stdout
+    assert 'skipped_missing_path' not in result.stdout
