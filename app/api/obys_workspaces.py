@@ -78,6 +78,7 @@ ACCT_SOURCE_ROUTES = {
     "tax-evidence": "evidence",
 }
 BANK_ROUTES = frozenset({"accounts", "receivables", "unmatched"})
+DEDICATED_KINDS = frozenset({"branch", "margin", "menu-cost", "tax-connect"})
 CARD_ROUTES = frozenset({"cards"})
 JOURNAL_ROUTES = frozenset({"journals"})
 
@@ -122,6 +123,8 @@ ROUTE_READ_ROLES: dict[str, frozenset[str]] = {
     "bank-connect": _MANAGER_ROLES,
     "sales-connect": _MANAGER_ROLES,
     "tax-connect": _MANAGER_ROLES,
+    # 원가·마진은 급여 총지급액 합계를 인건비로 쓰므로 급여와 같은 범위로 막는다.
+    "margins": _MANAGER_ROLES,
 }
 
 _ROUTE_FORBIDDEN = "이 화면은 소유자·관리자만 조회할 수 있습니다"
@@ -451,7 +454,10 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
                 "증빙번호": str(value.get("source_id") or record_id),
             }
         )
-    return {
+    if kind in DEDICATED_KINDS:
+        display.update(_dedicated_display(kind, value))
+        status = str(display["상태"])
+    record = {
         "id": record_id,
         "kind": kind,
         "date": _date_text(row),
@@ -463,6 +469,11 @@ def _record(kind: str, row: dict[str, Any], business_name: str) -> dict[str, Any
         "employee_key": _employee_key(business_name, row.get("employee_id"), row.get("employee_email")),
         "raw": _public_raw(row),
     }
+    if kind in DEDICATED_KINDS:
+        # 금액 원천이 아닌 행에 0원 합계를 만들지 않는다. 산식은 그대로 노출한다.
+        record["amount"] = None
+        record["calc_note"] = value.get("calc_note")
+    return record
 
 
 def _employee_key(business_name: str, employee_id: Any, employee_email: Any) -> str | None:
@@ -1198,6 +1209,407 @@ def _derived_metrics(route: str, source_rows: list[tuple[str, dict[str, Any]]], 
             {"label": "데이터 원천", "value": source}]
 
 
+# ---------------------------------------------------------------------------
+# V4.1 미연결 메뉴 ② — 매입처·지점·원가·마진·메뉴 원가·세무 연동 (OBYS-V41-UNWIRED-MENUS-MASTER)
+#
+# 원칙: 원천에 없는 값은 만들지 않는다. 계산할 수 없는 값은 None 으로 두고 화면에는
+# COLLECTION_PENDING("수집 전")으로 보인다. 원가·마진은 산식과 근거 필드를 calc_note 로 남긴다.
+# 매입처(suppliers)는 기존 ACCT_SOURCE_ROUTES(매입 원장 + ACCT 원천) 경로를 그대로 쓴다.
+# ---------------------------------------------------------------------------
+COLLECTION_PENDING = "수집 전"
+DEDICATED_ROUTE_SOURCES = {
+    "branches": "yeoljeong_branches",
+    "margins": "obys_ledger+yeoljeong_payroll_statements",
+    "menu-costs": "yeoljeong_inventory_items",
+    "tax-connect": "yeoljeong_settings.integrations",
+}
+
+BRANCH_RECORDS_SQL = (
+    "SELECT id,name,status,address,sort_order,latitude,longitude,geofence_radius_m,updated_at "
+    "FROM yeoljeong_branches WHERE business_id=$1 AND deleted_at IS NULL ORDER BY sort_order,id LIMIT 500"
+)
+_BRANCH_STATUS_LABELS = {"active": "영업", "inactive": "휴업", "closed": "폐업"}
+
+
+async def _branch_rows(business_id: str) -> list[tuple[str, dict[str, Any]]]:
+    connection = await upload_svc._connect()
+    try:
+        rows = [dict(row) for row in await connection.fetch(BRANCH_RECORDS_SQL, business_id)]
+    finally:
+        await connection.close()
+    result = []
+    for row in rows:
+        # 좌표 원값은 내보내지 않는다(출퇴근 위치 정책). 등록 여부만 남긴다.
+        latitude, longitude = row.pop("latitude", None), row.pop("longitude", None)
+        row["has_geofence"] = latitude is not None and longitude is not None
+        row["business_hours"] = None  # 영업시간 원천 컬럼이 없다 — 수집 전
+        result.append(("branch", row))
+    return result
+
+
+MARGIN_PAYROLL_SQL = (
+    "SELECT left(payroll_month,7) AS month, count(*) AS payroll_count, sum(gross_pay) AS labor_amount "
+    "FROM yeoljeong_payroll_statements WHERE business_id=$1 AND deleted_at IS NULL "
+    "AND (statement_payload->>'superseded_by' IS NULL OR statement_payload->>'superseded_by' = '') "
+    "AND ($2::text IS NULL OR left(payroll_month,7)>=$2) AND ($3::text IS NULL OR left(payroll_month,7)<=$3) "
+    "GROUP BY left(payroll_month,7)"
+)
+MARGIN_FORMULA = (
+    "매출총이익 = 매출 − 변동원가(매입), 인건비 차감 마진 = 매출총이익 − 인건비(급여 총지급액), "
+    "마진율 = 마진 ÷ 매출 × 100"
+)
+
+
+def _month_partially_covered(month: str, date_from: str | None, date_to: str | None) -> tuple[str, str] | None:
+    """조회 기간이 그 달 전체를 덮지 않으면 (그 달 안의 실제 시작일, 종료일)을 돌려준다.
+
+    급여는 월 단위 원천이라 일 단위로 나눌 수 없다. 일부만 조회된 달에 월 급여 전체를
+    차감하면 서로 다른 기간을 비교하게 되므로, 호출자는 그 달 인건비를 수집 전으로 둔다.
+    """
+    year, mon = int(month[:4]), int(month[5:7])
+    first = date(year, mon, 1)
+    last = (date(year + mon // 12, mon % 12 + 1, 1)) - timedelta(days=1)
+    start = str(date_from)[:10] if date_from else None
+    end = str(date_to)[:10] if date_to else None
+    lower = max(first.isoformat(), start) if start else first.isoformat()
+    upper = min(last.isoformat(), end) if end else last.isoformat()
+    if lower == first.isoformat() and upper == last.isoformat():
+        return None
+    return lower, upper
+
+
+def _rate(numerator: Decimal | None, denominator: Decimal | None) -> str | None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return str((numerator / denominator * 100).quantize(Decimal("0.1")))
+
+
+async def _acct_presence(user, business_id, category, date_from, date_to) -> tuple[int | None, str]:
+    """ACCT 원천 전표 건수(조회조건 전체). 매핑 없음=0, 확인 실패=None."""
+    try:
+        rows, _ = await acct_source_ledger.source_transactions(
+            user, business_id, category, date_from=date_from, date_to=date_to, limit=1,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return 0, ""
+        return None, str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 — 원격 장애를 0건으로 감추지 않는다
+        logger.warning("margin acct presence check failed: %s", exc)
+        return None, type(exc).__name__
+    if not rows:
+        return 0, ""
+    return int(rows[0].get("source_total_count") or len(rows)), ""
+
+
+def build_margin_rows(
+    sales: list[tuple[str, dict[str, Any]]],
+    purchases: list[tuple[str, dict[str, Any]]],
+    payroll: list[dict[str, Any]],
+    *,
+    acct_sales: int | None = 0,
+    acct_purchases: int | None = 0,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """월별 원가·마진. 원천이 없는 항목은 None(수집 전)이며 추정하지 않는다.
+
+    매출·매입은 조회 기간(일 단위)으로 걸러진 원장이고 급여는 월 단위 원천이다.
+    조회 기간이 어떤 달의 일부만 덮으면 그 달 급여를 차감하지 않고 인건비를 수집 전으로 둔다
+    (일할 계산도 추정이므로 하지 않는다).
+    """
+    months: dict[str, dict[str, Any]] = {}
+
+    def bucket(month: str) -> dict[str, Any]:
+        return months.setdefault(month, {
+            "sales_amount": None, "sales_count": 0,
+            "purchase_amount": None, "purchase_count": 0,
+            "labor_amount": None, "payroll_count": 0,
+        })
+
+    undated = {"sales": 0, "purchase": 0}
+    for label, rows in (("sales", sales), ("purchase", purchases)):
+        for _kind, row in rows:
+            if "제외" in str(row.get("status") or ""):
+                continue
+            month = _date_text(row)[:7] if row.get("occurred_on") or row.get("occurred_at") else ""
+            if not re.fullmatch(r"\d{4}-\d{2}", month):
+                undated[label] += 1
+                continue
+            item = bucket(month)
+            item[f"{label}_amount"] = (item[f"{label}_amount"] or Decimal("0")) + _amount(row)
+            item[f"{label}_count"] += 1
+    for row in payroll:
+        month = str(row.get("month") or "")[:7]
+        if not re.fullmatch(r"\d{4}-\d{2}", month) or row.get("labor_amount") is None:
+            continue
+        item = bucket(month)
+        item["labor_amount"] = Decimal(str(row["labor_amount"]))
+        item["payroll_count"] = int(row.get("payroll_count") or 0)
+
+    result = []
+    for month in sorted(months, reverse=True):
+        item = months[month]
+        notes = [MARGIN_FORMULA]
+        blocked = []
+        if acct_sales is None or acct_sales:
+            notes.append("ACCT 매출 원천 " + ("확인 실패" if acct_sales is None else f"{acct_sales:,}건") + " — 월별 산식 미반영이라 매출은 수집 전으로 둡니다")
+            blocked.append("sales")
+        if acct_purchases is None or acct_purchases:
+            notes.append("ACCT 매입 원천 " + ("확인 실패" if acct_purchases is None else f"{acct_purchases:,}건") + " — 월별 산식 미반영이라 변동원가는 수집 전으로 둡니다")
+            blocked.append("purchase")
+        sales_amount = None if "sales" in blocked else item["sales_amount"]
+        purchase_amount = None if "purchase" in blocked else item["purchase_amount"]
+        labor_amount = item["labor_amount"]
+        partial = _month_partially_covered(month, date_from, date_to)
+        if partial and labor_amount is not None:
+            notes.append(
+                f"조회 기간이 {partial[0]}~{partial[1]} 로 이 달 일부라 월 급여 {item['payroll_count']}건"
+                "(월 단위 원천)을 차감하지 않습니다 — 인건비 수집 전"
+            )
+            labor_amount = None
+        gross = sales_amount - purchase_amount if sales_amount is not None and purchase_amount is not None else None
+        operating = gross - labor_amount if gross is not None and labor_amount is not None else None
+        missing = [name for name, value in (("매출", sales_amount), ("변동원가(매입)", purchase_amount), ("인건비", labor_amount)) if value is None]
+        notes.append(
+            f"근거: 매출 {item['sales_count']}건(obys 매출 원장 total_amount/amount), "
+            f"매입 {item['purchase_count']}건(obys 매입 원장), 급여 {item['payroll_count']}건(gross_pay)"
+        )
+        notes.append("채널 수수료·포장비: 수집 전(정산 수수료 미반영)")
+        if missing:
+            notes.append("수집 전 항목: " + ", ".join(missing))
+        if undated["sales"] or undated["purchase"]:
+            notes.append(f"일자 없는 원장 매출 {undated['sales']}건·매입 {undated['purchase']}건은 월 배분에서 제외")
+        status = "확인 필요" if blocked else "계산 완료" if operating is not None else "일부 수집 전" if gross is not None else COLLECTION_PENDING
+        result.append(("margin", {
+            "id": f"{month}:{date_from or ''}..{date_to or ''}" if date_from or date_to else month,
+            "period": month,
+            "period_from": partial[0] if partial else None,
+            "period_to": partial[1] if partial else None,
+            "status": status,
+            "sales_amount": sales_amount,
+            "purchase_amount": purchase_amount,
+            "labor_amount": labor_amount,
+            "payroll_month_amount": item["labor_amount"],
+            "gross_margin": gross,
+            "gross_margin_rate": _rate(gross, sales_amount),
+            "operating_margin": operating,
+            "operating_margin_rate": _rate(operating, sales_amount),
+            "sales_count": item["sales_count"],
+            "purchase_count": item["purchase_count"],
+            "payroll_count": item["payroll_count"],
+            "obys_ledger_sales_amount": item["sales_amount"],
+            "obys_ledger_purchase_amount": item["purchase_amount"],
+            "missing": missing,
+            "calc_note": " · ".join(notes),
+        }))
+    return result
+
+
+async def _margin_rows(user, business_id, date_from, date_to) -> list[tuple[str, dict[str, Any]]]:
+    _filter_source_dates([], date_from, date_to)
+    sales = await _ledger_records(user=user, business_id=business_id, category="sales",
+                                  date_from=date_from, date_to=date_to)
+    purchases = await _ledger_records(user=user, business_id=business_id, category="purchase",
+                                      date_from=date_from, date_to=date_to)
+    connection = await upload_svc._connect()
+    try:
+        payroll = [dict(row) for row in await connection.fetch(
+            MARGIN_PAYROLL_SQL, business_id,
+            str(date_from)[:7] if date_from else None, str(date_to)[:7] if date_to else None,
+        )]
+    finally:
+        await connection.close()
+    acct_sales, _ = await _acct_presence(user, business_id, "sales", date_from, date_to)
+    acct_purchases, _ = await _acct_presence(user, business_id, "purchase", date_from, date_to)
+    return build_margin_rows(sales, purchases, payroll, acct_sales=acct_sales, acct_purchases=acct_purchases,
+                             date_from=date_from, date_to=date_to)
+
+
+MENU_COST_SQL = (
+    "SELECT id,branch_id,name,category,unit,current_stock,unit_cost,supplier,updated_at "
+    "FROM yeoljeong_inventory_items WHERE business_id=$1 ORDER BY name LIMIT 500"
+)
+MENU_COST_NOTE = (
+    "메뉴 원가 = Σ(레시피 수량 × 재료 단가) + 포장비 + 채널 수수료. "
+    "메뉴·레시피 마스터가 없어 메뉴별 원가·판매가·마진율은 수집 전입니다. "
+    "이 행은 재료 단가 원천(yeoljeong_inventory_items.unit_cost)입니다."
+)
+
+
+async def _menu_cost_rows(business_id: str) -> list[tuple[str, dict[str, Any]]]:
+    connection = await upload_svc._connect()
+    try:
+        rows = [dict(row) for row in await connection.fetch(MENU_COST_SQL, business_id)]
+    finally:
+        await connection.close()
+    result = []
+    for row in rows:
+        row.update({
+            "menu_name": None, "recipe_qty": None, "menu_cost": None,
+            "packaging_cost": None, "sale_price": None, "margin_rate": None,
+            "status": "레시피 미등록" if row.get("unit_cost") is not None else "단가 수집 전",
+            "calc_note": MENU_COST_NOTE,
+        })
+        result.append(("menu-cost", row))
+    return result
+
+
+TAX_CONNECT_SERVICES = {
+    "hometax": "전자세금계산서·현금영수증·카드 매입",
+    "tax_invoice_upload": "계산서·증빙 파일",
+    "accountant_tax_agent": "세무대리인 회계자료",
+}
+_TAX_CONNECT_FIELDS = (
+    "id", "service", "label", "branch", "status", "lastSyncAt", "lastSyncStatus",
+    "portalStatus", "portalMessage", "category", "updatedAt",
+)
+_TAX_SYNC_SUCCESS = frozenset({"success", "completed", "no_records", "ready"})
+_TAX_ATTENTION = frozenset({
+    "blocked", "credential_required", "connector_not_configured", "credentials_missing",
+    "portal_action_required", "upload_required", "error", "failed", "needs_auth",
+})
+
+
+def _tax_connect_status(item: dict[str, Any]) -> str:
+    """status·lastSyncStatus·portalStatus 를 모두 본다. 하나라도 실패·인증 필요면 '확인 필요'.
+
+    설정 상태(status='vault-ready')가 좋아도 마지막 수집이 실패했거나 포털이 인증을 요구하면
+    정상이 아니다. '정상'은 값이 있는 모든 상태가 성공 계열일 때만 준다.
+    """
+    states = [str(item.get(key) or "").strip().lower() for key in ("status", "lastSyncStatus", "portalStatus")]
+    states = [state for state in states if state]
+    if not states:
+        return COLLECTION_PENDING
+    if any(state in _TAX_ATTENTION for state in states):
+        return "확인 필요"
+    unknown = [state for state in states if state not in _TAX_SYNC_SUCCESS and state != "vault-ready"]
+    return unknown[0] if unknown else "정상"
+
+
+def build_tax_connect_rows(settings_data: Any, business_id: str) -> list[tuple[str, dict[str, Any]]]:
+    """세무 연동 상태. 인증정보(아이디·비밀번호 등)는 화이트리스트 밖이라 나가지 않는다."""
+    data = finance_svc._jsonb_object(settings_data)
+    items = data.get("integrations") if isinstance(data.get("integrations"), list) else []
+    result = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        service = str(item.get("service") or "").strip()
+        owner = str(item.get("businessId") or item.get("business_id") or "").strip()
+        if service not in TAX_CONNECT_SERVICES or owner != business_id:
+            continue
+        row = {key: item.get(key) for key in _TAX_CONNECT_FIELDS}
+        row["id"] = str(item.get("id") or f"{service}-{index + 1}")
+        row["label"] = str(item.get("label") or finance_svc.CONNECTOR_LABELS.get(service) or service)
+        row["evidence_scope"] = str(item.get("category") or "").strip() or None
+        row["default_scope"] = TAX_CONNECT_SERVICES[service]
+        last_status = str(item.get("lastSyncStatus") or item.get("portalStatus") or "").lower()
+        row["last_success_at"] = item.get("lastSyncAt") if last_status in _TAX_SYNC_SUCCESS and item.get("lastSyncAt") else None
+        row["status"] = _tax_connect_status(item)
+        result.append(("tax-connect", row))
+    return result
+
+
+async def _tax_connect_rows(business_id: str) -> list[tuple[str, dict[str, Any]]]:
+    connection = await upload_svc._connect()
+    try:
+        data = await connection.fetchval("SELECT data FROM yeoljeong_settings WHERE scope = 'ui'")
+    finally:
+        await connection.close()
+    return build_tax_connect_rows(data, business_id)
+
+
+def _dedicated_metrics(route: str, rows: list[dict[str, Any]], source: str) -> list[dict[str, str]]:
+    """전용 화면 요약. 건수만 세고 금액 합계를 새로 만들지 않는다."""
+    count = len(rows)
+    if route == "branches":
+        pairs = [("지점 수", count), ("출퇴근 위치 미등록", sum(1 for r in rows if not r.get("has_geofence")))]
+    elif route == "margins":
+        pairs = [("분석 월 수", count), ("마진 계산 완료", sum(1 for r in rows if r.get("status") == "계산 완료")),
+                 ("수집 전·확인 필요", sum(1 for r in rows if r.get("status") != "계산 완료"))]
+    elif route == "menu-costs":
+        pairs = [("재료 단가 원천", count), ("단가 수집 전", sum(1 for r in rows if r.get("unit_cost") is None)),
+                 ("메뉴 원가 계산", COLLECTION_PENDING)]
+    else:
+        pairs = [("세무 연동 수", count), ("인증·확인 필요", sum(1 for r in rows if r.get("status") == "확인 필요"))]
+    metrics = [{"label": label, "value": value if isinstance(value, str) else f"{value:,}건"} for label, value in pairs]
+    return [*metrics, {"label": "데이터 원천", "value": source}]
+
+
+async def _dedicated_route_rows(route, user, business_id, date_from, date_to):
+    if route == "branches":
+        return await _branch_rows(business_id)
+    if route == "margins":
+        return await _margin_rows(user, business_id, date_from, date_to)
+    if route == "menu-costs":
+        return await _menu_cost_rows(business_id)
+    return await _tax_connect_rows(business_id)
+
+
+def _money_or_pending(value: Any) -> str:
+    if value is None or value == "":
+        return COLLECTION_PENDING
+    try:
+        return f"{Decimal(str(value)):,.0f}원"
+    except (ArithmeticError, ValueError):
+        return COLLECTION_PENDING
+
+
+def _dedicated_display(kind: str, value: dict[str, Any]) -> dict[str, Any]:
+    record_id = str(value.get("id") or "")
+    if kind == "branch":
+        status = str(value.get("status") or "")
+        return {
+            "지점코드": record_id, "지점": str(value.get("name") or ""),
+            "주소": str(value.get("address") or "") or COLLECTION_PENDING,
+            "영업시간": value.get("business_hours") or COLLECTION_PENDING,
+            "영업상태": _BRANCH_STATUS_LABELS.get(status, status or COLLECTION_PENDING),
+            "등록검증": "출퇴근 위치 등록" if value.get("has_geofence") else "출퇴근 위치 미등록",
+            "상태": _BRANCH_STATUS_LABELS.get(status, status or COLLECTION_PENDING),
+        }
+    if kind == "margin":
+        # 마진율은 언제나 '인건비 차감 마진 ÷ 매출' 하나의 산식이다. 인건비가 없으면 수집 전이며
+        # 매출총이익률로 대신 채우지 않는다(열마다 산식이 바뀌지 않게 별도 열로 둔다).
+        rate = value.get("operating_margin_rate")
+        gross_rate = value.get("gross_margin_rate")
+        period = str(value.get("period") or "")
+        if value.get("period_from") and value.get("period_to"):
+            period = f"{period} ({value['period_from']}~{value['period_to']})"
+        return {
+            "분석번호": record_id, "기간": period,
+            "지점": "사업자 전체(지점 구분 수집 전)", "매출처·채널": "전체 채널(채널 구분 수집 전)",
+            "매출": _money_or_pending(value.get("sales_amount")),
+            "변동원가": _money_or_pending(value.get("purchase_amount")),
+            "인건비": _money_or_pending(value.get("labor_amount")),
+            "매출총이익": _money_or_pending(value.get("gross_margin")),
+            "매출총이익률": f"{gross_rate}%" if gross_rate is not None else COLLECTION_PENDING,
+            "마진": _money_or_pending(value.get("operating_margin")),
+            "마진율": f"{rate}%" if rate is not None else COLLECTION_PENDING,
+            "산식": str(value.get("calc_note") or ""), "상태": str(value.get("status") or ""),
+        }
+    if kind == "menu-cost":
+        return {
+            "재료코드": record_id, "재료": str(value.get("name") or ""),
+            "재료분류": str(value.get("category") or "") or COLLECTION_PENDING,
+            "단위": str(value.get("unit") or "") or COLLECTION_PENDING,
+            "재료 단가": _money_or_pending(value.get("unit_cost")),
+            "공급처": str(value.get("supplier") or "") or COLLECTION_PENDING,
+            "적용 메뉴": COLLECTION_PENDING, "메뉴 원가": COLLECTION_PENDING, "마진율": COLLECTION_PENDING,
+            "산식": str(value.get("calc_note") or ""), "상태": str(value.get("status") or ""),
+        }
+    # tax-connect
+    return {
+        "연동번호": record_id, "서비스": str(value.get("label") or ""),
+        "세무서비스": str(value.get("label") or ""),
+        "증빙": value.get("evidence_scope") or f"{value.get('default_scope')} (범위 미설정)",
+        "증빙종류": value.get("evidence_scope") or COLLECTION_PENDING,
+        "지점": str(value.get("branch") or "") or "사업자 공통",
+        "마지막성공": value.get("last_success_at") or COLLECTION_PENDING,
+        "수집상태": str(value.get("status") or ""), "상태": str(value.get("status") or ""),
+    }
+
+
 async def _source_rows(
     *, route: str, user: dict[str, Any], business_id: str,
     date_from: str | None, date_to: str | None,
@@ -1300,6 +1712,10 @@ async def _source_rows(
     if route == "businesses":
         business = await _business(user, business_id)
         return [("generic", business)], "yeoljeong_businesses"
+    if route in DEDICATED_ROUTE_SOURCES:
+        # GENERIC_ROUTE_SQL 의 같은 키(원장·재고·신고 원문 나열)는 화면 의미와 달라 이 경로가 우선한다.
+        rows = await _dedicated_route_rows(route, user, business_id, date_from, date_to)
+        return rows, DEDICATED_ROUTE_SOURCES[route]
     if route in GENERIC_ROUTE_SQL:
         sql, source = GENERIC_ROUTE_SQL[route]
         connection = await upload_svc._connect()
@@ -1403,6 +1819,13 @@ async def workspace_summary(
     else:
         source_rows = _filter_source_dates(source_rows, date_from, date_to)
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]
+    if selected_route in DEDICATED_ROUTE_SOURCES:
+        return {
+            "business": {"id": business["id"], "name": business["name"]},
+            "route": selected_route,
+            "metrics": _dedicated_metrics(selected_route, [row for _, row in source_rows], source),
+            "source": {"name": source, "live": True, "record_count": len(records)},
+        }
     if selected_route in {"bank-connect", "integrations"}:
         needs_attention = sum(row.get("status") in {"needs_auth", "error", "pending"}
                               for _, row in source_rows)
@@ -3637,9 +4060,25 @@ async def workspace_record_detail(
                         "route": selected_route, "record": _record(kind, row, business["name"]),
                         "source": {"name": "obys_ledger", "live": True}}
         raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다")
+    detail_from, detail_to = None, None
+    if selected_route == "margins":
+        match = re.fullmatch(r"(\d{4}-\d{2})(?::(\d{4}-\d{2}-\d{2})?\.\.(\d{4}-\d{2}-\d{2})?)?", record_id)
+        try:
+            if not match:
+                raise ValueError("invalid margin id")
+            date.fromisoformat(match.group(1) + "-01")
+            detail_from, detail_to = match.group(2), match.group(3)
+            if ":" in record_id and not (detail_from or detail_to):
+                raise ValueError("empty range")
+            start = date.fromisoformat(detail_from) if detail_from else None
+            end = date.fromisoformat(detail_to) if detail_to else None
+            if start and end and start > end:
+                raise ValueError("reversed range")
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="현재 사업자의 내역을 찾을 수 없습니다") from exc
     source_rows, source = await _source_rows(
         route=selected_route, user=current_user, business_id=business_id,
-        date_from=None, date_to=None, own_email=own_email,
+        date_from=detail_from, date_to=detail_to, own_email=own_email,
         include_history=True,
     )
     records = [_record(kind, row, business["name"]) for kind, row in source_rows]

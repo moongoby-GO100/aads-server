@@ -1,4 +1,4 @@
-"""오비서 범용 workspace 읽기 API 의 라우트별 역할표 — 급여·직원·인사 등 9개는 owner/admin 만, 근태는 member 본인 행만.
+"""오비서 범용 workspace 읽기 API 의 라우트별 역할표 — 급여·직원·인사·원가마진 등 10개는 owner/admin 만, 근태는 member 본인 행만.
 
 재현(수정 전): member·viewer 멤버십으로 /payroll/records 등을 부르면 200 + 사업자 전 직원 행이 나왔다.
 직원 포털 승인 직원의 테넌트 멤버십 역할은 member 다(yeoljeong_finance_service 의 승인 → 멤버십 흐름).
@@ -17,7 +17,7 @@ OTHER_EMPLOYEE_ROW = {"id": "pay-1", "employee_name": "다른직원", "gross_pay
                       "status": "confirmed"}
 
 RESTRICTED = ["payroll", "employees", "hr-docs", "audit-history", "access-log",
-              "integrations", "bank-connect", "sales-connect", "tax-connect"]
+              "integrations", "bank-connect", "sales-connect", "tax-connect", "margins"]
 OPEN_ROUTES = ["sales", "purchases", "inventory", "branches", "alerts", "approvals", "tasks"]
 
 

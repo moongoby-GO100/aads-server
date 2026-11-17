@@ -116,7 +116,7 @@ def test_case5_error_shows_failure():
 
 def test_case6_real_configs_source_defined_at_runtime():
     cfg = _real_configs()
-    assert cfg["margins"]["source"] is not None and cfg["margins"]["source"]["api"] is None
+    assert cfg["margins"]["source"]["api"] == "/workspaces/{businessId}/margins/records"
     assert cfg["sales"]["source"] is not None and cfg["sales"]["source"]["api"]
     assert all(v["source"] is not None for v in cfg.values()), [k for k, v in cfg.items() if v["source"] is None]
 
