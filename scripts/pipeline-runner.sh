@@ -16,6 +16,7 @@ CLAUDE_MODEL_CONTRACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_mode
 RUNNER_ANTIGRAVITY_EXEC="${RUNNER_ANTIGRAVITY_EXEC:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runner_antigravity_exec.py}"
 
 # general: normal Claude/Codex runner. litellm: claims only LiteLLM jobs.
+RUNNER_BASE_BRANCH="main"
 RUNNER_ENGINE_MODE="${RUNNER_ENGINE_MODE:-general}"
 RUNNER_LOCK_FILE="${RUNNER_LOCK_FILE:-/tmp/pipeline-runner-${RUNNER_ENGINE_MODE}.lock}"
 
@@ -4307,6 +4308,34 @@ _ckpt_resume_try() {
 }
 # ── M3 체크포인트 이어받기 (CKPT-RESUME-END) ────────────────────────
 
+# Codex cannot update .git or reach origin inside its sandbox. The runner owns
+# both fetches and moves the isolated job worktree before inspecting its diff.
+runner_codex_sync_base() {
+    local repo="$1"
+    git_fetch_origin_with_retry "$repo" || return 1
+    git -C "$repo" rev-parse --verify "origin/${RUNNER_BASE_BRANCH}^{commit}"
+}
+
+runner_codex_rebase_changed_base() {
+    local repo="$1" worktree_dir="$2" before="$3" after="$4" top output
+    [[ -n "$before" && -n "$after" ]] || return 1
+    [[ "$before" != "$after" ]] || return 0
+    top=$(git -C "$repo" rev-parse --show-toplevel) || return 1
+    [[ "$(cd "$top" && pwd -P)" == "$(cd "$worktree_dir" && pwd -P)" ]] || return 1
+    git -C "$repo" merge-base --is-ancestor "$before" HEAD || return 1
+    output=$(git -C "$repo" rebase --autostash --onto "$after" "$before" HEAD 2>&1) || {
+        git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+        log "  CODEX_REBASE_FAILED: $output" >&2
+        return 1
+    }
+    # Git can return success when applying its autostash conflicts; keep the
+    # stash and stop rather than review an incomplete worktree.
+    if [[ "$output" == *"Applying autostash resulted in conflicts"* ]]; then
+        log "  CODEX_AUTOSTASH_CONFLICT: $output" >&2
+        return 1
+    fi
+}
+
 prepare_clean_job_worktree() {
     local job_id="$1" project="$2" session_id="$3" main_workdir="$4" worktree_dir="$5"
     local resume_out_var="${6:-}" resumed=0 _resume_text=""
@@ -7094,6 +7123,7 @@ run_job() {
     [[ -z "$TOKEN_1" ]] && TOKEN_1="$TOKEN_2" && log "  WARN: TOKEN_1 비어있음 → TOKEN_2로 대체"
     local total_attempts=${#MODEL_CYCLE[@]}  # 6회
     local attempt=0 exit_code=0
+    local codex_base_before="" codex_base_after="" codex_started=0
     while [[ $attempt -lt $total_attempts ]]; do
         exit_code=0
         # 시도 시작 직전 취소 확인 — terminate_task 가 status 를 바꿨다면 다음 모델(폴백)을 띄우지 않는다.
@@ -7337,6 +7367,15 @@ ${resume_brief}${safe_instruction}"
             esac
             effective_model="codex:${codex_model_name}"
             runner_kind="codex_cli"
+            codex_base_before=$(runner_codex_sync_base "$main_workdir") || codex_base_before=""
+            codex_base_before="${codex_base_before:-$pre_exec_sha}"
+            if ! runner_codex_rebase_changed_base "$workdir" "$worktree_dir" "$pre_exec_sha" "$codex_base_before"; then
+                _fail_job "$job_id" "$session_id" "codex_base_sync_failed" "Codex 시작 기준 동기화 실패; worktree 보존"
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                return 1
+            fi
+            pre_exec_sha="$codex_base_before"
+            codex_started=1
             log "  CODEX_RUNNER job=$job_id model=$codex_model_name"
             local codex_args=(exec --sandbox workspace-write --ephemeral -C "$workdir")
             # codex:default -> 모델 미지정(Codex CLI 기본값), 그 외 -> -m 지정
@@ -7648,6 +7687,16 @@ ${resume_brief}${safe_instruction}"
             sleep "$wait_sec"
         fi
     done
+
+    if (( codex_started )); then
+        if ! codex_base_after=$(runner_codex_sync_base "$main_workdir") ||
+           ! runner_codex_rebase_changed_base "$workdir" "$worktree_dir" "${codex_base_before:-$pre_exec_sha}" "$codex_base_after"; then
+            _fail_job "$job_id" "$session_id" "codex_base_sync_failed" "Codex 종료 후 기준 동기화 실패; worktree 보존"
+            _release_work_lock "$project" "$job_id" "$parallel_group"
+            return 1
+        fi
+        pre_exec_sha="$codex_base_after"
+    fi
 
     # CLI 자식 PID 대신 post-processing을 수행하는 job subshell PID를 추적한다.
     # watchdog이 review/diff 처리 중인 작업도 정확히 종료할 수 있어야 한다.
