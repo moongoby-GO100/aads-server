@@ -128,7 +128,7 @@ def test_shell_branch_precedes_claude_validation_and_uses_job_worktree(runner):
     script = runner.read_text()
     marker = script.index("# Antigravity Runner 분기")
     branch = script.index('elif [[ "$current_model" == antigravity:* ]]; then', marker)
-    assert branch < script.index('normalize_claude_cli_model "$current_model"', marker)
+    assert branch < script.index('authorize_claude_model "$current_model"', marker)
     assert branch < script.index('elif [[ "$current_model" == litellm:* ]]; then', marker)
     section = script[branch:script.index("# LiteLLM Runner 분기", branch)]
     assert '--workspace "$workdir"' in section and '> "$output_file" 2> "$err_file" &' in section
