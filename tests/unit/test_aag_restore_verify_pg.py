@@ -2,12 +2,26 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import sys
 import textwrap
 
 import pytest
 
 from scripts import aag_restore_verify_pg as pg
+
+
+@pytest.mark.parametrize(("returncode", "stderr", "blocked"), [
+    (1, b"ERROR:  AAG audit events are append-only\n", True),
+    (1, b"ERROR:  permission denied for table aag_audit_events\n", False),
+    (1, b"ERROR:  AAG audit events are append-only unexpected\n", False),
+    (0, b"", False),
+])
+def test_probe_requires_expected_trigger_error(monkeypatch, returncode, stderr, blocked):
+    monkeypatch.setattr(pg, "run_cmd", lambda *args, **kwargs:
+                        subprocess.CompletedProcess([], returncode, stderr=stderr))
+    result = pg.probe_blocked("scratch", "UPDATE x SET y=1", "AAG audit events are append-only", pg.Deadline(5))
+    assert result["blocked"] is blocked
 
 
 def obs(oid, *, scope=("GO100", "repo", "refs/heads/main", "default"), verified_at="2026-10-22T00:00:00.000001",

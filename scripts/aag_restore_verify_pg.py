@@ -523,11 +523,13 @@ def restore_into(name: str, schema_dump: Path, data_dump: Path, masked_json: str
     return info
 
 
-def probe_blocked(name: str, sql: str, deadline: Deadline) -> dict[str, Any]:
+def probe_blocked(name: str, sql: str, expected_error: str, deadline: Deadline) -> dict[str, Any]:
     proc = run_cmd(["docker", "exec", name, "psql", "-U", DB_USER, "-d", DB_NAME, "-X", "-q",
                     "-v", "ON_ERROR_STOP=1", "-c", f"BEGIN; {sql}; ROLLBACK;"], deadline, check=False)
     message = [ln for ln in proc.stderr.decode("utf-8", "replace").splitlines() if "ERROR" in ln]
-    return {"blocked": proc.returncode != 0 and bool(message), "message": message[0] if message else ""}
+    expected_line = f"ERROR:  {expected_error}"
+    return {"blocked": proc.returncode != 0 and any(line.strip() == expected_line for line in message),
+            "message": message[0] if message else ""}
 
 
 def run_lock_probe(name: str, deadline: Deadline) -> tuple[dict[str, Any], list[Failure]]:
@@ -656,7 +658,12 @@ def run_drill(*, timeout: int, workdir_parent: str | None = None) -> dict[str, A
                 "ready_snapshot_update": "UPDATE aag_graph_snapshots_v2 SET stats=stats WHERE id=(SELECT id FROM aag_graph_snapshots_v2 WHERE publish_status='ready' LIMIT 1)",
                 "ready_snapshot_delete": "DELETE FROM aag_graph_snapshots_v2 WHERE id=(SELECT id FROM aag_graph_snapshots_v2 WHERE publish_status='ready' LIMIT 1)",
             }
-            result["probes"] = {k: probe_blocked(name, sql, deadline) for k, sql in probes.items()}
+            result["probes"] = {
+                k: probe_blocked(name, sql,
+                                 "AAG audit events are append-only" if k.startswith("audit_")
+                                 else "ready AAG snapshots are immutable", deadline)
+                for k, sql in probes.items()
+            }
             for key, outcome in result["probes"].items():
                 if not outcome["blocked"]:
                     failures.append({"code": "mutation_not_blocked", "detail": key})
