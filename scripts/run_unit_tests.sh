@@ -28,6 +28,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
+if ! docker info >/dev/null 2>&1; then
+    echo "[run_unit_tests] docker 데몬 접근 불가(샌드박스 안 실행 의심) — 러너 본체가 샌드박스 밖에서 이 게이트를 다시 실행한다." >&2
+    exit 2
+fi
+
 # ── 동시 실행 상한 (AADS-UT-CONCURRENCY-CAP-20261104) ──
 # 러너 단위테스트가 컨테이너로 3개 이상 동시에 떠 contabo116 load 가 21까지 올랐다.
 # flock 슬롯 N개(기본 2, AADS_UT_MAX_PARALLEL)를 잡은 프로세스만 진행한다.
@@ -208,7 +213,10 @@ resolve_test_image_candidates() {
 
     # 컨테이너가 하나도 없을 때의 마지막 폴백 — 이미지 태그를 직접 조회한다.
     local latest_image
-    latest_image="$(docker images --format '{{.Repository}}:{{.Tag}}' --filter "reference=aads-server:*" 2>/dev/null | head -1)"
+    latest_image="$({
+        docker images --format $'{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' --filter "reference=aads-server:*" 2>/dev/null
+        docker images --format $'{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' --filter "reference=*/aads-server:*" 2>/dev/null
+    } | sort -r | head -1 | awk -F '\t' '{print $NF}')"
     [ -n "$latest_image" ] && candidates+=("image:$latest_image")
 
     # 중복 제거(순서 보존) — 같은 후보를 두 번 조회하지 않는다.
@@ -275,6 +283,8 @@ if [ -z "$IMAGE" ]; then
     } >&2
     exit 2
 fi
+
+echo "[run_unit_tests] 선택된 이미지: $IMAGE"
 
 mkdir -p "$TESTDEPS_DIR"
 if ! ut_docker_run -v "$TESTDEPS_DIR":/testdeps "$IMAGE" \

@@ -7195,6 +7195,7 @@ run_job() {
         # H7: 빌드/배포 가드 v2.1 — Claude Code가 직접 배포하지 않도록 방지
         safe_instruction="[필수 규칙 — 반드시 준수]
 1. 코드 수정을 수행하세요. 파일 생성/수정/삭제와 함께, 아래 2번 차단목록에 없는 읽기·검증 명령(pytest, ruff, python3 -m compileall, scripts/dup_guard.py, bash scripts/run_unit_tests.sh, cat/grep/sed 조회)은 실행해도 됩니다. 지시서가 요구한 검증은 반드시 실제로 실행하고 그 결과를 RESULT에 적으세요.
+   codex 샌드박스에서 run_unit_tests.sh가 exit 2(unavailable)이면 실패로 적지 말고 RESULT에 샌드박스 안 docker 불가 — 러너 본체 게이트에 위임이라고 적으세요.
 2. 다음 명령은 절대 실행하지 마세요:
    - git add, git commit, git push, git worktree, git reset, git checkout
    - docker build, docker compose, docker restart
