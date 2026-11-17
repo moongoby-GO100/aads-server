@@ -5,6 +5,9 @@
 
 ## 비용
 
+goals.cost_spent_usd 는 최근 N일 오케스트레이션 비용이다. 2026-11-18
+실측에서 누적 비용 때문에 26개 중 15개 목표가 영구 차단되어 창을 적용한다.
+
 CEO 절대 규칙: "LLM 15회/task, 비용 효율 최우선".
 
 2026-09-14 실측: 어시스턴트 메시지 1건에 **1.06 USD**. 한 마일스톤에서
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 import structlog
@@ -39,6 +43,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _DEFAULT_COST_LIMIT = float(os.getenv("GOAL_COST_LIMIT_USD", "20"))
+_COST_WINDOW_DAYS = float(os.getenv("GOAL_COST_WINDOW_DAYS", "7"))
 _MAX_LOAD_RATIO = float(os.getenv("GOAL_DISPATCH_MAX_LOAD_RATIO", "2.0"))
 
 # 오케스트레이션이 만든 턴만 골라내는 표시.
@@ -58,7 +63,7 @@ _load_cache: dict[str, tuple[float, Optional[float]]] = {}
 
 
 async def refresh_goal_cost(goal_id: str) -> float:
-    """목표에 묶인 세션들의 오늘 비용을 합산해 기록한다."""
+    """최근 N일 오케스트레이션 비용을 기록해 누적 비용의 영구 차단을 막는다."""
     from app.core.db_pool import get_pool
 
     pool = get_pool()
@@ -96,6 +101,9 @@ async def refresh_goal_cost(goal_id: str) -> float:
         # 않으므로 이 계산이 틀리면 게이트는 한 번 닫히고 **영영 안 열린다.**
         # 상한을 올리는 것은 증상만 미루는 것이고, 세는 대상을 좁히는 것이
         # 원인을 고치는 것이다.
+        window_start = started
+        if _COST_WINDOW_DAYS > 0:
+            window_start = max(started, datetime.now(timezone.utc) - timedelta(days=_COST_WINDOW_DAYS))
         spent = await pool.fetchval(
             """
             SELECT COALESCE(SUM(m.cost / GREATEST(gc.n, 1)), 0)::numeric(12,4)
@@ -116,7 +124,7 @@ async def refresh_goal_cost(goal_id: str) -> float:
             WHERE m.created_at >= $2
               AND m.intent = ANY($3::text[])
             """,
-            goal_id, started, _ORCH_INTENTS,
+            goal_id, window_start, _ORCH_INTENTS,
         )
     spent = float(spent or 0)
     await pool.execute(
@@ -145,7 +153,11 @@ async def cost_gate(goal_id: str) -> Tuple[bool, str]:
         return True, ""
 
     if spent >= lim:
-        return False, f"비용 상한 도달 — {spent:.2f} / {lim:.2f} USD"
+        window_label = f"(최근 {_COST_WINDOW_DAYS:g}일)" if _COST_WINDOW_DAYS > 0 else ""
+        return False, f"비용 상한 도달{window_label} — {spent:.2f} / {lim:.2f} USD"
+
+    if spent < lim * 0.8 and row["cost_warned_at"] is not None:
+        await pool.execute("UPDATE goals SET cost_warned_at = NULL WHERE id = $1::uuid", goal_id)
 
     if spent >= lim * 0.8 and row["cost_warned_at"] is None:
         try:

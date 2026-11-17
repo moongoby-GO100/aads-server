@@ -43,7 +43,7 @@ def test_cost_meter_counts_only_orchestration_turns() -> None:
 
     # 합산 쿼리가 실제로 그 목록으로 거른다. 상수만 있고 안 쓰면 의미가 없다.
     assert "AND m.intent = ANY($3::text[])" in source
-    assert "goal_id, started, _ORCH_INTENTS," in source
+    assert "goal_id, window_start, _ORCH_INTENTS," in source
 
 
 def test_cost_meter_keeps_first_dispatch_baseline() -> None:
