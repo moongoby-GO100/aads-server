@@ -16,20 +16,22 @@ def function(source, name):
 def test_sync_and_rebase_guards(name, tmp_path):
     source = (ROOT / "scripts" / name).read_text()
     script = tmp_path / "test.sh"
-    script.write_text("RUNNER_BASE_BRANCH=main\n" + function(source, "runner_codex_sync_base") +
+    script.write_text("set -e\nRUNNER_BASE_BRANCH=main\n" + function(source, "runner_codex_sync_base") +
                       function(source, "runner_codex_rebase_changed_base") + r'''
 log() { :; }
-git_fetch_origin_with_retry() { [[ "$FETCH_OK" == yes ]]; }
+git_fetch_origin_with_retry() { printf "fetch retry log\n"; [[ "$FETCH_OK" == yes ]]; }
 git() {
     shift 2
     case "$1" in
-        rev-parse) if [[ "$2" == --show-toplevel ]]; then printf '%s\n' "$TOP"; else printf '%s\n' new; fi ;;
+        rev-parse) if [[ "$2" == --show-toplevel ]]; then printf '%s\n' "$TOP"; else printf '%s\n' "${REVISION:-0123456789abcdef0123456789abcdef01234567}"; fi ;;
         merge-base) return "${ANCESTOR_RC:-0}" ;;
         rebase) printf '%s\n' "$*" >> "$CALLS"; printf '%s\n' "${REBASE_OUTPUT:-}"; return "${REBASE_RC:-0}" ;;
     esac
 }
 export TOP="$1" CALLS="$2" FETCH_OK=yes
-[[ "$(runner_codex_sync_base "$TOP")" == new ]]
+[[ "$(runner_codex_sync_base "$TOP")" == 0123456789abcdef0123456789abcdef01234567 ]]
+REVISION=invalid; ! runner_codex_sync_base "$TOP"; unset REVISION
+REVISION=$'0123456789abcdef0123456789abcdef01234567\nextra'; ! runner_codex_sync_base "$TOP"; unset REVISION
 FETCH_OK=no; ! runner_codex_sync_base "$TOP"; FETCH_OK=yes
 runner_codex_rebase_changed_base "$TOP" "$TOP" old old
 [[ ! -e "$CALLS" ]]

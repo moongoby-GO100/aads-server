@@ -4312,8 +4312,11 @@ _ckpt_resume_try() {
 # both fetches and moves the isolated job worktree before inspecting its diff.
 runner_codex_sync_base() {
     local repo="$1"
-    git_fetch_origin_with_retry "$repo" || return 1
-    git -C "$repo" rev-parse --verify "origin/${RUNNER_BASE_BRANCH}^{commit}"
+    git_fetch_origin_with_retry "$repo" >&2 || return 1
+    local sha
+    sha=$(git -C "$repo" rev-parse --verify "origin/${RUNNER_BASE_BRANCH}^{commit}") || return 1
+    [[ "$sha" =~ ^[[:xdigit:]]{40}$ ]] || return 1
+    printf '%s\n' "$sha"
 }
 
 runner_codex_rebase_changed_base() {
