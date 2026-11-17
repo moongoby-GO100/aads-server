@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import time
 import shutil
 import signal
 import subprocess
@@ -126,7 +128,70 @@ _LOCAL_DENY = (
 )
 
 
+def _location_mark() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_HOME_ROOT", str(Path.home() / ".gemini"))) / "antigravity-cli/.aads_location_blocked"
+
+
+def _clear_location_mark() -> None:
+    try:
+        _location_mark().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _location_blocked() -> bool:
+    mark = _location_mark()
+    try:
+        ttl = float(os.getenv("AADS_AGY_LOCATION_BLOCK_TTL", "21600"))
+        if not 0 <= ttl < float("inf"):
+            ttl = 21600
+    except ValueError:
+        ttl = 21600
+    try:
+        if time.time() - mark.stat().st_mtime < ttl:
+            return True
+        _clear_location_mark()
+    except OSError:
+        pass
+    return False
+
+
+def _redact(text: str) -> str:
+    # Remove credential values before truncation, including JSON and header forms.
+    text = re.sub(r'(?im)\b(?:set-cookie|cookie|authorization)\s*[:=][^\r\n]*', "[REDACTED]", text)
+    text = re.sub(r'(?i)(["\']?(?:access_token|refresh_token|id_token|token|api[_-]?key|authorization|cookie|set-cookie)["\']?\s*[:=]\s*)(?:["\'][^"\']*["\']|[^\s,;}]+)', r'\1[REDACTED]', text)
+    text = re.sub(r'(?i)\bBearer\s+[^\s,;]+', 'Bearer [REDACTED]', text)
+    return re.sub(r'(?i)\b(?:ya29\.|sk-)[A-Za-z0-9._~+/-]+', '[REDACTED]', text)
+
+
+def _agy_error(stderr: bytes, stdout: bytes) -> dict | None:
+    for stream in (stderr, stdout):
+        for line in reversed(stream.decode("utf-8", errors="replace").splitlines()):
+            if "AGY_ERROR:" not in line:
+                continue
+            try:
+                value = json.loads(line.split("AGY_ERROR:", 1)[1].strip())
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                return value
+    return None
+
+
+def _record_location_block(error: dict) -> None:
+    # An error ID is diagnostic metadata only if it has a safe identifier shape.
+    error_id = str(error.get("error_id") or "")
+    if not re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,28}', error_id):
+        error_id = ""
+    try:
+        _location_mark().write_text(json.dumps({"time": datetime.now(timezone.utc).isoformat(), "error_id": error_id}) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def local_preflight(workspace: str = "") -> tuple[bool, str]:
+    if _location_blocked():
+        return False, "agy_location_not_supported"
     binary = shutil.which(os.getenv("AGY_BIN", "agy"))
     if not binary:
         return False, "agy_binary_missing"
@@ -181,9 +246,22 @@ def run_local(model: str, workspace: str, instruction: str, timeout: float) -> i
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, interrupted)
-        stdout, _stderr = proc.communicate(payload, timeout=timeout)
+        stdout, stderr = proc.communicate(payload, timeout=timeout)
         if proc.returncode:
-            return _fail("local agy CLI exited %s" % proc.returncode)
+            message = "local agy CLI exited %s" % proc.returncode
+            error = _agy_error(stderr, stdout)
+            if error is not None:
+                short_error = str(error.get("short_error") or "")
+                if "failed_precondition" in short_error.lower() and "location is not supported" in short_error.lower():
+                    _record_location_block(error)
+                    message += ": agy_location_not_supported"
+                fields = {key: _redact(value) if isinstance(value, str) else value
+                          for key in ("short_error", "status", "error_code", "retryable")
+                          for value in (error.get(key),)}
+                message += ": " + _redact(json.dumps(fields, ensure_ascii=True))[:500]
+            else:
+                message += ": " + _redact(stderr.decode("utf-8", errors="replace"))[-500:]
+            return _fail(message)
         if len(stdout) > 8 * 1024 * 1024:
             return _fail("local agy output limit exceeded")
         result = None
@@ -214,6 +292,7 @@ def run_local(model: str, workspace: str, instruction: str, timeout: float) -> i
         text = result.get("response") or "".join(deltas)
         if not isinstance(text, str) or not text.strip():
             return _fail("local agy empty result")
+        _clear_location_mark()
         print("AGY_RECEIPT model=%s agy_model=%s mode=runner_local tool_calls=%d tool_errors=%d" %
               (model, native, len(tool_ids), tool_errors), file=sys.stderr)
         print(text)

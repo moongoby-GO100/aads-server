@@ -91,3 +91,41 @@ def test_runner_admission_failure_releases_lock_before_budget():
         charge = branch.index('retry_execution_charge_or_abort')
         assert admission < release < charge < branch.index('--local-cli --model')
         assert "!~ '^(antigravity" in source
+
+
+def test_location_error_marks_host_and_preflight_blocks(cli, tmp_path, capsys):
+    error = {'short_error': 'FAILED_PRECONDITION (code 400): User location is not supported for the API use.',
+             'status': 'INVALID_ARGUMENT', 'error_code': 400, 'retryable': False, 'error_id': '12345678-1234-1234-1234-123456789abc'}
+    cli.write_text('#!/usr/bin/env python3\nimport sys\n'
+                   + 'print(' + repr('AGY_ERROR: ' + json.dumps(error)) + ', file=sys.stderr)\nsys.exit(3)\n')
+    assert agy.run_local('antigravity', str(tmp_path), 'edit locally', 5) == 1
+    message = capsys.readouterr().err
+    assert 'local agy CLI exited 3: agy_location_not_supported' in message
+    assert error['short_error'] in message and 'INVALID_ARGUMENT' in message
+    assert '400' in message and 'false' in message
+    mark = tmp_path / 'antigravity-cli/.aads_location_blocked'
+    assert json.loads(mark.read_text())['error_id'] == error['error_id']
+    assert agy.local_preflight() == (False, 'agy_location_not_supported')
+
+
+def test_location_mark_expiry_and_success_clear(cli, tmp_path, monkeypatch):
+    mark = tmp_path / 'antigravity-cli/.aads_location_blocked'
+    mark.write_text('{}')
+    monkeypatch.setenv('AADS_AGY_LOCATION_BLOCK_TTL', '0')
+    assert agy.local_preflight() == (True, 'local_cli_ready')
+    assert not mark.exists()
+    mark.write_text('{}')
+    _fake(cli, {'status': 'SUCCESS', 'response': 'done'})
+    assert agy.run_local('antigravity', str(tmp_path), 'edit locally', 5) == 0
+    assert not mark.exists()
+
+
+def test_stderr_tail_masks_credentials(cli, tmp_path, capsys):
+    stderr = 'x' * 600 + ' refresh_token="secret-refresh" cookie=session-secret ya29.secret sk-secret'
+    cli.write_text('#!/usr/bin/env python3\nimport sys\n'
+                   + 'print(' + repr(stderr) + ', file=sys.stderr)\nsys.exit(3)\n')
+    assert agy.run_local('antigravity', str(tmp_path), 'edit locally', 5) == 1
+    message = capsys.readouterr().err
+    assert 'local agy CLI exited 3' in message and '[REDACTED]' in message
+    assert all(secret not in message for secret in ('secret-refresh', 'session-secret', 'ya29.secret', 'sk-secret'))
+    assert len(message.split(': ', 2)[-1].strip()) <= 500
