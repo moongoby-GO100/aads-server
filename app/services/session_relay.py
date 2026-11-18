@@ -36,6 +36,7 @@ logger = structlog.get_logger(__name__)
 
 MAX_HOP = int(os.getenv("SESSION_RELAY_MAX_HOP", "30"))
 CONTEXT_LIMIT = int(os.getenv("SESSION_RELAY_CONTEXT_CHARS", "4000"))
+QUESTION_LIMIT = int(os.getenv("SESSION_RELAY_QUESTION_CHARS", "8000"))
 ANSWER_LIMIT = int(os.getenv("SESSION_RELAY_ANSWER_CHARS", "6000"))
 
 # 물어본 쪽이 응답 중이면 기다린다. 진행 중인 응답에 새 user 메시지가 들어가면
@@ -746,7 +747,7 @@ async def ask(origin_session_id: str, target: str, question: str,
             "AND ((origin_session_id=$1::uuid AND target_session_id=$2::uuid) "
             "OR (origin_session_id=$2::uuid AND target_session_id=$1::uuid)) "
             "AND " + _PAIR_RECENT_SQL + " AND md5(question) = md5($3)",
-            origin_session_id, tgt["id"], question[:2000],
+            origin_session_id, tgt["id"], question[:QUESTION_LIMIT],
         )
         if duplicate:
             return {"sent": False, "error": "duplicate_question",
@@ -776,11 +777,24 @@ async def ask(origin_session_id: str, target: str, question: str,
         # 지금 보내지 않을 뿐, 끝나면 보낸다.
         if pair_busy or target_busy or goal_paused:
             queued_id = str(uuid.uuid4())
-            await conn.execute(
-                "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
-                "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
-                queued_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+            has_context = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_attribute "
+                "WHERE attrelid = 'session_relay'::regclass AND attname = 'context' "
+                "AND NOT attisdropped)"
             )
+            if has_context:
+                await conn.execute(
+                    "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id, context) "
+                    "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid, $7)",
+                    queued_id, origin_session_id, tgt["id"], hop, question[:QUESTION_LIMIT], goal_id,
+                    (context or "")[:CONTEXT_LIMIT],
+                )
+            else:
+                await conn.execute(
+                    "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
+                    "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'queued', $6::uuid)",
+                    queued_id, origin_session_id, tgt["id"], hop, question[:QUESTION_LIMIT], goal_id,
+                )
             logger.info("session_relay_queued relay=%s origin=%s target=%s hop=%d basis=%s",
                         queued_id[:8], origin_session_id[:8], tgt["id"][:8], hop, hop_basis)
             return {
@@ -811,7 +825,7 @@ async def ask(origin_session_id: str, target: str, question: str,
         await conn.execute(
             "INSERT INTO session_relay (id, origin_session_id, target_session_id, hop, question, status, goal_id) "
             "VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'pending', $6::uuid)",
-            relay_id, origin_session_id, tgt["id"], hop, question[:2000], goal_id,
+            relay_id, origin_session_id, tgt["id"], hop, question[:QUESTION_LIMIT], goal_id,
         )
 
     task = asyncio.create_task(
@@ -1131,7 +1145,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
         """
         SELECT DISTINCT ON (target_session_id)
                id::text AS id, origin_session_id::text AS origin, target_session_id::text AS target,
-               question, goal_id::text AS goal_id
+               question, to_jsonb(session_relay)->>'context' AS context, goal_id::text AS goal_id
           FROM session_relay
          WHERE status = 'queued'
            AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = session_relay.goal_id
@@ -1172,7 +1186,7 @@ async def dispatch_queued_relays() -> Dict[str, int]:
         )
         prompt = _build_question(
             origin["title"] if origin else "", origin["role_key"] if origin else "",
-            r["origin"], tgt_role or "", r["question"], "", r["id"],
+            r["origin"], tgt_role or "", r["question"], r["context"] or "", r["id"],
         )
         task = asyncio.create_task(
             _run_relay(r["id"], r["target"], prompt, r["origin"], r["question"], r["goal_id"])

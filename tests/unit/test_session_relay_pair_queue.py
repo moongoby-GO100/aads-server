@@ -31,7 +31,7 @@ class Pool:
             self.locks += 1
         if 'INSERT INTO session_relay' in sql:
             self.rows.append(dict(id=args[0], origin=args[1], target=args[2],
-                                  question=args[4], goal_id=args[5],
+                                  question=args[4], goal_id=args[5], context=args[6] if len(args) > 6 else None,
                                   status='queued' if "'queued'" in sql else 'pending'))
         if "SET status='pending'" in sql:
             row = next(r for r in self.rows if r['id'] == args[0])
@@ -43,6 +43,8 @@ class Pool:
 
     async def fetchval(self, sql, *args):
         self.queries.append(sql)
+        if 'FROM pg_attribute' in sql:
+            return getattr(self, 'has_context', True)
         if 'FROM session_relay' not in sql:
             return '담당'
         pair = [r for r in self.rows if {r['origin'], r['target']} == set(args[:2])]
@@ -149,3 +151,36 @@ async def test_old_pending_does_not_block_drainer(harness):
     assert relay._run_relay.call_args.args[0] == out['relay_id']
     queries = [q for q in harness.queries if '(created_at, id)' in q]
     assert queries and all(relay._PAIR_RECENT_SQL in q for q in queries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", ["공유 원문", "", "가" * (relay.CONTEXT_LIMIT + 10)])
+async def test_queued_question_and_context_reach_prompt(harness, context):
+    question = "질" * 2499 + "끝"
+    out = await relay.ask(ORIGIN, TARGET, question, context)
+    assert out['reason'] == 'pair_in_flight'
+    assert harness.rows[-1]['question'] == question
+    assert harness.rows[-1]['context'] == context[:relay.CONTEXT_LIMIT]
+    harness.rows[0]['status'] = 'answered'
+    assert (await relay.dispatch_queued_relays())['sent'] == 1
+    await asyncio.sleep(0)
+    prompt = relay._run_relay.call_args.args[2]
+    assert question in prompt
+    if context:
+        assert '── 공유된 내용 ──' in prompt
+        assert context[:relay.CONTEXT_LIMIT] in prompt
+        if len(context) > relay.CONTEXT_LIMIT:
+            assert context not in prompt
+    else:
+        assert '── 공유된 내용 ──' not in prompt
+
+
+@pytest.mark.asyncio
+async def test_queue_before_context_migration(harness):
+    harness.has_context = False
+    out = await relay.ask(ORIGIN, TARGET, '질문', '공유 내용')
+    assert out['queued'] and harness.rows[-1]['context'] is None
+    harness.rows[0]['status'] = 'answered'
+    assert (await relay.dispatch_queued_relays())['sent'] == 1
+    await asyncio.sleep(0)
+    assert '── 공유된 내용 ──' not in relay._run_relay.call_args.args[2]
