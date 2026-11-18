@@ -76,6 +76,13 @@ read_ledger() {
 # Prints the first destructive statement kind found, empty when none.
 # Line-by-line awk on purpose (R-BG: no nested-repetition regex on whole files).
 destructive_reason() {
+    local legacy
+    legacy="$(legacy_destructive_reason "$1")"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/release_migration_destructive.py" "$1" "$legacy"
+}
+
+# Other destructive rules retain the original line-oriented policy.
+legacy_destructive_reason() {
     awk '
         BEGIN { stmt = ""; found = 0 }
         function check(s) {
@@ -83,7 +90,6 @@ destructive_reason() {
             s = " " toupper(s) " "
             if (s ~ /[^A-Z_]DROP TABLE /) return "DROP TABLE"
             if (s ~ /[^A-Z_]DROP COLUMN /) return "DROP COLUMN"
-            if (s ~ /[^A-Z_]TRUNCATE[ ;(]/) return "TRUNCATE"
             if (s ~ /[^A-Z_]DELETE FROM / && s !~ / WHERE /) return "DELETE without WHERE"
             return ""
         }
