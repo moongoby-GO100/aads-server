@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GO100 중앙 승인 릴리스 계약",
+  "document_key": "go100-central-release-contract-v1",
+  "source_task_id": "runner-6d84ab50",
+  "change_summary": "승인 후보를 보존하고 파괴적 시험 SQL 제거 및 실DB 검증 기준을 명시",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "approval_id",
+    "project",
+    "component",
+    "lane",
+    "release_sha",
+    "target_env",
+    "tenant_id",
+    "approved_by",
+    "issued_at",
+    "expires_at",
+    "owner_instance",
+    "owner_epoch",
+    "snapshot_hash",
+    "schema_version",
+    "run_id"
+  ],
+  "properties": {
+    "approval_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "project": {
+      "const": "GO100"
+    },
+    "component": {
+      "enum": [
+        "backend",
+        "frontend"
+      ]
+    },
+    "lane": {
+      "enum": [
+        "api_only",
+        "frontend"
+      ]
+    },
+    "release_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "target_env": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "owner_instance": {
+      "type": "string"
+    },
+    "owner_epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshot_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of canonical JSON for the original approval snapshot FIELDS, not the transmitted contract subset."
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "run_id": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "component": {
+            "const": "backend"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lane": {
+            "const": "api_only"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "lane": {
+            "const": "frontend"
+          }
+        }
+      }
+    }
+  ],
+  "x-migration": {
+    "file": "migrations/20261118_go100_deploy_approval.sql",
+    "production_applied": false,
+    "backward_compatibility": "Additive table, index and trigger only; existing tables and non-GO100 approval behavior unchanged. Apply only after separate production DDL approval.",
+    "rollback": "Set AADS_GO100_DEPLOY_APPROVAL_ENABLED=false in both API and validator environments; stop new GO100 consumption and use existing cancel control for queued runs. Retain snapshots, indexes, trigger and audit rows. Do not DROP or mutate snapshots.",
+    "trust_policy": "Approval principal user_id must match the source session owner and run requested_by. Admin tenant is ignored; job/session tenant must match. Unbound legacy requests are blocked.",
+    "host_gate": "Run unit and isolated PostgreSQL integration tests with rc0 and skip0 before accepting candidate.",
+    "objects": {
+      "table": "go100_deploy_approval_snapshots",
+      "indexes": [
+        "go100_deploy_approval_snapshots_pkey",
+        "go100_deploy_approval_snapshots_run_id_key",
+        "go100_deploy_approval_tenant_issued"
+      ],
+      "function": "go100_deploy_approval_immutable()",
+      "trigger": "go100_deploy_approval_immutable (BEFORE UPDATE OR DELETE OR TRUNCATE, FOR EACH STATEMENT)"
+    },
+    "existing_data_rows_modified": 0,
+    "failure_rollback": "Migration is transactional: failure rolls back all newly created objects. After application, disable the feature and retain the table and snapshots.",
+    "validation_reason_policy": "Compare run fields with the approved snapshot first (run_<field>_mismatch), then verify source provenance (source_sha_mismatch for source job SHA drift)."
+  }
+}

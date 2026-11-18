@@ -121,11 +121,17 @@ async def cancel_deploy_run(
     }
 
 
-async def approve_deploy_run(conn: Any, run_id: int, *, actor: str = "ceo") -> dict[str, Any]:
+async def approve_deploy_run(conn: Any, run_id: int, *, actor: str = "ceo", principal: dict | None = None) -> dict[str, Any]:
     """Move an ``awaiting_approval`` run into the normal queue."""
     run = await _fetch_run(conn, run_id)
     if run is None:
         return {"ok": False, "status": "not_found", "detail": f"deploy_run {run_id} not found"}
+    if run.get("project") == "GO100":
+        from app.services.go100_deploy_approval import ApprovalDenied, approve
+        try:
+            return await approve(conn, int(run_id), principal)
+        except ApprovalDenied as exc:
+            return {"ok": False, "status": "approval_denied", "reason": str(exc)}
     status = str(run.get("status") or "")
     if status != "awaiting_approval":
         return {"ok": False, "status": "not_awaiting_approval", "current_status": status}

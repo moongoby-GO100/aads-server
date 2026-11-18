@@ -874,13 +874,15 @@ async def cancel_deploy_run_api(run_id: int, req: DeployControlRequest):
     dependencies=[Depends(require_internal_admin)],
     summary="승인 대기 배포 승인",
 )
-async def approve_deploy_run_api(run_id: int, req: DeployControlRequest):
+async def approve_deploy_run_api(
+    run_id: int, req: DeployControlRequest, principal: dict = Depends(require_internal_admin),
+):
     from app.services.deploy_control import approve_deploy_run
 
     conn = None
     try:
         conn = await _get_conn()
-        result = await approve_deploy_run(conn, run_id, actor=req.actor)
+        result = await approve_deploy_run(conn, run_id, actor=req.actor, principal=principal)
         if not result.get("ok"):
             raise HTTPException(status_code=409, detail=result)
         return result
