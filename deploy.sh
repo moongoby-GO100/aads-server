@@ -77,6 +77,8 @@ RELEASE_MIGRATION_HELPERS=(
     scripts/apply_release_migrations.sh
     scripts/release_migration_approval.py
     scripts/release_migration_autoverify.py
+    scripts/release_migration_destructive.py
+    scripts/release_migration_precheck.py
     scripts/migrations_auto_apply_baseline.txt
 )
 DEPLOY_STALE_SCRIPT_FOREGROUND=false
