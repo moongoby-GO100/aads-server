@@ -490,7 +490,7 @@ def test_model_supplied_session_id_field_is_ignored_for_provenance(monkeypatch):
     monkeypatch.setattr(docs, "create_revision_in_tx", created)
     _register(FakeConn(), _inp(source_session_id=str(uuid.uuid4())))
     assert created.await_args.args[4].source_session_id == uuid.UUID(SESSION)
-    assert created.await_args.kwargs == {"session_any_project": True}
+    assert created.await_args.kwargs == {"session_any_project": True, "bound_session_id": uuid.UUID(SESSION)}
 
 
 @pytest.mark.parametrize("summary", [None, "", "   ", "짧은사유", "123456789"])

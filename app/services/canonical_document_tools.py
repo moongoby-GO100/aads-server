@@ -137,6 +137,7 @@ async def register_document(
                 return _invalid("; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()))
             result = await docs.create_revision_in_tx(
                 conn, tenant_id, actor, project, body, session_any_project=True,
+                bound_session_id=source_session_id,
             )
             revision_no = await conn.fetchval(
                 "SELECT revision FROM project_document_revisions WHERE id=$1", result["revision_id"],

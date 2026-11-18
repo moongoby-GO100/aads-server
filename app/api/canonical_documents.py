@@ -387,7 +387,7 @@ async def _head(conn: Any, tenant: str, project: str, key: str, lock: bool = Fal
 
 
 async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str, body: RevisionInput,
-                                *, session_any_project: bool = False) -> dict:
+                                *, session_any_project: bool = False, bound_session_id: UUID | None = None) -> dict:
     """Create a draft revision inside the caller's transaction. Never approves; approved_revision_id is untouched.
 
     session_any_project: 서버가 바인딩한 채팅 세션(도구 경로)은 문서 프로젝트와 워크스페이스 프로젝트가 달라도 테넌트만 맞으면 출처로 받는다.
@@ -413,6 +413,21 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
             )
         if not session_ok:
             raise HTTPException(404, "session_not_found")
+    cross_project_model = None
+    if body.source_task_id and project == "GO100" and bound_session_id and body.source_session_id == bound_session_id:
+        cross_project_model = await conn.fetchrow(
+            "SELECT j.actual_model FROM pipeline_jobs j "
+            "JOIN chat_sessions s ON s.id::text=j.chat_session_id AND s.tenant_id=j.tenant_id "
+            "JOIN chat_workspaces w ON w.id=s.workspace_id AND w.tenant_id=s.tenant_id "
+            "JOIN tenant_memberships tm ON tm.tenant_id=s.tenant_id AND tm.user_id=s.user_id "
+            "AND tm.status='active' AND tm.deleted_at IS NULL "
+            "AND (tm.role IN ('owner','admin') OR (tm.role='member' AND EXISTS ("
+            "SELECT 1 FROM project_document_grants g WHERE g.tenant_id=s.tenant_id "
+            "AND g.user_id=s.user_id AND g.project_key='GO100' AND g.access=ANY($4::text[])))) "
+            "WHERE j.job_id=$1 AND j.tenant_id=$2::uuid AND upper(j.project)='AADS' "
+            "AND s.id=$3::uuid LIMIT 1",
+            body.source_task_id, tenant, bound_session_id, ["write", "approve"],
+        )
     if body.source_task_id and not (
         await conn.fetchval(
             "SELECT 1 FROM goal_task_links l LEFT JOIN milestones m ON m.id=l.milestone_id "
@@ -425,7 +440,7 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
         or await conn.fetchval(
             "SELECT 1 FROM pipeline_jobs WHERE job_id=$1 AND tenant_id=$2::uuid AND upper(project)=$3 LIMIT 1",
             body.source_task_id, tenant, project,
-        )
+        ) or cross_project_model
     ):
         raise HTTPException(404, "task_not_found")
     await conn.execute(
@@ -466,7 +481,7 @@ async def create_revision_in_tx(conn: Any, tenant: str, actor: str, project: str
     )
     author_model = "unknown"
     if body.source_task_id:
-        author_model = await conn.fetchval(
+        author_model = (cross_project_model["actual_model"] if cross_project_model else None) or await conn.fetchval(
             "SELECT actual_model FROM pipeline_jobs WHERE job_id=$1 AND tenant_id=$2::uuid AND upper(project)=$3",
             body.source_task_id, tenant, project,
         ) or "unknown"
