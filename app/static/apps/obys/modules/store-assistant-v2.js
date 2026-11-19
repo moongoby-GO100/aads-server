@@ -14,7 +14,14 @@
   let activeController = null;
   let lastFocus = null;
 
-  const byId = id => document.getElementById(id);
+  // 화면 호스트. 기존 관리화면(index.html)은 그 화면의 지점 필터·사업자 선택·탭·로그인 창을 쓴다.
+  // 새 관리화면(admin.html)은 스크립트에 data-obys-host 를 달고 mount() 로 사업자와 세션 만료 처리를 넘긴다 —
+  // 이때는 기존 관리화면 전역(branchByName·selectedSettingsBusinessId)과 화면 요소를 읽지 않는다.
+  const HOST_MODE = String(document.currentScript?.dataset?.obysHost || "");
+  let mounted = null;
+  const MOUNTED_VIEW = "assistant";
+
+  const byId = id => (mounted?.element?.querySelector(`#${id}`)) || (HOST_MODE ? null : document.getElementById(id));
   const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, char => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
   })[char]);
@@ -24,6 +31,7 @@
   const token = () => TOKEN_KEYS.map(key => localStorage.getItem(key)).find(Boolean) || "";
 
   function scope() {
+    if (mounted || HOST_MODE) return { business_id: mounted?.businessId || "", branch_id: "" };
     const branchName = byId("branchFilter")?.value || "";
     const branch = typeof window.branchByName === "function" ? window.branchByName(branchName) : null;
     const businessId = branch?.businessId || window.selectedSettingsBusinessId?.() || "";
@@ -74,6 +82,7 @@
   }
 
   function livebar() {
+    if (mounted) return mounted.element.querySelector(".v2-livebar");
     let bar = document.querySelector(".v2-livebar");
     if (bar) return bar;
     bar = document.createElement("div");
@@ -88,6 +97,7 @@
 
   function setStatus(kind, message) {
     const bar = livebar();
+    if (!bar) return;
     const state = bar.querySelector("[data-v2-state]");
     state.dataset.v2State = kind;
     state.textContent = message;
@@ -96,6 +106,8 @@
   }
 
   function showLivebarFor(view) {
+    if (mounted) return view === MOUNTED_VIEW && mounted.element.isConnected;
+    if (HOST_MODE) return false;
     const visible = connectedViews.has(view) && !document.body.classList.contains("signed-out");
     livebar().hidden = !visible;
     if (!visible) {
@@ -162,6 +174,11 @@
 
   function recoverExpiredSession(message) {
     saveDraft();
+    if (mounted || HOST_MODE) {
+      setStatus("error", message || "로그인이 만료되었습니다. 다시 로그인하면 작성 중이던 발주가 복구됩니다.");
+      if (typeof mounted?.onExpired === "function") mounted.onExpired();
+      return;
+    }
     TOKEN_KEYS.forEach(key => localStorage.removeItem(key));
     document.body.classList.add("signed-out");
     byId("authGate")?.classList.remove("hidden");
@@ -334,16 +351,22 @@
   }
 
   function currentView() {
+    if (mounted) return MOUNTED_VIEW;
     return document.querySelector('.side-nav [data-view].active')?.dataset.view || "dashboard";
   }
 
   async function refresh(view) {
+    if (mounted) view = MOUNTED_VIEW;
     if (!showLivebarFor(view)) return;
     activeController?.abort();
     activeController = new AbortController();
     setStatus("loading", "실데이터 불러오는 중");
     try {
-      if (view === "dashboard" || view === "tasks") await renderDashboard();
+      if (view === MOUNTED_VIEW) {
+        // 한 영역이 실패해도 나머지는 그린다. 실패는 상태줄에 첫 원인을 남긴다.
+        const failed = (await Promise.allSettled([renderDashboard(), renderInventory(), renderAccounting()])).find(item => item.status === "rejected");
+        if (failed) throw failed.reason;
+      } else if (view === "dashboard" || view === "tasks") await renderDashboard();
       else if (view === "inventory") await renderInventory();
       else if (view === "tax") await renderAccounting();
       else await renderOps(view);
@@ -403,7 +426,62 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
+  // ── 새 관리화면용 매장비서 화면 ──────────────────────────────
+  // 기존 매장비서와 같은 API·같은 함수(대시보드·발주·실사·입고·회계 요약)를 쓰고, 화면 뼈대만 여기서 그린다.
+  function mountedHtml() {
+    const table = (head, body) => `<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 표"><table><thead><tr>${head.map(([label, num]) => `<th${num ? ' class="num"' : ""}>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody id="${body}"></tbody></table></div>`;
+    return `<div class="v2-livebar" role="status" aria-live="polite"><strong>실데이터</strong><span data-v2-state="loading">연동 확인 중</span><span data-v2-sync>마지막 동기화: -</span><button type="button" data-v2-retry hidden>재시도</button></div>
+      <section class="sa-block" aria-labelledby="saTodayTitle"><h2 id="saTodayTitle">오늘 현황</h2><div class="sa-kpis" id="kpiGrid"></div></section>
+      <section class="sa-block" aria-labelledby="saTaskTitle"><h2 id="saTaskTitle">처리 대기</h2><div class="sa-progress" id="taskQueueRows"></div></section>
+      <section class="sa-block" aria-labelledby="saInventoryTitle"><h2 id="saInventoryTitle">재고 요약</h2><div class="sa-progress" id="inventorySummaryRows"></div></section>
+      <div class="sa-grid">
+        <section class="sa-block" aria-labelledby="saOrderTitle"><h2 id="saOrderTitle">발주 작성</h2><p class="sa-muted" id="inventoryDraftState">작성 중인 발주는 자동 보관됩니다.</p>
+          <form id="inventoryOrderForm" class="sa-form" autocomplete="off">
+            <label>매입처<input type="text" name="supplier" placeholder="예: 마켓봄"></label>
+            <label>품목<select name="item_id" id="inventoryOrderItem"><option value="">품목 선택</option></select></label>
+            <label>수량<input type="number" inputmode="decimal" min="0" step="0.01" name="quantity" placeholder="0"></label>
+            <label>금액<input type="number" inputmode="numeric" min="0" step="1" name="total_amount" placeholder="0"></label>
+            <label class="sa-wide">메모<input type="text" name="memo" placeholder="배송 요청 등"></label>
+            <div class="sa-actions"><button type="submit" class="btn primary" id="inventoryOrderSubmit">발주 등록</button><button type="button" class="btn" id="inventoryOrderReset">작성 내용 비우기</button></div>
+          </form></section>
+        <section class="sa-block" aria-labelledby="saStocktakeTitle"><h2 id="saStocktakeTitle">재고 실사 <span class="sa-muted" id="inventoryStocktakeBadge">실사 0건</span></h2>
+          <form id="inventoryStocktakeForm" class="sa-form" autocomplete="off">
+            <label>품목<select name="item_id" id="stocktakeItem"><option value="">품목 선택</option></select></label>
+            <label>실사 수량<input type="number" inputmode="decimal" min="0" step="0.01" name="counted_quantity" placeholder="0"></label>
+            <label class="sa-wide">메모<input type="text" name="memo" placeholder="실사 사유"></label>
+            <div class="sa-actions"><button type="submit" class="btn primary" id="stocktakeSubmit">실사 반영</button></div>
+          </form>
+          ${table([["실사일"], ["품목"], ["장부", 1], ["실사", 1], ["차이", 1], ["실행자"]], "stockBalanceRows")}</section>
+      </div>
+      <section class="sa-block" aria-labelledby="saOrdersTitle"><h2 id="saOrdersTitle">매입·발주 근거</h2>${table([["일자"], ["매입처"], ["채널"], ["금액", 1], ["상태"], ["입고"]], "inventoryRows")}</section>
+      <section class="sa-block" aria-labelledby="saTaxTitle"><h2 id="saTaxTitle">회계 요약 <span class="sa-muted" id="taxLedgerBadge">실DB 0건</span></h2><div class="sa-progress" id="taxSummaryRows"></div>${table([["신고 종류"], ["기간"], ["상태"], ["다음 할 일"]], "taxLedgerRows")}</section>`;
+  }
+
+  // options: { businessId, onExpired() }
+  function mount(element, options = {}) {
+    if (!element) return false;
+    activeController?.abort();
+    activeController = null;
+    mounted = { element, businessId: String(options.businessId || ""), onExpired: options.onExpired };
+    element.innerHTML = mountedHtml();
+    element.querySelector("[data-v2-retry]")?.addEventListener("click", () => refresh(MOUNTED_VIEW));
+    const form = orderForm();
+    form?.addEventListener("submit", submitOrder);
+    form?.addEventListener("input", saveDraft);
+    form?.addEventListener("change", saveDraft);
+    byId("inventoryOrderReset")?.addEventListener("click", () => { form?.reset(); clearDraft(); });
+    byId("inventoryStocktakeForm")?.addEventListener("submit", submitStocktake);
+    element.addEventListener("click", event => {
+      const button = event.target.closest("[data-receive-order]");
+      if (button) receiveOrder(button.dataset.receiveOrder, button);
+    });
+    refresh(MOUNTED_VIEW);
+    return true;
+  }
+
+  window.ObysStoreAssistant = { mount };
+
+  if (!HOST_MODE) document.addEventListener("DOMContentLoaded", () => {
     document.body.classList.add("v2-enhanced");
     livebar();
     addBottomNav();

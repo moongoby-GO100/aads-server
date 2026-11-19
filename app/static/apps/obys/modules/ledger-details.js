@@ -78,6 +78,16 @@
     clobe: { kind: "", entries: [], summary: null, total: 0, loading: false, error: null, seq: 0, offset: 0 }
   };
 
+  // 화면 호스트. 기존 관리화면(index.html)은 그 화면의 전역 obysViewState 를 쓰고,
+  // 새 관리화면(admin.html)은 mount() 로 상태 안내 함수를 넘긴다 — 이때 기존 관리화면 전역은 읽지 않는다.
+  const HOST_MODE = String(document.currentScript?.dataset?.obysHost || "");
+  const host = { mounted: false, viewState: null };
+
+  function hostViewState() {
+    if (host.mounted || HOST_MODE) return typeof host.viewState === "function" ? host.viewState : null;
+    return typeof window.obysViewState === "function" ? window.obysViewState : null;
+  }
+
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, char => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -484,11 +494,12 @@
       .format(new Date(Date.now() + offsetDays * 86400000));
   }
 
-  // 0건·오류 안내는 본 화면 공통 판정(window.obysViewState → renderState)으로 그린다.
+  // 0건·오류 안내는 화면 호스트의 공통 판정(hostViewState)으로 그린다.
   // 판정 순서·문구는 index.html viewStateConfig 한 곳에 있다. 없으면 위 슬롯의 기본 문구를 그대로 둔다.
   function applyViewState(root) {
     const slot = root?.querySelector("[data-ledger-state-slot]");
-    if (!slot || typeof window.obysViewState !== "function") return;
+    const viewState = hostViewState();
+    if (!slot || !viewState) return;
     const focusUpload = () => root.querySelector("[data-ledger-upload-focus]")?.click();
     let ctx;
     if (!state.businesses.length) {
@@ -519,7 +530,7 @@
       };
     }
     slot.classList.remove("ledger-state", "error");
-    window.obysViewState(slot, state.view, ctx);
+    viewState(slot, state.view, ctx);
   }
 
   function bindRoot(root) {
@@ -981,5 +992,18 @@
     if (state.view) load();
   }
 
+  // 새 관리화면에서 한 원장 화면을 연다. element 를 그 화면의 뿌리로 쓴다.
+  // options: { businessId, viewState(slot, view, ctx) }
+  function mount(element, view, options = {}) {
+    if (!element || !views[view]) return false;
+    host.mounted = true;
+    host.viewState = typeof options.viewState === "function" ? options.viewState : null;
+    if (options.businessId) state.businessId = String(options.businessId);
+    element.id = `${view}View`;
+    open(view);
+    return true;
+  }
+
   window.obysLedgerDetails = { open, setBusinesses, closeDrawer };
+  Object.assign(window.obysLedgerDetails, { mount, views: Object.keys(views) });
 })();

@@ -69,7 +69,9 @@ def test_render_state_defined_with_five_kinds():
 
 def test_render_state_exposed_and_used_for_empty_review_list():
     assert "window.renderState = renderState" in HTML
-    assert "window.renderState(slot" in CLOBE_JS
+    # 기존 관리화면에서는 hostRenderState() 가 window.renderState 를 돌려주고, 새 관리화면에서는 mount() 로 받은 함수를 쓴다.
+    assert "renderState(slot, {" in CLOBE_JS
+    assert 'return typeof window.renderState === "function" ? window.renderState : null;' in CLOBE_JS
     assert 'data-clobe-failure="nodata"' in CLOBE_JS
 
 

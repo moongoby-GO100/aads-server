@@ -39,6 +39,22 @@
   const REVIEW_ROLES = ["owner", "admin", "member"];
   const MANAGE_ROLES = ["owner", "admin"];
 
+  // 화면 호스트. 기존 관리화면(index.html)은 아래 기본값대로 그 화면의 전역(obysViewState·renderState·탭)을 쓴다.
+  // 새 관리화면(admin.html)은 스크립트에 data-obys-host 를 달고 mount() 로 필요한 기능을 직접 넘긴다 —
+  // 이때는 기존 관리화면의 전역·로그인 정보·탭을 전혀 읽지 않는다.
+  const HOST_MODE = String(document.currentScript?.dataset?.obysHost || "");
+  const host = { mounted: false, viewState: null, renderState: null, goView: null, login: null, role: "" };
+
+  function hostViewState() {
+    if (host.mounted || HOST_MODE) return typeof host.viewState === "function" ? host.viewState : null;
+    return typeof window.obysViewState === "function" ? window.obysViewState : null;
+  }
+
+  function hostRenderState() {
+    if (host.mounted || HOST_MODE) return typeof host.renderState === "function" ? host.renderState : null;
+    return typeof window.renderState === "function" ? window.renderState : null;
+  }
+
   const state = {
     view: "",
     status: null,
@@ -102,6 +118,7 @@
   }
 
   function role() {
+    if (host.mounted || HOST_MODE) return String(host.role || "").trim().toLowerCase();
     return String(sessionUser().permissions?.role || "").trim().toLowerCase();
   }
 
@@ -826,30 +843,31 @@
 
   const act = (action, data = {}) => () => handleAction({ dataset: { clobeAction: action, ...data } });
 
-  // 회사 미연결·미수집 안내는 본 화면 공통 판정(window.obysViewState)으로 그린다.
+  // 회사 미연결·미수집 안내는 화면 호스트의 공통 판정(hostViewState)으로 그린다.
   function applyViewSlots(root) {
-    if (typeof window.obysViewState !== "function") return;
+    const viewState = hostViewState();
+    if (!viewState) return;
     root?.querySelectorAll("[data-clobe-view-slot]").forEach(slot => {
       const view = slot.closest("[data-clobe-view]")?.dataset.clobeView || state.view;
       slot.classList.remove("clobe-state", "clobe-muted");
       if (slot.dataset.clobeViewSlot === "error") {
         const error = slot.dataset.clobeErrorKey === "items" ? state.itemsError : state.statusError;
         const info = explain(error);
-        window.obysViewState(slot, view, {
+        viewState(slot, view, {
           error: { status: Number(error?.status || 0), message: info.title },
           errorReason: info.body,
           forbiddenReason: info.body,
           onRetry: act(slot.dataset.clobeRetry || "refresh")
         });
       } else if (slot.dataset.clobeViewSlot === "unlinked") {
-        window.obysViewState(slot, view, {
+        viewState(slot, view, {
           connected: false,
           source: "자료 수집 회사",
           connectView: state.internalAdmin ? "clobeSettings" : "integrations",
           onUpload: () => goView("documents")
         });
       } else {
-        window.obysViewState(slot, view, {
+        viewState(slot, view, {
           emptyTitle: "아직 받은 자료가 없습니다.",
           emptyReason: can("manage") ? "위에서 수집을 실행하면 처리 단계별 건수가 여기에 표시됩니다." : "관리자가 수집을 실행하면 처리 단계별 건수가 여기에 표시됩니다.",
           emptyActions: [{ label: "새로고침", onClick: act("refresh") }]
@@ -862,16 +880,18 @@
   function applyEmptyState(root) {
     applyViewSlots(root);
     const slot = root?.querySelector("[data-clobe-empty-slot]");
-    if (!slot || typeof window.renderState !== "function") return;
+    const renderState = hostRenderState();
+    const viewState = hostViewState();
+    if (!slot || !renderState) return;
     const company = selectedCompany();
     const waiting = company && state.ui.stage !== "review_box" ? stageCounts(company).review_box : 0;
     slot.classList.remove("clobe-state");
     // (a) 이 단계가 비었지만 검토함에 수집분이 있으면 "검토를 기다리는 N건"으로 안내한다.
-    if (waiting > 0 && typeof window.obysViewState === "function") {
-      window.obysViewState(slot, "clobeReview", { pendingReview: waiting, onReview: act("open-review", { stage: "review_box" }) });
+    if (waiting > 0 && viewState) {
+      viewState(slot, "clobeReview", { pendingReview: waiting, onReview: act("open-review", { stage: "review_box" }) });
       return;
     }
-    window.renderState(slot, {
+    renderState(slot, {
       kind: "empty",
       title: `${STAGES[state.ui.stage]} 단계의 거래가 없습니다`,
       reason: state.ui.stage === "review_box" ? "새로 수집된 자료가 없거나 모두 처리되었습니다. 자료현황에서 수집 상태를 확인하십시오." : "다른 처리 단계를 선택해 보십시오.",
@@ -1199,6 +1219,7 @@
   }
 
   function goView(view) {
+    if (host.mounted || HOST_MODE) return typeof host.goView === "function" ? Boolean(host.goView(view)) : false;
     const tab = document.querySelector(`.side-nav .tab[data-view="${view}"]`) || document.querySelector(`.tab[data-view="${view}"]`);
     if (tab) tab.click();
     return Boolean(tab);
@@ -1248,6 +1269,10 @@
     const action = target.dataset.clobeAction;
     switch (action) {
       case "login": {
+        if (host.mounted || HOST_MODE) {
+          if (typeof host.login === "function") host.login();
+          break;
+        }
         const loginButton = document.getElementById("loginBtn");
         if (loginButton) loginButton.click();
         break;
@@ -1433,22 +1458,42 @@
     }
   }
 
+  // 새 관리화면에서 한 화면을 연다. element 를 그 화면의 뿌리로 쓰고, 호스트가 넘긴 기능만 쓴다.
+  // options: { role, viewState(slot, view, ctx), renderState(slot, cfg), goView(view) → bool, login() }
+  function mount(element, view, options = {}) {
+    if (!element || !RENDER[view]) return false;
+    host.mounted = true;
+    host.viewState = typeof options.viewState === "function" ? options.viewState : null;
+    host.renderState = typeof options.renderState === "function" ? options.renderState : null;
+    host.goView = typeof options.goView === "function" ? options.goView : null;
+    host.login = typeof options.login === "function" ? options.login : null;
+    host.role = String(options.role || "");
+    state.navigated = true;
+    element.id = `${view}View`;
+    bindRoot(view);
+    open(view);
+    return true;
+  }
+
   function init() {
     Object.keys(VIEWS).forEach(bindRoot);
-    document.addEventListener("click", event => {
-      if (event.target.closest?.(".tab[data-view]") && event.isTrusted) state.navigated = true;
-    }, true);
-    window.addEventListener("online", () => { if (RENDER[state.view]) open(state.view); });
+    if (!HOST_MODE) {
+      document.addEventListener("click", event => {
+        if (event.target.closest?.(".tab[data-view]") && event.isTrusted) state.navigated = true;
+      }, true);
+    }
+    window.addEventListener("online", () => { if (RENDER[state.view] && rootFor(state.view)) open(state.view); });
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && RENDER[state.view] && token() && (state.statusError?.status === 401 || !state.status)) {
+      if (document.visibilityState === "visible" && RENDER[state.view] && rootFor(state.view) && token() && (state.statusError?.status === 401 || !state.status)) {
         state.status = null;
         open(state.view);
       }
     });
-    setTimeout(probeLanding, 600);
+    // 첫 화면 자동 이동은 기존 관리화면에서만 한다. 새 관리화면은 메뉴가 화면을 정한다.
+    if (!HOST_MODE) setTimeout(probeLanding, 600);
   }
 
-  window.obysClobe = { open, landingView, explain, codeText, summarize, uploadTargetFor, releaseUploadTarget };
+  window.obysClobe = { open, mount, views: Object.keys(VIEWS), landingView, explain, codeText, summarize, uploadTargetFor, releaseUploadTarget };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();

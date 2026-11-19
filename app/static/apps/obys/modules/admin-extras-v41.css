@@ -1,0 +1,104 @@
+/* 오비서 V4.1 새 관리화면 — 옮겨 온 업무 화면(자료 수집 현황·원장 상세·매장비서·월마감·기초 설정) 전용.
+   모든 규칙은 [data-admin-extra] 아래로 한정한다. 기존 화면 스타일을 바꾸지 않는다. */
+[data-admin-extra] {
+  --accent: var(--blue, #2457d6);
+  --accent-strong: #1b45ad;
+  --panel: #fff;
+  --panel-strong: #f8fafc;
+  --line: #e2e8f0;
+  --muted: #667085;
+  --ink: #172033;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+[data-admin-extra] .obx-body { display: grid; gap: 14px; min-width: 0; }
+[data-admin-extra] .obx-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+[data-admin-extra] .obx-tab {
+  min-height: 44px; padding: 0 16px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--ink); font-weight: 600;
+}
+[data-admin-extra] .obx-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+[data-admin-extra] .obx-tab:focus-visible,
+[data-admin-extra] button:focus-visible,
+[data-admin-extra] input:focus-visible,
+[data-admin-extra] select:focus-visible { outline: 3px solid rgba(36, 87, 214, .35); outline-offset: 2px; }
+
+/* 상태 안내 */
+[data-admin-extra] .obx-state {
+  display: grid; gap: 6px; padding: 18px; border: 1px dashed var(--line); border-radius: 10px;
+  background: var(--panel-strong); color: var(--ink); text-align: left;
+}
+[data-admin-extra] .obx-state.error,
+[data-admin-extra] .obx-state.expired { border-color: #f1b8bf; background: #fff5f6; }
+[data-admin-extra] .obx-state span { color: var(--muted); }
+[data-admin-extra] .obx-state small { color: var(--muted); font-size: 12px; }
+[data-admin-extra] .obx-state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+[data-admin-extra] .obx-state-actions .btn { min-height: 44px; }
+
+/* 월마감 */
+[data-admin-extra] .obx-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+[data-admin-extra] .obx-inline { display: inline-flex; align-items: center; gap: 8px; }
+[data-admin-extra] .obx-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+[data-admin-extra] .obx-checks li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+}
+[data-admin-extra] .obx-checks li small { grid-column: 1 / -1; color: var(--muted); }
+[data-admin-extra] .obx-checks li.pass .badge { background: #eaf8f2; color: #16845b; }
+[data-admin-extra] .obx-checks li.fail .badge { background: #fff4e8; color: #c56a16; }
+[data-admin-extra] .obx-checks li.unknown .badge { background: #fff0f0; color: #c93645; }
+[data-admin-extra] .obx-checks li.skip .badge { background: #f2f4f7; color: var(--muted); }
+[data-admin-extra] .obx-checks li.hold .badge { background: #fff8db; color: #8a6400; }
+[data-admin-extra] .obx-checks .obx-scope { font-style: normal; font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 4px; }
+[data-admin-extra] .obx-verdict { margin: 12px 0 0; font-size: 15px; }
+[data-admin-extra] .obx-report { width: 100%; min-height: 360px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font: 13px/1.6 ui-monospace, Menlo, monospace; resize: vertical; }
+
+/* 기초 설정 */
+[data-admin-extra] .obx-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0; }
+[data-admin-extra] .obx-facts div { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+[data-admin-extra] .obx-facts dt { color: var(--muted); font-size: 12px; }
+[data-admin-extra] .obx-facts dd { margin: 4px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+[data-admin-extra] .obx-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }
+[data-admin-extra] .obx-form h3 { grid-column: 1 / -1; margin: 0; font-size: 15px; }
+[data-admin-extra] .obx-form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+[data-admin-extra] .obx-form .field { width: 100%; min-height: 44px; }
+[data-admin-extra] .obx-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+[data-admin-extra] .section-head .right { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+[data-admin-extra] .section-head .right .btn,
+[data-admin-extra] .toolbar .btn { min-height: 44px; }
+
+/* 매장비서 */
+[data-admin-extra] .v2-livebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--muted); font-size: 13px; }
+[data-admin-extra] .v2-livebar strong { color: var(--ink); }
+[data-admin-extra] .v2-livebar [data-v2-state="loading"] { color: var(--accent); }
+[data-admin-extra] .v2-livebar [data-v2-state="ready"] { color: #16845b; }
+[data-admin-extra] .v2-livebar [data-v2-state="error"] { color: #c93645; }
+[data-admin-extra] .v2-livebar button { margin-left: auto; min-height: 44px; }
+[data-admin-extra] .sa-block { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; min-width: 0; }
+[data-admin-extra] .sa-block h2 { margin: 0 0 12px; font-size: 16px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+[data-admin-extra] .sa-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+[data-admin-extra] .sa-muted { color: var(--muted); font-size: 12px; font-weight: 400; }
+[data-admin-extra] .sa-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+[data-admin-extra] .sa-kpis .kpi { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }
+[data-admin-extra] .v2-api-kpi small, [data-admin-extra] .v2-api-kpi strong, [data-admin-extra] .v2-api-kpi span { display: block; }
+[data-admin-extra] .v2-api-kpi strong { margin-top: 10px; font-size: 22px; }
+[data-admin-extra] .v2-api-kpi span { margin-top: 6px; color: var(--muted); font-size: 12px; }
+[data-admin-extra] .sa-progress { display: grid; gap: 6px; }
+[data-admin-extra] .progress-item { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+[data-admin-extra] .v2-empty { padding: 16px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); text-align: center; }
+[data-admin-extra] .sa-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+[data-admin-extra] .sa-form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+[data-admin-extra] .sa-form input, [data-admin-extra] .sa-form select { min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; }
+[data-admin-extra] .sa-form .sa-wide, [data-admin-extra] .sa-form .sa-actions { grid-column: 1 / -1; }
+[data-admin-extra] .sa-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+[data-admin-extra] .sa-actions .btn, [data-admin-extra] [data-receive-order] { min-height: 44px; }
+[data-admin-extra] td.num, [data-admin-extra] th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 860px) {
+  [data-admin-extra] .obx-grid, [data-admin-extra] .sa-grid { grid-template-columns: minmax(0, 1fr); }
+  [data-admin-extra] .sa-form { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  .side, .top, [data-admin-extra] .obx-tabs, [data-admin-extra] .toolbar { display: none !important; }
+}
