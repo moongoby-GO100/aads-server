@@ -1,3 +1,8 @@
+-- 대상: code_review_requests 및 pipeline_jobs 의 revert_of_verified(jsonb nullable, 기본값 없음).
+-- 조건: IF NOT EXISTS 로 멱등 적용; lock_timeout 5s, statement_timeout 60s, 적용기 단일 트랜잭션 사용.
+-- 금지: 승인 경로 변경, 검증 메타데이터를 백업 없이 제거하거나 승인 게이트 우회 금지.
+-- 롤백: down 실행 전 scripts/pipeline-runner.sh 를 열 미사용 버전으로 먼저 되돌리거나 열 부재 시 건너뜀을 확인한다.
+-- API 코드도 먼저 되돌린 뒤 아래 백업 및 down 절차를 수행한다.
 -- 정확한 되돌리기(REVERT_OF) 예외: 러너가 patch-id 로 검증한 결과를 비동기 리뷰 요청과 함께 보존한다.
 -- 사람 승인 경로·자동 승인 기준은 바꾸지 않는다. 추가만 하는 변경(기존 표 2개에 기본값 없는 nullable 열 추가)이라 릴리스 자동 적용 대상.
 -- 멱등: 두 번 실행해도 오류가 없다(IF NOT EXISTS).

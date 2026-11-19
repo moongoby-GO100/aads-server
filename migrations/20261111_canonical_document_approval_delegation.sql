@@ -1,3 +1,10 @@
+-- 대상: 승인 위임 표·부분 색인 및 project_document_events.metadata(jsonb nullable, 기본값 없음).
+-- 조건: IF NOT EXISTS 로 멱등 적용; lock_timeout 5s, statement_timeout 60s, 적용기 단일 트랜잭션 사용.
+-- 금지: 스키마 적용 승인을 위임 부여·활성화 승인으로 사용하거나 action='approved' 의미를 변경하지 않는다.
+-- 승인 범위: 스키마 적용 한정. 위임 부여·활성화는 별도 사람 승인이 필요하며 action='approved' 의미는 불변이다.
+-- 롤백: 코드 먼저 복귀 후 기존 down 절차를 따른다. down 전 위임 표 pg_dump 와 아래 이벤트 백업을 모두 완료한다.
+-- COPY (SELECT id, metadata FROM project_document_events WHERE metadata IS NOT NULL)
+--   TO '/root/aads/backups/project_document_events_metadata_before_rollback.csv' WITH CSV HEADER;
 -- 정본 문서 승인 위임: 사람이 부여하고 담당 채팅 세션이 교차검수 통과 문서를 승인한다.
 -- 사람 승인 경로·자동 승인 기준은 바꾸지 않는다. 추가만 하는 변경(새 표·부분 색인·기존 표에 기본값 없는 nullable 열)이라 릴리스 자동 적용 대상.
 -- 멱등: 두 번 실행해도 오류가 없다(IF NOT EXISTS).

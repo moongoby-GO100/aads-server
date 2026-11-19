@@ -1,3 +1,9 @@
+-- 대상: monitored_services 의 cafe24_114 / acct-fb-public HTTP 감시 항목.
+-- 조건: ON CONFLICT DO NOTHING 으로 멱등; 적용 전 기존 행 유무와 적용 시작·종료 시각 및 신규 행 id 를 기록한다.
+-- 금지: 기존 행 수정·삭제, 자동 복구 활성화 및 승인 없는 원격 재시작 금지.
+-- 롤백: 이번 적용으로 생긴 행만 삭제한다. 적용 전 행이 없었고 기록한 신규 id 및 server/service_name 이 일치하며
+-- created_at 이 기록한 적용 시작 시각 이상·종료 시각 이하인 경우만 down 을 실행한다. 기존 행은 보존한다.
+-- 생성 증거가 없거나 기존 행이 있었으면 삭제하지 않는다. down 의 psql 변수로 기록한 id 와 시각을 전달한다.
 -- M5 운영 전환 인증: fb.newtalk.kr 상시 감시 등록 (자동 복구 없음)
 --
 -- 비파괴 근거: 기존 데이터를 변경(UPDATE)하거나 삭제(DELETE/DROP/TRUNCATE)하지 않으며,
