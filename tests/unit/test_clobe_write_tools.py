@@ -199,3 +199,59 @@ async def test_preview_exception_prevents_write(env):
     with pytest.raises(clobe.ClobeTransientError):
         await clobe.call_write_tool('issue_tax_invoice', {}, caller='admin', confirm=True, preview=True)
     assert session.request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_write_uses_real_acct_pool_and_session_token_path(monkeypatch):
+    """_pool/_with_session은 실제 코드, DB와 MCP 네트워크만 mock한다."""
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from cryptography.fernet import Fernet
+    from app.core import credential_vault
+
+    key = Fernet.generate_key()
+    token = 'mock-acct-access-token'
+    monkeypatch.setattr(credential_vault, '_VAULT_KEY', key)
+    monkeypatch.setattr(credential_vault, '_STANDALONE_KEY_SOURCE', 'OBYS_VAULT_KEY')
+    monkeypatch.setattr(credential_vault, '_VAULT_PREVIOUS_KEYS', ())
+    monkeypatch.setenv('CLOBE_STORE_DATABASE_URL', 'postgresql://mock@acct/cafe24_114')
+    monkeypatch.setattr(clobe, '_store_pool', None)
+    monkeypatch.setattr(clobe, '_schema_ready', False)
+    monkeypatch.setattr(clobe, 'get_pool', lambda: pytest.fail('stale AADS DB accessed'))
+    pool = AsyncMock()
+    pool.fetchval.return_value = True
+    pool.fetch.return_value = [{'name': 'update_memo'}]
+    pool.fetchrow.return_value = {
+        'status': clobe.STATUS_CONNECTED,
+        'access_token_enc': Fernet(key).encrypt(token.encode()).decode(),
+        'token_expires_at': datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    create_pool = AsyncMock(return_value=pool)
+    monkeypatch.setitem(sys.modules, 'asyncpg', SimpleNamespace(create_pool=create_pool))
+    monkeypatch.setattr(clobe._McpSession, 'initialize', AsyncMock(return_value={}))
+    calls = []
+
+    async def request(session, method, params):
+        assert session._token == token
+        calls.append((method, params))
+        return {'structuredContent': {'ok': True}}
+
+    monkeypatch.setattr(clobe._McpSession, 'request', request)
+    await clobe.call_write_tool('update_memo', {'memo': 'mock-only'}, caller='test:acct')
+    assert create_pool.await_args.args[0].endswith('/cafe24_114')
+    assert create_pool.await_count == 1
+    assert pool.fetchrow.await_args.args[0].startswith('SELECT * FROM clobe_mcp_connection')
+    assert calls == [('tools/call', {'name': 'update_memo', 'arguments': {'input': {'memo': 'mock-only'}}})]
+    assert 'last_success_at' in pool.execute.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_comparison_reader_requires_db_allowed_true(env):
+    from scripts.clobe_compare_companies import Reader
+
+    _, session = env
+    # DB mock contains observed write tools, but get_labels is not allowed=TRUE.
+    with pytest.raises(clobe.ClobeToolDenied, match='not_observed_in_tools_list'):
+        await Reader(clobe).call('get_labels', {'companyId': 'mock-acct'})
+    session.request.assert_not_awaited()
