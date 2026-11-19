@@ -1,8 +1,8 @@
-"""클로브AI MCP OAuth 연결(읽기 전용).
+"""클로브AI MCP OAuth 연결(수집 읽기와 명시적 쓰기 경로 분리).
 
 클로브 MCP 는 표준 MCP OAuth(PKCE S256, public client, 동적 등록)다. scope 에 읽기 전용이
-없으므로 읽기 전용은 여기서 강제한다: tools/list 로 실제 확인된 조회형 도구만 허용하고,
-쓰기·발급·송금·신고 계열과 미확인 도구는 네트워크 호출 전에 거부한다.
+없으므로 call_tool/수집 경로는 tools/list 로 확인된 조회형 도구만 허용한다.
+별도 call_write_tool 경로는 실측된 비조회 도구에 확인·preview·감사 게이트를 적용한다.
 
 토큰·code·code_verifier·state 원문은 로그/응답/예외 메시지에 남기지 않는다.
 토큰은 Fernet(app.core.credential_vault.encrypt_value)으로 암호화해 저장한다.
@@ -743,6 +743,99 @@ async def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[
         return await session.request("tools/call", {"name": name, "arguments": arguments or {}})
 
     return await _with_session(_run)
+
+
+# ── 명시적 쓰기 경로 (수집 허용목록과 독립) ──────────────
+
+def _write_requires_confirmation(name: str) -> bool:
+    normalized = "_".join(_name_tokens(name))
+    return normalized.startswith(("close_", "delete_", "run_workflow")) or normalized in {
+        "issue_tax_invoice", "issue_tax_invoices", "issue_modified_tax_invoice",
+        "submit_efiling", "confirm_payroll", "import_wehago_payroll",
+        "request_vat_hometax_collection",
+    }
+
+
+def _write_argument_summary(value: Any, depth: int = 0) -> Any:
+    """값과 사용자 제공 키도 기록하지 않는다. 중첩 구조/개수만 감사에 남긴다."""
+    if depth >= 4:
+        return "***"
+    if isinstance(value, dict):
+        return {"fields": len(value), "values": [
+            _write_argument_summary(v, depth + 1) for v in list(value.values())[:20]
+        ]}
+    if isinstance(value, list):
+        return {"items": len(value)}
+    return "***"
+
+
+async def call_write_tool(
+    name: str, arguments: dict[str, Any] | None = None, *, caller: str,
+    confirm: bool = False, preview: bool = False,
+) -> dict[str, Any]:
+    """실측된 비조회 도구만 실행. 위험 작업의 preview는 이 호출 안에서만 유효하다.
+
+    preview=True는 관측된 preview_<전체 이름> 또는 첫 동사를 preview로 바꾼
+    도구를 동일 인자로 먼저 실행한다. 성공 결과를 외부에서 주입하거나 재사용할 수 없다.
+    caller는 인증한 호출부가 제공해야 한다. 수집 경로에서는 이 함수를 사용하지 않는다.
+    """
+    status = "error"
+    # JSON 스냅샷으로 preview 중 호출자에 의한 인자 변경을 차단한다.
+    summary = _write_argument_summary(arguments)
+    caller_ref = hashlib.sha256(str(caller).encode()).hexdigest()[:16]
+    tool_ref = name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{1,128}", name) else "invalid"
+    try:
+        if not isinstance(caller, str) or not caller.strip():
+            raise ClobeToolDenied("write_denied:caller_required")
+        if tool_ref == "invalid" or classify_tool(name)[0]:
+            raise ClobeToolDenied("write_denied:not_write_tool")
+        if arguments is not None and not isinstance(arguments, dict):
+            raise ClobeToolDenied("write_denied:invalid_arguments")
+        tool_arguments = arguments if arguments is not None else {}
+        if set(tool_arguments) != {"input"} or not isinstance(tool_arguments["input"], dict):
+            tool_arguments = {"input": tool_arguments}
+        payload = json.dumps(tool_arguments, allow_nan=False)
+        await ensure_schema()
+        rows = await (await _pool()).fetch(
+            "SELECT name FROM clobe_mcp_tools "
+            "WHERE deny_reason IS DISTINCT FROM 'absent_from_tools_list'"
+        )
+        observed = {r["name"] for r in rows}
+        if name not in observed:
+            raise ClobeToolDenied("write_denied:not_observed_in_tools_list")
+        risky = _write_requires_confirmation(name)
+        preview_names = ("preview_" + name, "preview_" + name.partition("_")[2])
+        preview_name = next((n for n in preview_names if n in observed), None)
+        if risky and confirm is not True:
+            raise ClobeToolDenied("write_denied:confirmation_required")
+        if risky and preview_name is None:
+            raise ClobeToolDenied("write_denied:preview_not_available")
+        if risky and preview is not True:
+            raise ClobeToolDenied("write_denied:preview_required")
+
+        async def _run(session: _McpSession) -> dict[str, Any]:
+            if risky and preview_name:
+                result = await session.request("tools/call", {
+                    "name": preview_name, "arguments": json.loads(payload),
+                })
+                if result.get("isError"):
+                    raise ClobeToolError()
+            result = await session.request("tools/call", {
+                "name": name, "arguments": json.loads(payload),
+            })
+            if result.get("isError"):
+                raise ClobeToolError()
+            return result
+
+        result = await _with_session(_run)
+        status = "success"
+        return result
+    except ClobeToolDenied:
+        status = "denied"
+        raise
+    finally:
+        logger.info("clobe_write tool=%s arguments=%s caller_sha256=%s status=%s",
+                    tool_ref, summary, caller_ref, status)
 
 
 # ── 상태 / 검증 ──────────────────────────────────────────
