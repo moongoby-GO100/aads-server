@@ -26,7 +26,7 @@
 --        \copy (SELECT id, head_id, revision_id, action, metadata FROM public.project_document_events WHERE metadata IS NOT NULL) TO '/root/aads/backups/events_metadata_before_rollback.csv' WITH CSV HEADER
 --   백업 파일 존재 및 행 수 확인 후 down 을 실행하십시오 (예: wc -l /root/aads/backups/*_before_rollback.*).
 --
--- ■ 의존 순서: 자식 표(project_document_approval_delegations) DROP -> 부모 표 열(metadata) DROP. IF EXISTS 사용.
+-- ■ 의존 순서: 위임 표의 FK 대상은 tenants(id) 이며 metadata 열과 상호 의존하지 않아 순서 제약이 없습니다. IF EXISTS 사용.
 --
 -- ■ 소유권·의존 가드 (2026-11-16 교차검토 보강)
 --   - schema_migrations.note 에 {"precheck":"absent"} 가 없으면 삭제하지 않는다(적용 전부터 있던 동명 객체일 수 있음).
@@ -121,7 +121,7 @@ BEGIN
     END IF;
 END $$;
 
--- 1. 위임 표 삭제 (자식 표이므로 의존성 없이 단독 삭제 가능, 연관 부분 색인 lookup_idx 도 함께 자동 삭제됨)
+-- 1. 위임 표 삭제 (metadata 열과 상호 의존하지 않으며, 연관 부분 색인 lookup_idx 도 함께 자동 삭제됨)
 DROP TABLE IF EXISTS public.project_document_approval_delegations;
 
 -- 2. 이벤트 표의 메타데이터 열 삭제 (기존 열과 행은 보존됨)

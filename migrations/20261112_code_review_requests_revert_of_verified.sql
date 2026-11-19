@@ -15,10 +15,13 @@
 --   1) 열: code_review_requests.revert_of_verified (jsonb, nullable, no default)
 --   2) 열: pipeline_jobs.revert_of_verified (jsonb, nullable, no default)
 --
--- ■ 1차 롤백(API 이전 버전 복귀) 시 잔존 객체의 무해성:
+-- ■ 1차 롤백(API 이전 버전 복귀) 시 잔존 객체의 호환성과 접근 경로:
 --   1) 새 열 참조: 구 버전 코드는 code_review_requests.revert_of_verified 및 pipeline_jobs.revert_of_verified 열을 참조하지 않는다.
---      새 열을 읽고 쓰는 곳은 신규 코드(app/api/code_review.py, scripts/pipeline-runner.sh) 뿐이므로,
---      API 컨테이너를 이전 판으로 되돌려도 잔존 열은 어떤 경로에서도 읽히거나 쓰이지 않고 무해하게 남는다.
+--      scripts/pipeline-runner.sh 의 revert_of_verified_json 결과는 pipeline_jobs 열에 기록되고 리뷰 요청에도 실린다.
+--      app/api/code_review.py 는 리뷰 열을 읽고 쓰며 pipeline_jobs 기록을 조회해 검증한다.
+--      API 컨테이너만 이전 판으로 되돌려도 별도 실행 중인 새 러너는 열 접근을 계속할 수 있다.
+--      1차 롤백은 두 nullable 열과 데이터를 남겨 호환성을 유지한다. 모든 경로가 미참조라는 뜻이 아니다.
+--      열을 영구 제거하는 down 은 별도 절차이며 아래 러너 호환성·백업·추가 쓰기 방지 조건을 충족해야 한다.
 --   2) 구 버전 쿼리 영향:
 --      구 버전 코드가 실행하는 INSERT INTO code_review_requests(...) 및 INSERT INTO pipeline_jobs(...) 문장은
 --      revert_of_verified 열을 지정하지 않는다. 새 열은 기본값 없는 nullable(NULL 허용) 열이므로 PostgreSQL 이
@@ -41,6 +44,11 @@
 --   되돌림 스크립트는 이번 마이그레이션이 추가한 두 열(code_review_requests.revert_of_verified,
 --   pipeline_jobs.revert_of_verified)만 정확히 제거하며, 두 표의 기존 열들과 모든 작업·리뷰 행 데이터는 보존한다.
 --   수동 되돌림 실행 시 신규 기능 운영 중 러너가 기록한 검증 메타데이터({sha, patch_id, files})가 열과 함께 영구 삭제되므로,
+--   CEO 승인 후 운영 세션이 신규 claim 을 중지하고 실행 중 작업 0건을 확인한다.
+--   모든 러너와 API 를 두 열을 사용하지 않는 판으로 전환하거나 열 부재 호환성을 확인한다.
+--   완료 조건: 두 열의 모든 읽기·쓰기 경로 호환성 확인, 실행 중 작업 0건, 두 백업 파일 및 행 수 확인.
+--   운영 세션은 백업 시작부터 down 완료까지 신규 claim 중지와 관련 쓰기 경로 차단을 유지하여 추가 쓰기를 방지한다.
+--   조건 미충족·추가 쓰기 발견 시 down 을 중단하고 백업부터 다시 수행한다.
 --   down 실행 전 두 COPY 백업을 반드시 완료한다(미완료 시 down 금지, CEO 승인 후 운영 세션):
 --     COPY (SELECT id, revert_of_verified FROM code_review_requests WHERE revert_of_verified IS NOT NULL)
 --       TO '/root/aads/backups/crr_revert_of_verified_before_rollback.csv' WITH CSV HEADER;
@@ -58,7 +66,7 @@
 --      마이그레이션과 schema_migrations 적용 기록이 함께 자동 ROLLBACK 된다. 수동 조치 없음.
 --      재시도는 원인(정방향 SQL 또는 verify.sql)을 수정한 뒤 다음 릴리스에서만 한다.
 --   2) COMMIT 후 실패(적용기의 postcheck 단계, exit=5):
---      API 전환을 하지 않는다(릴리스 중단). 잔존 스키마는 nullable·미참조라 그대로 둔다.
+--      API 전환을 하지 않는다(릴리스 중단). 잔존 스키마는 nullable 이며 새 러너가 계속 접근할 수 있으므로 그대로 둔다.
 --      적용 기록은 유지되며 지우지 않는다. down SQL 은 CEO 승인 후 운영 세션에서만 실행한다.
 --      담당은 CTO 세션이다. 재시도 조건: 원인 수정 후 다음 릴리스(파일 sha256 이 바뀌면 DRIFT 로 재적용되지 않으므로
 --      새 마이그레이션 파일로 보정한다).

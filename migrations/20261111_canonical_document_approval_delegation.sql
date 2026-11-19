@@ -50,7 +50,7 @@
 --   project_document_events.metadata 열만 정확히 제거하며, 기존 데이터(tenants 및 project_document_events 기존 열)는 보존한다.
 --   수동 되돌림 실행 시 신규 기능 운영 중 생성된 위임 행과 이벤트 메타데이터가 영구 삭제되므로,
 --   되돌림 실행 전 반드시 pg_dump -t project_document_approval_delegations 백업을 수행해야 한다(CEO 승인 사항).
---   의존 순서: 자식 표(project_document_approval_delegations) DROP -> 부모 표 열(metadata) DROP.
+--   의존 순서: 위임 표의 FK 대상은 tenants(id) 이며 project_document_events.metadata 와는 상호 의존하지 않아 순서 제약이 없다.
 --
 -- ■ 실패 시 복구 책임과 절차:
 --   적용기(apply_migration.sh)와 자동 검증기(release_migration_autoverify.py)는 단일 트랜잭션 안에서 이 파일을 실행한다.

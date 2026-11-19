@@ -1,7 +1,18 @@
 -- 롤백 정본: migrations/rollback/20261116_monitored_services_acct_fb_public.down.sql
 -- 실행 주체: CEO 승인 후 운영 세션. psql 변수 created_service_id, apply_started_at, apply_finished_at 을 전달한다.
--- 증거: 적용기는 schema_migrations.note 에 precheck만 저장하며 행 id·시각은 저장하지 않는다.
--- 운영 세션이 적용 직후 SELECT 결과(기존 행 부재, 신규 id, 적용 시작·종료 시각)를 핸드오버 DB에 기록한다.
+-- 증거 판정: schema_migrations.note 의 precheck 를 먼저 확인하되 이것만으로 적용 전 기존 행 부재를 판정하지 않는다.
+-- release_migration_precheck.py 는 표·열·색인만 검사하며 이 INSERT 는 objects=[] 이므로 precheck=absent 도 행 부재 증거가 아니다.
+-- CEO 승인 후 운영 세션이 적용 전에 SELECT clock_timestamp() AS apply_started_at; 및
+-- SELECT id, created_at FROM monitored_services WHERE server = 'cafe24_114' AND service_name = 'acct-fb-public';
+-- 결과를 핸드오버 DB에 기록하고 재조회한다. 기존 행이 있으면 down 삭제 대상이 아니다.
+-- 적용기는 XS 이전 값이나 신규 서비스 id 를 저장하지 않는다. scripts/apply_migration.sh 는
+-- 시작 clock_timestamp 를 세션 설정에만 두고 duration_ms 를 기록한다. schema_migrations.applied_at 은
+-- DEFAULT now() 또는 충돌 갱신 now() 로 트랜잭션 시작 시각이며 실제 적용 종료 시각이 아니다.
+-- 따라서 종료 시각은 적용 성공 반환 후 운영 세션이 SELECT clock_timestamp() AS apply_finished_at; 으로 기록한다.
+-- 적용 직후 위 서비스 SELECT 의 신규 id·created_at 과 schema_migrations.note, applied_at, duration_ms 도
+-- 핸드오버 DB에 기록하고 재조회한다. 시작·종료 시각은 운영 SELECT 기록값을 사용한다.
+-- note.precheck 및 적용 전 SELECT 부재·적용 후 신규 행 증거가 모두 있어야 삭제 여부를 판정한다.
+-- 기록 사이 동시 등록 가능성을 배제할 수 없으면 생성 소유권 미입증으로 down 을 실행하지 않는다.
 -- 대상: monitored_services 의 cafe24_114 / acct-fb-public HTTP 감시 항목.
 -- 조건: ON CONFLICT DO NOTHING 으로 멱등; 적용 전 기존 행 유무와 적용 시작·종료 시각 및 신규 행 id 를 기록한다.
 -- 금지: 기존 행 수정·삭제, 자동 복구 활성화 및 승인 없는 원격 재시작 금지.
