@@ -904,6 +904,30 @@ async def _check_branch_state(project: str, repo: str, push_branch: str) -> dict
     return {"state": state, "behind": behind, "ahead": ahead, "detail": ""}
 
 
+def _split_out_of_repo_paths(paths: list[str]) -> list[str]:
+    """GO100 운영 저장소(PROD_ROOT) 밖 경로만 골라 돌려준다.
+
+    PROD_ROOT 기준으로 정규화해 하위가 아니면 밖이다(`..` 탈출 포함). 단, 운영 릴리스
+    트리(/opt/go100 ...)와 의심 문자 경로는 R5B 차단 판정 대상이므로 밖으로 보지 않는다.
+    """
+    import posixpath
+
+    from app.services.go100_prod_tree_guard import (
+        PROD_ROOT,
+        has_suspicious_chars,
+        is_prod_tree_code_path,
+    )
+
+    out: list[str] = []
+    for p in paths:
+        if has_suspicious_chars(p) or is_prod_tree_code_path(p):
+            continue
+        full = posixpath.normpath(posixpath.join(PROD_ROOT, p))
+        if full != PROD_ROOT and not full.startswith(PROD_ROOT + "/"):
+            out.append(p)
+    return out
+
+
 async def _finalize_group(
     *,
     session_id: str,
@@ -924,6 +948,38 @@ async def _finalize_group(
     )
 
     is_go100 = targets_prod_root(project)
+    if is_go100 and all_ledger_paths:
+        # 저장소 밖 경로(/tmp 등)가 섞이면 git status 가 exit 128 로 죽어 세션이 영구 차단된다.
+        # 밖 경로는 git 에 넘기지 않고 정리됨으로 표시한 뒤 안쪽 경로만 판정한다.
+        out_paths = _split_out_of_repo_paths(all_ledger_paths)
+        if out_paths:
+            try:
+                await _mark_group(
+                    session_id=session_id,
+                    project=project,
+                    repo=repo,
+                    file_paths=[],
+                    ledger_file_paths=out_paths,
+                    status=_STATUS_RECONCILED_CLEAN,
+                    last_error="out_of_repo_path",
+                )
+            except Exception as exc:
+                logger.warning("mark_group out_of_repo_path failed: %s", exc)
+            out_set = set(out_paths)
+            all_ledger_paths = [p for p in all_ledger_paths if p not in out_set]
+            # 이후 일반 경로가 rows 로 경로를 재생성하므로 rows 에서도 밖 경로를 뺀다(정리 상태 덮어쓰기 방지).
+            rows = [r for r in rows if str(r.get("file_path") or "").strip() not in out_set]
+            if not all_ledger_paths:
+                return {
+                    "project": project,
+                    "repo": repo,
+                    "files": out_paths,
+                    "ok": True,
+                    "status": _STATUS_RECONCILED_CLEAN,
+                    "commit_sha": None,
+                    "commit_message": "",
+                    "detail": "reconciled clean: only out_of_repo_path entries",
+                }
     if is_go100 and all_ledger_paths and any(
         is_prod_tree_code_path(p) or has_suspicious_chars(p) for p in all_ledger_paths
     ):

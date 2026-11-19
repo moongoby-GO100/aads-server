@@ -644,3 +644,78 @@ def test_finalize_blocked_when_branch_state_unknown(monkeypatch, rev_list, fetch
     assert _no_write_commands(commands)
     assert _no_history_rewrite(commands)
     assert store.rows[0]["status"] == "dirty"
+
+
+def _go100_store(sid, paths):
+    return _FakeLedgerStore([
+        {"session_id": sid, "project": "GO100", "repo": "kis-autotrade-v4",
+         "file_path": p, "status": "dirty"}
+        for p in paths
+    ])
+
+
+def _run_go100_finalize(monkeypatch, store, sid, runner):
+    from app.services import workspace_change_tracker as tracker
+
+    monkeypatch.setattr(tracker, "_run_git_command", runner)
+    monkeypatch.setattr(tracker, "list_changes", store.list_changes)
+    monkeypatch.setattr(tracker, "_mark_group", store.mark_group)
+    rows = asyncio.run(store.list_changes(session_id=sid, project="GO100"))
+    return asyncio.run(tracker._finalize_group(
+        session_id=sid, project="GO100", repo="kis-autotrade-v4", rows=rows,
+    ))
+
+
+def test_go100_finalize_excludes_out_of_repo_paths_from_git_status(monkeypatch):
+    store = _go100_store("sess-oor-1", ["/tmp/x.mjs", "docs/a.md"])
+    commands = []
+
+    async def runner(project, repo, command):
+        commands.append(command)
+        return "[GO100 명령 실행 — exit=0]\n$ git ...\n"
+
+    result = _run_go100_finalize(monkeypatch, store, "sess-oor-1", runner)
+    assert result["ok"] is True
+    assert commands and all("/tmp/x.mjs" not in c for c in commands)
+    assert any("docs/a.md" in c for c in commands)
+    assert all(r["status"] == "reconciled_clean" for r in store.rows)
+    assert store.rows[0]["last_error"] == "out_of_repo_path"
+
+
+def test_go100_finalize_only_out_of_repo_skips_git(monkeypatch):
+    store = _go100_store("sess-oor-2", ["/tmp/x.mjs"])
+    commands = []
+
+    async def runner(project, repo, command):
+        commands.append(command)
+        return "[ERROR] should not be called"
+
+    result = _run_go100_finalize(monkeypatch, store, "sess-oor-2", runner)
+    assert result["ok"] is True
+    assert commands == []
+    assert store.rows[0]["status"] == "reconciled_clean"
+    assert store.rows[0]["last_error"] == "out_of_repo_path"
+
+
+def test_go100_finalize_in_repo_git_failure_still_blocks(monkeypatch):
+    store = _go100_store("sess-oor-3", ["/tmp/x.mjs", "backend/app/main.py"])
+
+    async def runner(project, repo, command):
+        return "[ERROR] fatal: not a git repository"
+
+    result = _run_go100_finalize(monkeypatch, store, "sess-oor-3", runner)
+    assert result["ok"] is False
+    assert result["reason"] == "go100_prod_tree_status_unknown"
+
+
+def test_go100_finalize_out_of_repo_state_kept_with_allowed_artifact(monkeypatch):
+    # 지적 1: 밖 경로 + R5B 허용 경로(artifacts/) 조합에서 정리 상태·사유가 덮어써지지 않는다.
+    store = _go100_store("sess-oor-4", ["/tmp/x.mjs", "artifacts/report.json"])
+
+    async def runner(project, repo, command):
+        return "[GO100 명령 실행 — exit=0]\n$ git ...\n"
+
+    _run_go100_finalize(monkeypatch, store, "sess-oor-4", runner)
+    tmp_row = next(r for r in store.rows if r["file_path"] == "/tmp/x.mjs")
+    assert tmp_row["status"] == "reconciled_clean"
+    assert tmp_row["last_error"] == "out_of_repo_path"
