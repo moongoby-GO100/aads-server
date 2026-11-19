@@ -524,3 +524,115 @@ if [[ "${DRY_RUN:-0}" != 1 ]]; then
     fi
 fi
 echo "[reclaim-wt] reclaimed=${reclaimed} freed=${freed}MB archived=${archived} skipped_active=${skipped_active} skipped_recent=${skipped_recent} skipped_unknown=${skipped_unknown} skipped_unknown_repo=${skipped_unknown_repo} skipped_archive_failed=${skipped_archive_failed} reclaimed_over_cap=${reclaimed_over_cap} status_source=${status_source}"
+
+# Opt-in scratch sweep is isolated from the registered-worktree result above.
+# Python handles byte-safe /proc reads; all filesystem scans have bounded runtimes.
+if [[ "${RUNNER_SCRATCH_RECLAIM:-0}" == 1 ]]; then
+    if ! timeout 240 python3 - <<'PY'
+import fnmatch
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+
+def sweep():
+    root = Path(os.environ.get('RUNNER_SCRATCH_ROOT', '/tmp'))
+    if not root.is_absolute() or root.is_symlink() or root.resolve(strict=True) != root or root == Path('/'):
+        raise ValueError('unsafe scratch root')
+    hours = os.environ.get('RUNNER_SCRATCH_RETENTION_HOURS', '24')
+    limit = os.environ.get('RUNNER_SCRATCH_MAX_REMOVE', '30')
+    if not re.fullmatch(r'[0-9]{1,6}', hours) or not re.fullmatch(r'[0-9]{1,6}', limit):
+        raise ValueError('invalid scratch retention or removal limit')
+    cutoff = time.time() - max(24, int(hours)) * 3600
+    prefixes = os.environ.get('RUNNER_SCRATCH_PREFIXES', 'go100-unit-release- go100-review- go100-fe-release- go100-release-verify- aads-rr-tree.').split()
+    if any(not re.fullmatch(r'[A-Za-z0-9._-]+', p) or '..' in p for p in prefixes):
+        raise ValueError('unsafe scratch prefix')
+    protect = os.environ.get('RUNNER_SCRATCH_PROTECT', '').split()
+    dry = os.environ.get('RUNNER_SCRATCH_DRY_RUN', '0') == '1'
+    removed = freed = recent = inuse = protected = selected = 0
+
+    def busy(path):
+        needle = os.fsencode(path)
+        try:
+            for proc in Path('/proc').iterdir():
+                if not proc.name.isdigit():
+                    continue
+                try:
+                    for field in ('environ', 'cmdline'):
+                        if needle in (proc / field).read_bytes():
+                            return True
+                    for link in [proc / 'cwd', *list((proc / 'fd').iterdir())]:
+                        try:
+                            target = os.readlink(link)
+                        except FileNotFoundError:
+                            # Exited processes, closed descriptors and kernel threads.
+                            continue
+                        if target == str(path) or target.startswith(str(path) + '/') or target == str(path) + ' (deleted)':
+                            return True
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+        except OSError:
+            return True  # Permission/incomplete-probe errors always preserve.
+        return False
+
+    for path in sorted(root.iterdir()):
+        name = path.name
+        if not any(name.startswith(p) for p in prefixes):
+            continue
+        if not re.fullmatch(r'[A-Za-z0-9._-]+', name) or '..' in name or path.is_symlink():
+            continue
+        if path.resolve(strict=True) != root / name:
+            continue
+        sidecar = name.endswith(('.log', '.rc'))
+        if (sidecar and not path.is_file()) or (not sidecar and not path.is_dir()):
+            continue
+        if (any(fnmatch.fnmatchcase(name, p) for p in ('pytest-of-*', 'systemd-private-*', 'de_*'))
+                or 'ckpt' in name.lower() or 'checkpoint' in name.lower()
+                or name in protect or str(path) in protect):
+            protected += 1
+            continue
+        if selected >= int(limit):
+            continue
+        scan = subprocess.run(['timeout', '15', 'find', str(path), '-xdev', '-newermt', '@' + str(cutoff), '-print', '-quit'], capture_output=True, check=False)
+        if scan.returncode:
+            print('[reclaim-scratch] warning: age scan failed ' + str(path), flush=True)
+            continue
+        if scan.stdout:
+            recent += 1
+            continue
+        if busy(path):
+            inuse += 1
+            continue
+        size = subprocess.run(['timeout', '15', 'du', '-sxm', '--', str(path)], capture_output=True, text=True, check=False)
+        if size.returncode:
+            print('[reclaim-scratch] warning: size scan failed ' + str(path), flush=True)
+            continue
+        mb = int(size.stdout.split()[0])
+        # Revalidate identity after the probes before handing the path to rm.
+        if path.is_symlink() or path.resolve(strict=True) != root / name:
+            continue
+        selected += 1
+        if dry:
+            print(f'[reclaim-scratch] would-remove {path} {mb}', flush=True)
+        else:
+            result = subprocess.run(['rm', '-rf', '--one-file-system', '--', str(path)], check=False)
+            if result.returncode:
+                print('[reclaim-scratch] warning: removal failed ' + str(path), flush=True)
+                continue
+            removed += 1
+            freed += mb
+    print(f'[reclaim-scratch] removed={removed} freed_mb={freed} skipped_recent={recent} skipped_inuse={inuse} skipped_protect={protected}', flush=True)
+
+
+try:
+    sweep()
+except Exception as exc:
+    print(f'[reclaim-scratch] warning: {exc}', flush=True)
+    raise SystemExit(1)
+PY
+    then
+        echo "[reclaim-scratch] warning: scratch sweep failed; worktree result unchanged" >&2
+    fi
+fi
