@@ -1,3 +1,4 @@
+-- 되돌림 정본: migrations/20261112_code_review_requests_revert_of_verified_rollback.sql; migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql 은 동일 내용의 호환 별칭 사본이다.
 -- 대상: code_review_requests 및 pipeline_jobs 의 revert_of_verified(jsonb nullable, 기본값 없음).
 -- 조건: IF NOT EXISTS 로 멱등 적용; lock_timeout 5s, statement_timeout 60s, 적용기 단일 트랜잭션 사용.
 -- 금지: 승인 경로 변경, 검증 메타데이터를 백업 없이 제거하거나 승인 게이트 우회 금지.
@@ -34,13 +35,13 @@
 --   기본값 없는 nullable 열을 추가하는 ALTER TABLE ... ADD COLUMN IF NOT EXISTS 문은
 --   표 전체 재작성(rewrite) 없이 시스템 카탈로그(pg_attribute) 갱신만 수행하므로 매우 짧은 ACCESS EXCLUSIVE 잠금만 요구된다.
 --   5초 잠금 제한(lock_timeout = '5s')을 명시하여 다른 트랜잭션의 잠금 대기가 5초를 초과하면
---   즉시 문장이 취소되고 전체 트랜잭션이 롤백되므로, 운영 쿼리 대기열 적체나 서비스 지연을 방지한다.
+--   즉시 문장이 취소되고 전체 트랜잭션이 롤백되므로, 잠금 대기 중 후속 쿼리가 최대 5초 지연될 수 있다.
 --
 -- ■ 수동 되돌림(down SQL)의 범위와 데이터 백업 책임:
 --   되돌림 스크립트는 이번 마이그레이션이 추가한 두 열(code_review_requests.revert_of_verified,
 --   pipeline_jobs.revert_of_verified)만 정확히 제거하며, 두 표의 기존 열들과 모든 작업·리뷰 행 데이터는 보존한다.
 --   수동 되돌림 실행 시 신규 기능 운영 중 러너가 기록한 검증 메타데이터({sha, patch_id, files})가 열과 함께 영구 삭제되므로,
---   되돌림 실행 전 백업을 권장한다(CEO 승인 사항):
+--   down 실행 전 두 COPY 백업을 반드시 완료한다(미완료 시 down 금지, CEO 승인 후 운영 세션):
 --     COPY (SELECT id, revert_of_verified FROM code_review_requests WHERE revert_of_verified IS NOT NULL)
 --       TO '/root/aads/backups/crr_revert_of_verified_before_rollback.csv' WITH CSV HEADER;
 --     COPY (SELECT job_id, revert_of_verified FROM pipeline_jobs WHERE revert_of_verified IS NOT NULL)

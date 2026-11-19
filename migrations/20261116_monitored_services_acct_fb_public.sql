@@ -1,3 +1,7 @@
+-- 롤백 정본: migrations/rollback/20261116_monitored_services_acct_fb_public.down.sql
+-- 실행 주체: CEO 승인 후 운영 세션. psql 변수 created_service_id, apply_started_at, apply_finished_at 을 전달한다.
+-- 증거: 적용기는 schema_migrations.note 에 precheck만 저장하며 행 id·시각은 저장하지 않는다.
+-- 운영 세션이 적용 직후 SELECT 결과(기존 행 부재, 신규 id, 적용 시작·종료 시각)를 핸드오버 DB에 기록한다.
 -- 대상: monitored_services 의 cafe24_114 / acct-fb-public HTTP 감시 항목.
 -- 조건: ON CONFLICT DO NOTHING 으로 멱등; 적용 전 기존 행 유무와 적용 시작·종료 시각 및 신규 행 id 를 기록한다.
 -- 금지: 기존 행 수정·삭제, 자동 복구 활성화 및 승인 없는 원격 재시작 금지.

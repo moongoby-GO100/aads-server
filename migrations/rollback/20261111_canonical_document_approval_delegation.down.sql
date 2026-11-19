@@ -1,3 +1,4 @@
+-- 정본: migrations/20261111_canonical_document_approval_delegation_rollback.sql; rollback/*.down.sql 은 동일 내용의 호환 별칭 사본이다.
 \set ON_ERROR_STOP on
 -- 주의: 이 스크립트는 내부 트랜잭션(BEGIN ... COMMIT)을 포함하므로 psql --single-transaction 옵션과 함께 실행하지 마십시오.
 -- 실행 예시: psql -v ON_ERROR_STOP=1 -X -f migrations/rollback/20261111_canonical_document_approval_delegation.down.sql
@@ -37,7 +38,7 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
--- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 심볼릭 링크).
+-- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 호환 별칭 사본).
 -- 실행은 scripts/run_migration_down.sh 로만 한다(지문 함수 선주입)
 -- 삭제 전 객체 존재·정의 확인 가드 (기존 객체 보호)
 DO $$

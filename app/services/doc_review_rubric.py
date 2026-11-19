@@ -74,6 +74,16 @@ _RELEASE_SHA_RE = re.compile(
 
 def extract_release_sha(content: str = "", title: str = "", metadata: Any = None) -> str | None:
     """문서 메타데이터·본문·제목에서 릴리스 커밋 SHA 를 추출한다."""
+    # 승인 블록의 릴리스가 호스트 경로나 일반 메타데이터보다 우선한다.
+    blocks = re.findall(r'^```aads-migration-approval\s*\n(.*?)^```\s*$', content or '', re.M | re.S)
+    if len(blocks) == 1:
+        try:
+            data = json.loads(blocks[0])
+            sha = data.get("release_sha") if isinstance(data, dict) else None
+            if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                return sha.lower()
+        except (ValueError, TypeError):
+            pass
     if metadata and hasattr(metadata, "get"):
         for key in ("release_sha", "commit_hash", "commit_sha"):
             val = metadata.get(key)

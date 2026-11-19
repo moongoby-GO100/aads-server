@@ -109,6 +109,27 @@ def describe_migration(item, text):
     return out
 
 
+def summary_sections(items, root):
+    """헤더의 승인 경계를 파일별로 요약하며 필수 절 판정은 그대로 유지한다."""
+    sections = []
+    for name in ('대상', '조건', '금지', '롤백'):
+        rows = []
+        for item in items:
+            lines = header_comments((root / item['file']).read_text())
+            selected = []
+            collecting = False
+            for line in lines:
+                if re.match(r'^[^:]+:', line):
+                    collecting = line.startswith(name + ':')
+                if collecting:
+                    selected.append(line)
+            defaults = {'대상': '승인 manifest에 기재된 SQL', '조건': 'CEO 승인 후 운영 세션에서 적용',
+                        '금지': '승인 게이트 우회 및 승인 범위 밖 실행 금지', '롤백': 'API 복귀는 SQL을 되돌리지 않으며 파일별 down 선행조건 확인'}
+            rows.append(f"- {item['file']}: " + (' '.join(selected) or defaults[name]))
+        sections.append('## ' + name + '\n\n' + '\n'.join(rows) + '\n')
+    return '\n'.join(sections) + '\n'
+
+
 def lookup(release_sha, root=None):
     # One SELECT, one statement snapshot; no approval files or environment decisions.
     query = f"""SELECT json_build_object(
@@ -335,6 +356,7 @@ def main():
                 target_db=state['target_db'], release_sha=sha, binding=args.binding, manifest=items,
                 manifest_sha256=manifest_hash(items), expires_at=(datetime.now(timezone.utc)+timedelta(hours=24)).isoformat())
             content = '# 릴리스 마이그레이션 적용 승인\n\nAPI 롤백은 적용된 SQL을 되돌리지 않음\n\n'
+            content += summary_sections(items, args.root)
             for item in items:
                 content += describe_migration(item, (args.root / item['file']).read_text())
             if notes is not None:

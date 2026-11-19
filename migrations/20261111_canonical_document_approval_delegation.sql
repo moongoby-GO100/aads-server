@@ -1,3 +1,4 @@
+-- 되돌림 정본: migrations/20261111_canonical_document_approval_delegation_rollback.sql; migrations/rollback/20261111_canonical_document_approval_delegation.down.sql 은 동일 내용의 호환 별칭 사본이다.
 -- 대상: 승인 위임 표·부분 색인 및 project_document_events.metadata(jsonb nullable, 기본값 없음).
 -- 조건: IF NOT EXISTS 로 멱등 적용; lock_timeout 5s, statement_timeout 60s, 적용기 단일 트랜잭션 사용.
 -- 금지: 스키마 적용 승인을 위임 부여·활성화 승인으로 사용하거나 action='approved' 의미를 변경하지 않는다.
@@ -42,7 +43,7 @@
 --   새 빈 표와 부분 색인 생성은 신규 객체에 대한 것이므로 잠금 경합이 없고 즉시 완료된다.
 --   project_document_events 표에 metadata 열을 추가하는 ALTER TABLE 문은 기본값 없는 nullable 열 추가이므로
 --   표 전체 재작성(rewrite) 없이 시스템 카탈로그 갱신만 수행하여 매우 짧은 ACCESS EXCLUSIVE 잠금만 소요된다.
---   5초 내 잠금을 얻지 못하면 문장이 취소되며 트랜잭션이 즉시 롤백되어 운영 트랜잭션을 지연시키지 않는다.
+--   5초 내 잠금을 얻지 못하면 문장이 취소되며 트랜잭션이 즉시 롤백되어 잠금 대기 중 후속 쿼리가 최대 5초 지연될 수 있다.
 --
 -- ■ 수동 되돌림(down SQL)의 범위와 데이터 백업 책임:
 --   되돌림 스크립트는 이번 마이그레이션이 생성한 project_document_approval_delegations 표(및 색인)와

@@ -1,3 +1,4 @@
+-- 정본: migrations/20261112_code_review_requests_revert_of_verified_rollback.sql; rollback/*.down.sql 은 동일 내용의 호환 별칭 사본이다.
 \set ON_ERROR_STOP on
 -- 주의: 이 스크립트는 내부 트랜잭션(BEGIN ... COMMIT)을 포함하므로 psql --single-transaction 옵션과 함께 실행하지 마십시오.
 -- 실행 예시: psql -v ON_ERROR_STOP=1 -X -f migrations/rollback/20261112_code_review_requests_revert_of_verified.down.sql
@@ -25,7 +26,7 @@
 --     ⑤ down 실행
 --   실행 및 승인 주체: CEO 승인 후 운영 세션.
 --
--- ■ 데이터 백업 권장 절차 (실행 전 필수)
+-- ■ down 실행 전 두 COPY 백업을 반드시 완료(미완료 시 down 금지)
 --   배포 후 운영 중에 러너가 기록한 검증 메타데이터({sha, patch_id, files})가 열과 함께 영구 삭제되므로
 --   실행 전 psql 클라이언트 측 \copy 로 호스트 경로에 백업합니다:
 --     1) \copy (SELECT id, revert_of_verified FROM public.code_review_requests WHERE revert_of_verified IS NOT NULL) TO '/root/aads/backups/crr_revert_of_verified_before_rollback.csv' WITH CSV HEADER
@@ -44,7 +45,7 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
--- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 심볼릭 링크).
+-- 스크립트 위치 기준 공통 함수(rollback 디렉터리의 파일은 같은 정본의 호환 별칭 사본).
 -- 실행은 scripts/run_migration_down.sh 로만 한다(지문 함수 선주입)
 -- 삭제 전 객체 존재·정의 확인 가드 (기존 객체 보호)
 DO $$

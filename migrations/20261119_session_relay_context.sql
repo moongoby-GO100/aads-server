@@ -1,3 +1,7 @@
+-- 롤백 실행 주체: CEO 승인 후 운영 세션. down 전 다음 COPY 백업을 반드시 완료한다.
+-- COPY (SELECT id, context FROM session_relay WHERE context IS NOT NULL)
+--   TO '/root/aads/backups/session_relay_context_before_rollback.csv' WITH CSV HEADER;
+-- schema_migrations.note 의 precheck=absent(적용 전 열 부재 기록)일 때만 열 삭제를 허용한다.
 -- 대상: session_relay.context text, nullable, 기본값 없음; 표 전체 재작성 없이 열을 추가한다.
 -- 조건: ADD COLUMN IF NOT EXISTS 로 멱등; 적용기 단일 트랜잭션에서 아래 SET LOCAL 제한을 사용한다.
 -- SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '60s'; 잠금 획득 실패 시 전체 롤백한다.
