@@ -2,7 +2,7 @@
 -- Rollback: disable GO100 approval route/consumer; retain table and all data.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
-CREATE TABLE go100_deploy_approval_snapshots (
+CREATE TABLE IF NOT EXISTS go100_deploy_approval_snapshots (
     id UUID PRIMARY KEY,
     run_id BIGINT NOT NULL UNIQUE REFERENCES deploy_runs(id) ON DELETE RESTRICT,
     approved_by TEXT NOT NULL CHECK (length(approved_by)>0),
@@ -21,11 +21,11 @@ CREATE TABLE go100_deploy_approval_snapshots (
     snapshot_hash TEXT NOT NULL CHECK (snapshot_hash ~ '^[0-9a-f]{64}$'),
     CHECK ((component='backend' AND lane='api_only') OR (component='frontend' AND lane='frontend'))
 );
-CREATE INDEX go100_deploy_approval_tenant_issued ON go100_deploy_approval_snapshots(tenant_id, issued_at);
-CREATE FUNCTION go100_deploy_approval_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE INDEX IF NOT EXISTS go100_deploy_approval_tenant_issued ON go100_deploy_approval_snapshots(tenant_id, issued_at);
+CREATE OR REPLACE FUNCTION go100_deploy_approval_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     RAISE EXCEPTION 'GO100 approval snapshots are immutable' USING ERRCODE='55000';
 END;
 $$;
-CREATE TRIGGER go100_deploy_approval_immutable BEFORE UPDATE OR DELETE OR TRUNCATE
+CREATE OR REPLACE TRIGGER go100_deploy_approval_immutable BEFORE UPDATE OR DELETE OR TRUNCATE
 ON go100_deploy_approval_snapshots FOR EACH STATEMENT EXECUTE FUNCTION go100_deploy_approval_immutable();
