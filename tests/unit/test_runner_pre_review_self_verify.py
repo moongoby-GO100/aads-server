@@ -551,3 +551,37 @@ def test_section_missing_file_fails(tmp_path):
     assert 'self_verify_failed' in result.stdout
     assert 'rc=4' in result.stdout
     assert 'skipped_missing_path' not in result.stdout
+
+
+def test_tsc_uses_changed_project_directory(tmp_path):
+    project = tmp_path / 'frontend'
+    (project / 'src').mkdir(parents=True)
+    (project / 'src/x.tsx').touch()
+    (project / 'package.json').touch()
+    (project / 'tsconfig.json').touch()
+    compiler = project / 'node_modules/.bin/tsc'
+    compiler.parent.mkdir(parents=True)
+    compiler.write_text('#!/bin/sh\npwd > ran-in\n')
+    compiler.chmod(0o755)
+    result = run('actual_changed_files=frontend/src/x.tsx; '
+                 'pre_review_self_verify job session "$DIR" "$INST"; printf "%s" "$SELF_VERIFY_PREFIX"',
+                 DIR=str(tmp_path), INST='`npx tsc --noEmit`',
+                 RUNNER_HEAVY_DIR=str(tmp_path / 'lane'))
+    assert result.returncode == 0, result.stderr
+    assert (project / 'ran-in').read_text().strip() == str(project)
+    assert 'cwd=frontend' in result.stdout
+    assert 'self_verify_pass' in result.stdout
+
+
+def test_tsc_without_compiler_is_unavailable(tmp_path):
+    result = gate(tmp_path, '`npx tsc --noEmit`')
+    assert result.returncode == 0
+    assert 'self_verify_unavailable' in result.stdout
+    assert 'self_verify_failed' not in result.stdout
+
+
+@pytest.mark.parametrize('rc', [0, 1, 127])
+def test_tsc_wrong_package_message_is_unavailable(rc):
+    result = run('self_verify_classify "npx tsc --noEmit" "$RC" "$OUTPUT"',
+                 RC=str(rc), OUTPUT='This is not the tsc command you are looking for')
+    assert result.stdout == 'unavailable'

@@ -5426,7 +5426,7 @@ if has_section:
     lines = selected
 seen = set()
 count = 0
-prefix = re.compile(r"^(?:bash scripts/run_unit_tests\.sh|scripts/run_unit_tests\.sh|pytest|python(?:3)? -m pytest|npx vitest run|npm test|npm run test|npx tsc --noEmit|ruff check)(?:\s|$)")
+prefix = re.compile(r"^(?:bash scripts/run_unit_tests\.sh|scripts/run_unit_tests\.sh|pytest|python(?:3)? -m pytest|npx vitest run|npm test|npm run test|(?:npx )?tsc|ruff check)(?:\s|$)")
 for line in lines:
     line = line.rstrip("\r\n")
     chunks = re.findall(r"`([^`\n]+)`", line)
@@ -5615,6 +5615,9 @@ if meta_file:
 }
 
 self_verify_classify() {
+    if [[ "${3:-}" == *"This is not the tsc command you are looking for"* ]] && [[ "$1" =~ ^(npx[[:space:]]+)?tsc([[:space:]]|$) ]]; then
+        printf unavailable; return
+    fi
     case "$2" in
         0) printf pass ;;
         127) printf unavailable ;;
@@ -5646,7 +5649,7 @@ pre_review_self_verify() {
             if (( unsafe_count <= 3 )); then unsafe_examples+="$cmd"$'\n'; fi
             continue
         fi
-        count=$((count + 1))
+        (( count < 3 )) || break
         mapfile -d '' -t argv < <(python3 -c 'import shlex,sys; sys.stdout.buffer.write(b"".join(x.encode()+b"\0" for x in shlex.split(sys.argv[1])))' "$cmd")
         glob_meta=$(mktemp)
         glob_summary=""
@@ -5669,13 +5672,68 @@ pre_review_self_verify() {
             python|python3|python3.[0-9]*|pytest) interp="$(command -v "${argv[0]}" 2>/dev/null || echo "${argv[0]}") (시스템 python)" ;;
             *) interp="${argv[0]:-?}" ;;
         esac
+        local is_tsc=0 has_project=0 run_cwd rel_cwd cwd_suffix binary
+        local -a run_dirs=() run_argv=()
+        if [[ "${argv[0]:-}" == tsc || ( "${argv[0]:-}" == npx && "${argv[1]:-}" == tsc ) ]]; then
+            is_tsc=1
+            for line in "${argv[@]}"; do
+                case "$line" in -p|--project|--project=*|-p?*) has_project=1 ;; esac
+            done
+        fi
+        if (( is_tsc && ! has_project )); then
+            mapfile -t run_dirs < <(python3 -c '
+import os, subprocess, sys
+root = os.path.realpath(sys.argv[1])
+if os.path.isfile(os.path.join(root, "tsconfig.json")) and os.access(os.path.join(root, "node_modules/.bin/tsc"), os.X_OK):
+    print(".")
+    sys.exit()
+paths = sys.argv[2].splitlines()
+if not paths:
+    for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
+        result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+        paths.extend(result.stdout.splitlines())
+seen = set()
+for path in paths:
+    if not path.endswith((".ts", ".tsx")):
+        continue
+    current = os.path.realpath(os.path.join(root, os.path.dirname(path)))
+    while current.startswith(root + os.sep):
+        if os.path.isfile(os.path.join(current, "tsconfig.json")) and os.path.isfile(os.path.join(current, "package.json")):
+            rel = os.path.relpath(current, root)
+            if rel not in seen:
+                seen.add(rel)
+                print(rel)
+            break
+        current = os.path.dirname(current)
+' "$dir" "${actual_changed_files:-}")
+            ((${#run_dirs[@]})) || run_dirs=(.)
+        else
+            run_dirs=(.)
+        fi
+        for rel_cwd in "${run_dirs[@]}"; do
+        (( count < 3 )) || break
+        count=$((count + 1))
+        run_cwd="$dir/$rel_cwd"
+        cwd_suffix=""
+        run_argv=("${argv[@]}")
+        if (( is_tsc )); then
+            cwd_suffix=" cwd=$rel_cwd"
+            binary="$run_cwd/node_modules/.bin/tsc"
+            if [[ "${argv[0]}" == npx && -x "$binary" ]]; then
+                run_argv=("$binary" "${argv[@]:2}")
+                interp="$binary"
+            elif [[ "${argv[0]}" == tsc && -x "$binary" && "$has_project" == 0 ]]; then
+                run_argv=("$binary" "${argv[@]:1}")
+                interp="$binary"
+            fi
+        fi
         out=$(mktemp)
         local acquired="${out}.acquired" dir_ready="${out}.dir-ready"
         rc=0
         # Use the same slot files as heavy-lane shims. Holding slot zero
         # serializes this gate with workers; nested shims must not reacquire it.
         (
-            cd "$dir" || exit 1
+            cd "$run_cwd" || exit 1
             lane="${RUNNER_HEAVY_DIR:-/run/aads-runner-heavy}"
             mkdir -p "$lane" || exit 125
             : >"$dir_ready"
@@ -5683,7 +5741,11 @@ pre_review_self_verify() {
             flock -w "$lock_wait" 200 || exit 125
             : >"$acquired"
             export AADS_HEAVY_HELD=slot-0
-            timeout "$secs" "${argv[@]}"
+            if (( is_tsc )) && { [[ "${argv[0]}" == npx ]] || (( ! has_project )); } && [[ ! -x "$binary" ]]; then
+                echo "TypeScript compiler unavailable"
+                exit 127
+            fi
+            timeout "$secs" "${run_argv[@]}"
         ) >"$out" 2>&1 || rc=$?
         if [[ ! -f "$dir_ready" ]]; then
             record_runner_event "$jid" "self_verify_skipped_bad_dir" || true
@@ -5699,10 +5761,10 @@ pre_review_self_verify() {
             break
         fi
         rm -f "$acquired"
-        verdict=$(self_verify_classify "$cmd" "$rc")
-        feedback="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'"$(tail -n 80 "$out")"
+        verdict=$(self_verify_classify "$cmd" "$rc" "$(cat "$out")")
+        feedback="[Runner self-verify] $cmd rc=$rc interpreter=$interp$cwd_suffix"$'\n'"$(tail -n 80 "$out")"
         rm -f "$out"
-        summary+="[Runner self-verify] $cmd rc=$rc interpreter=$interp"$'\n'
+        summary+="[Runner self-verify] $cmd rc=$rc interpreter=$interp$cwd_suffix"$'\n'
         if [[ -n "$glob_summary" ]]; then
             summary+="$glob_summary"
             feedback+=$'\n'"$glob_summary"
@@ -5719,6 +5781,7 @@ pre_review_self_verify() {
         if [[ "$verdict" == unavailable ]]; then
             db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "$feedback"), updated_at=NOW() WHERE job_id=$(sql_escape "$jid");"
         fi
+        done
     done < <(printf '%s\n' "$inst" | self_verify_extract "$dir")
     if (( unsafe_count > 0 )); then
         metadata=$(python3 -c 'import json,sys; print(json.dumps({"count":int(sys.argv[1]), "examples":sys.argv[2].splitlines()[:3]}))' "$unsafe_count" "$unsafe_examples")
