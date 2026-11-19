@@ -51,13 +51,13 @@ FROM ${AADS_RUNTIME_BASE} AS runtime
 COPY . .
 
 # The SDK 0.2.152 bundles Claude Code 2.1.259, which rejects claude-opus-5-5.
-# Pin the official 2.1.327 Linux x64 artifact in the immutable release image.
-# SHA256 is from the official 2.1.327 manifest, not the mutable "latest" URL.
-ADD --checksum=sha256:343c744baa14bfd38286a7cb90871051f04379956da6c5b803a9e66019a76ac9 \
-    https://downloads.claude.ai/claude-code-releases/2.1.327/linux-x64/claude \
+# Pin the official 2.1.328 Linux x64 artifact in the immutable release image.
+# SHA256 is from the official 2.1.328 manifest, not the mutable "latest" URL.
+ADD --checksum=sha256:a982d38030b97e750848add2cbb2df6d9a70d5544a22ca9b216a349ba25865e8 \
+    https://downloads.claude.ai/claude-code-releases/2.1.328/linux-x64/claude \
     /usr/local/bin/claude-aads
 RUN chmod 0555 /usr/local/bin/claude-aads && \
-    test "$(/usr/local/bin/claude-aads --version)" = '2.1.327 (Claude Code)'
+    test "$(/usr/local/bin/claude-aads --version)" = '2.1.328 (Claude Code)'
 
 RUN pip install --no-cache-dir --no-deps -e .
 
