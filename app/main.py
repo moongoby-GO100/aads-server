@@ -3091,6 +3091,7 @@ async def lifespan(app: FastAPI):
             from app.services.chat_service import (
                 _resume_single_stream as _rss_exec,
                 _active_bg_tasks as _abt_exec,
+                _execution_generation_alive as _generation_alive_exec,
                 _streaming_state as _ss_exec,
                 _interrupt_execution_if_newer_user as _ieu_exec,
                 _mark_execution_interrupted as _mei_exec,
@@ -3110,6 +3111,7 @@ async def lifespan(app: FastAPI):
                            te.requested_model,
                            te.resume_model_override,
                            te.retry_count,
+                           EXTRACT(EPOCH FROM (NOW() - te.heartbeat_at)) AS heartbeat_age,
                            COALESCE(te.error_message, '') AS error_message,
                            COALESCE(ph.id, te.assistant_message_id) AS assistant_message_id,
                            EXTRACT(EPOCH FROM (
@@ -3233,6 +3235,8 @@ async def lifespan(app: FastAPI):
                 for row in rows:
                     sid = row["session_id"]
                     execution_id = row["execution_id"]
+                    if _generation_alive_exec(execution_id):
+                        continue
                     if sid in _abt_exec and not _abt_exec[sid].done():
                         continue
                     _live_state = _ss_exec.get(sid)
@@ -3250,11 +3254,16 @@ async def lifespan(app: FastAPI):
                         if _state_age_sec < max(8, min_stale_seconds):
                             continue
                         logger.warning(
-                            "execution_resume_reclaim_stale_memory_state: session=%s execution=%s state_age=%.1fs",
+                            "execution_resume_reclaim_stale_memory_state: session=%s execution=%s state_age=%.1fs task_alive=False heartbeat_age=%s",
                             sid[:8],
                             execution_id[:8],
                             _state_age_sec,
+                            row.get("heartbeat_age"),
                         )
+                    logger.info(
+                        "execution_resume_reclaim_candidate: session=%s execution=%s task_alive=False heartbeat_age=%s reason=stale_lease_and_heartbeat",
+                        sid[:8], execution_id[:8], row.get("heartbeat_age"),
+                    )
                     _stale_sec = int(row["stale_seconds"] or 0)
                     if _stale_sec > 600:
                         await _mei_exec(

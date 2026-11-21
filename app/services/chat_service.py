@@ -6965,6 +6965,71 @@ def _begin_streaming_turn_state(session_id: str) -> Dict[str, Any]:
     return state
 
 
+# Execution identity is separate from the session background-task slot: direct SSE
+# and relay consumers may never occupy that slot, or may be displaced in it.
+_generation_tasks: dict[str, dict] = {}
+_generation_contexts: dict = {}
+
+
+def _execution_generation_alive(execution_id: str) -> bool:
+    record = _generation_tasks.get(str(execution_id))
+    task = record.get("task") if record else None
+    return task is not None and not task.done()
+
+
+async def _generation_heartbeat(session_id: str, record: dict) -> None:
+    while True:
+        await _heartbeat_asyncio.sleep(10)
+        eid = record.get("execution_id")
+        if not eid or not _execution_generation_alive(eid):
+            continue
+        state = _streaming_state.get(session_id)
+        if not state or str(state.get("execution_id")) != eid or state.get("completed"):
+            continue
+        state["updated_at"] = _bg_time.monotonic()
+        try:
+            async with get_pool().acquire() as conn:
+                if not await _heartbeat_execution_lease(conn, eid, record["owner_epoch"]):
+                    record["task"].cancel()
+                    return
+        except Exception as exc:
+            logger.warning("generation_heartbeat_failed execution=%s error=%s", eid[:8], exc)
+
+
+def _track_generation_stream(func):
+    from functools import wraps
+
+    @wraps(func)
+    async def tracked(session_id, *args, **kwargs):
+        record = {}
+        gen = func(session_id, *args, **kwargs)
+        pump = _heartbeat_asyncio.create_task(_generation_heartbeat(session_id, record))
+        try:
+            while True:
+                task = _heartbeat_asyncio.current_task()
+                record["task"] = task
+                _generation_contexts[task] = record
+                try:
+                    chunk = await gen.__anext__()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    if _generation_contexts.get(task) is record:
+                        _generation_contexts.pop(task, None)
+                yield chunk
+        finally:
+            pump.cancel()
+            await _heartbeat_asyncio.gather(pump, return_exceptions=True)
+            try:
+                await gen.aclose()
+            finally:
+                eid = record.get("execution_id")
+                if _generation_tasks.get(eid) is record:
+                    _generation_tasks.pop(eid, None)
+
+    return tracked
+
+
 def _bind_streaming_turn_execution(session_id: str, execution_id: str) -> Dict[str, Any]:
     """Bind only the current turn state to its newly-created execution."""
     state = _streaming_state.get(session_id)
@@ -6972,6 +7037,10 @@ def _bind_streaming_turn_execution(session_id: str, execution_id: str) -> Dict[s
         state = _begin_streaming_turn_state(session_id)
     state["execution_id"] = execution_id
     state["owner_epoch"] = _execution_owner_epochs.get(str(execution_id))
+    record = _generation_contexts.get(_heartbeat_asyncio.current_task())
+    if record is not None:
+        record.update(execution_id=str(execution_id), owner_epoch=state["owner_epoch"])
+        _generation_tasks[str(execution_id)] = record
     state["completed"] = False
     state.pop("_completed_delivered_at", None)
     return state
@@ -13712,6 +13781,7 @@ async def process_video_with_gemini(file_data: dict, user_message: str) -> str:
         return f"[동영상 분석 실패: {str(e)}]"
 
 
+@_track_generation_stream
 async def send_message_stream(
     session_id: str,
     content: str,
