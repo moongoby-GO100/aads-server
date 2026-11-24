@@ -21,6 +21,23 @@ _HEADLESS_LAUNCH_TIMEOUT_SECONDS = float(
 )
 
 
+def claim_bridge_session(session: Any, *, tenant_id: str = "", session_id: str = "",
+                         issue: bool = False) -> str:
+    """Bind only freshly acquired sessions; selecting cannot manufacture ownership."""
+    from app.services.browser_login_autosave import _bound_context
+    from app.services.tool_executor import current_tenant_id
+
+    tenant_id, session_id = _bound_context(str(current_tenant_id.get("") or tenant_id), session_id)
+    owner = (getattr(session, "endpoint", None).metadata or {}).get("aads_input_owner")
+    if owner:
+        return "" if owner == [tenant_id, session_id] else "bridge_session_owner_mismatch"
+    if not issue or not tenant_id or not session_id:
+        return "bridge_session_owner_unverified"
+    session.endpoint.metadata = dict(session.endpoint.metadata or {},
+                                     aads_input_owner=[tenant_id, session_id])
+    return ""
+
+
 async def _headless_context_with_timeout(service: Any) -> Any:
     return await asyncio.wait_for(
         service._headless_fallback_context(),
@@ -156,6 +173,9 @@ async def _acquire_pc_context(
                         f"[브라우저 업무 세션 확보 실패] {exc}; "
                         f"headless fallback 실패: {fallback_exc}"
                     )
+            error = claim_bridge_session(session, issue=True)
+            if error == "bridge_session_owner_mismatch":
+                return None, error
             session_id = session.session_id
         return await service.acquire_playwright_context(session_id=session_id or None)
 

@@ -4262,6 +4262,13 @@ async def tool_browser_connect(
         if action == "select":
             if not session_id:
                 return "[ERROR] session_id 필수"
+            from app.browser_bridge.aads_adapter import claim_bridge_session
+            selected = service.sessions.get(session_id)
+            if selected is None:
+                return "[ERROR] bridge_session_owner_unverified"
+            error = claim_bridge_session(selected, tenant_id=tenant_id)
+            if error:
+                return f"[ERROR] {error}"
             selected = service.select_session(session_id)
             return f"[Browser Bridge 선택 완료]\nsession_id: {selected.session_id}\nlabel: {selected.label}"
         if action == "ensure_pc_cdp":
@@ -4273,6 +4280,10 @@ async def tool_browser_connect(
                 activate=bool(activate),
                 work_key=work_key or "",
             )
+            from app.browser_bridge.aads_adapter import claim_bridge_session
+            error = claim_bridge_session(session, tenant_id=tenant_id, issue=True)
+            if error:
+                return f"[ERROR] {error}"
             endpoint = session.endpoint.public_dict()
             metadata = endpoint.get("metadata", {})
 
@@ -4336,6 +4347,10 @@ async def tool_browser_connect(
                 url=url or "about:blank",
                 preferred_port=preferred_port,
             )
+            from app.browser_bridge.aads_adapter import claim_bridge_session
+            error = claim_bridge_session(session, tenant_id=tenant_id, issue=True)
+            if error:
+                return f"[ERROR] {error}"
             endpoint = session.endpoint.public_dict()
             metadata = endpoint.get("metadata", {})
             return (
@@ -5065,6 +5080,44 @@ def _format_click_error(selector: str, code: str, message: str, detail: Dict[str
     return f"[ERROR] 클릭 실패 ({code or 'UNKNOWN'}) ({selector}): {message}{extra}"
 
 
+def _bridge_input_error(page: Any, tenant_id: str, fallback_session: str, *, submission: bool,
+                        browser_session_id: str = "") -> str:
+    from app.browser_bridge.aads_adapter import claim_bridge_session
+
+    if not _is_pc_agent_page(page) and not browser_session_id:
+        return ""
+    session = getattr(page, "_session", None)
+    if browser_session_id:
+        from app.browser_bridge.service import get_browser_bridge_service
+        session = get_browser_bridge_service().sessions.get(browser_session_id)
+    if session is None:
+        return "bridge_session_owner_unverified" if submission else ""
+    error = claim_bridge_session(session, tenant_id=tenant_id, session_id=fallback_session)
+    # Legacy/unregistered sessions may be filled, but cannot submit.
+    return error if submission or error == "bridge_session_owner_mismatch" else ""
+
+
+async def _submit_guard_error(page: Any, browser_session_id: str = "",
+                              browser_work_key: str = "", tenant_id: str = "",
+                              browser_lane: str = "") -> str:
+    from app.services import browser_observation_safety as safety
+    from app.services.browser_login_autosave import _bound_context
+
+    fallback = browser_session_id or browser_work_key
+    # Ownership is deterministic and precedes the potentially unavailable DOM probe.
+    error = _bridge_input_error(page, tenant_id, fallback, submission=True,
+                                browser_session_id=browser_session_id)
+    if error:
+        return error
+    if not safety.has_credential_binding(page):
+        return "vault_account_state_unverified"
+    tenant, chat = _bound_context(tenant_id, fallback)
+    return await safety.submission_guard(
+        page, browser_work_key, tenant_id=tenant, session_id=chat,
+        lane="pc" if _is_pc_agent_page(page) else (browser_lane or "server"),
+    )
+
+
 @_pc_agent_deadline
 async def tool_browser_click(
     selector: str,
@@ -5096,6 +5149,13 @@ async def tool_browser_click(
         page = await _current_page(ctx)
         from app.services import browser_login_autosave as _autosave
 
+        attrs = await _autosave._probe_attrs(page, selector)
+        looks_like_submit = not attrs or str(attrs.get("type", "")).lower() in {"submit", "image"} or any(
+            word in selector.lower() for word in ("submit", "login", "sign-in", "continue"))
+        if looks_like_submit:
+            error = await _submit_guard_error(page, browser_session_id, browser_work_key, tenant_id, browser_lane)
+            if error:
+                return f"[ERROR] {error}"
         origin_before = _autosave.page_origin(page)
         if _is_pc_agent_page(page):
             from app.browser_bridge.service import BrowserBridgeError
@@ -5246,6 +5306,10 @@ async def tool_browser_fill(
         from app.services import browser_login_autosave as _autosave
 
         fallback_session = browser_session_id or browser_work_key
+        error = _bridge_input_error(page, tenant_id, fallback_session, submission=False,
+                                    browser_session_id=browser_session_id)
+        if error:
+            return f"[ERROR] {error}"
         origin = _autosave.page_origin(page)
         ref_kind = _autosave.parse_vault_ref(value)
         scoped_tenant, _ = _autosave._bound_context(tenant_id, fallback_session)
@@ -5267,6 +5331,15 @@ async def tool_browser_fill(
                     if requested:
                         return requested
                 return verr
+            from app.services import browser_observation_safety as safety
+
+            # Keep legacy fill permissive without an account-state probe. Submission
+            # always validates the page binding and current account independently.
+            safety.remember_credential(
+                page, cred, str(cred.get("work_key") or browser_work_key), tenant_id=scoped_tenant,
+                session_id=_autosave._bound_context(scoped_tenant, fallback_session)[1],
+                lane="pc" if _is_pc_agent_page(page) else "server",
+            )
             secret = str(cred.get(ref_kind) or "")
             await page.fill(selector, secret, timeout=30_000)
             cred_id = str(cred.get("id") or "")
@@ -5336,6 +5409,10 @@ async def tool_browser_press_key(
         page = await _current_page(ctx)
         from app.services import browser_login_autosave as _autosave
 
+        if _autosave.is_submit_key(key):
+            error = await _submit_guard_error(page, browser_session_id, browser_work_key, tenant_id, browser_lane)
+            if error:
+                return f"[ERROR] {error}"
         origin_before = _autosave.page_origin(page)
         local_press = getattr(page, "press_key", None)
         if callable(local_press):

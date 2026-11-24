@@ -554,9 +554,8 @@ class BrowserRecipeExecutor:
         route = self._route(payload)
         self._context, error = await acquire_browser_context(
             browser_session_id=self.browser_session_id,
-            # A work key opens a local PC session.  Do not use it unless the
-            # recipe explicitly declares a native-auth requirement.
-            browser_work_key=self.browser_work_key if route["runtime"] == "pc_agent" else None,
+            # Lane chooses runtime; work key chooses the same page as browser tools.
+            browser_work_key=self.browser_work_key,
             url=str(payload.get("url") or "about:blank"),
             prefer_headless=route["runtime"] == "browser_agent",
             browser_lane="pc" if route["runtime"] == "pc_agent" else "server",

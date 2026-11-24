@@ -125,6 +125,10 @@ def remember_credential(page: Any, cred: dict, work_key: str, *, guard: bool = T
         }
 
 
+def has_credential_binding(page: Any) -> bool:
+    return page in _PAGE_CREDENTIALS
+
+
 def register_page_context(page: Any, context: Any) -> None:
     """Share redaction knowledge with sibling tabs, never submission authority."""
     try:

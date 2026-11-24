@@ -126,7 +126,8 @@ async def test_executor_prefers_browser_agent_and_returns_visual_dom_aria_eviden
 
     assert result["ok"] is True
     assert received["prefer_headless"] is True
-    assert received["browser_work_key"] is None
+    assert received["browser_work_key"] == "local-pc"
+    assert received["browser_lane"] == "server"
     assert result["route"] == "browser_agent"
     assert result["evidence"]["screenshot"]["status"] == "captured"
     assert result["evidence"]["dom"]["text"] == "읽기 전용 대시보드"
@@ -245,8 +246,9 @@ async def test_executor_fails_over_to_pc_lane_when_block_page_is_returned(monkey
     lanes = []
 
     async def acquire(**kwargs):
-        lanes.append(bool(kwargs.get("browser_work_key")))
-        return FakeContext(FakePage() if kwargs.get("browser_work_key") else BlockedPage()), None
+        lanes.append(kwargs["browser_lane"] == "pc")
+        assert kwargs["browser_work_key"] == "ceo-pc"
+        return FakeContext(FakePage() if kwargs["browser_lane"] == "pc" else BlockedPage()), None
 
     monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
     result = await executor_module.BrowserRecipeExecutor(browser_work_key="ceo-pc")(
@@ -280,7 +282,8 @@ async def test_long_page_containing_block_words_does_not_switch_lane(monkeypatch
     lanes = []
 
     async def acquire(**kwargs):
-        lanes.append(bool(kwargs.get("browser_work_key")))
+        lanes.append(kwargs["browser_lane"] == "pc")
+        assert kwargs["browser_work_key"] == "ceo-pc"
         return FakeContext(LongPage()), None
 
     monkeypatch.setattr(executor_module, "acquire_browser_context", acquire)
