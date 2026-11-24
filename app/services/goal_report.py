@@ -97,15 +97,32 @@ async def _post_to_lead(conn: Any, goal_id: str, text: str) -> bool:
     sid = await conn.fetchval(
         """
         SELECT s.id::text
-        FROM goal_task_links l
-        JOIN chat_sessions s ON s.id = l.task_id::uuid
-        WHERE l.goal_id = $1::uuid AND l.task_type = 'chat_session'
-          AND s.role_key LIKE '%Lead'
-        ORDER BY l.created_at LIMIT 1
+        FROM goals g
+        JOIN chat_sessions s ON s.tenant_id = g.tenant_id
+        WHERE g.id = $1::uuid AND (
+            s.id = g.owner_session_id OR (
+                g.owner_session_id IS NULL AND s.role_key LIKE '%Lead'
+                AND EXISTS (SELECT 1 FROM goal_task_links l
+                            WHERE l.goal_id=g.id AND l.task_type='chat_session'
+                              AND l.task_id=s.id::text AND l.tenant_id=g.tenant_id)
+            ) OR (
+                NOT EXISTS (SELECT 1 FROM chat_sessions owner
+                            WHERE owner.id=g.owner_session_id AND owner.tenant_id=g.tenant_id)
+                AND s.role_key LIKE '%Lead'
+                AND EXISTS (SELECT 1 FROM goal_task_links l
+                            WHERE l.goal_id=g.id AND l.task_type='chat_session'
+                              AND l.task_id=s.id::text AND l.tenant_id=g.tenant_id)
+            )
+        )
+        ORDER BY (s.id = g.owner_session_id) DESC NULLS LAST,
+                 (SELECT min(l.created_at) FROM goal_task_links l
+                  WHERE l.goal_id=g.id AND l.task_type='chat_session' AND l.task_id=s.id::text), s.id
+        LIMIT 1
         """,
         goal_id,
     )
     if not sid:
+        logger.warning("goal_report_no_valid_lead", goal_id=goal_id)
         return False
     await conn.execute(
         "INSERT INTO chat_messages (session_id, role, content, intent) "
@@ -495,3 +512,96 @@ async def report_weekly_goal_progress(
             )
 
     return {"reported": reported, "skipped_no_owner": skipped_no_owner}
+
+
+# Shared with read-only operational dry runs; no delivery or writes in this query.
+BLOCKED_TRIAGE_CANDIDATES_SQL = """
+SELECT g.id::text AS goal_id, m.id::text AS milestone_id, m.title,
+       s.id::text AS session_id, m.updated_at,
+       CASE upper(btrim(COALESCE(g.priority, '')))
+         WHEN 'P0-CRITICAL' THEN 0 WHEN 'P0' THEN 1 WHEN 'P1' THEN 2
+         WHEN 'P2' THEN 3 WHEN 'P3' THEN 4 ELSE 9 END AS priority_rank,
+       (SELECT count(*) FROM goal_task_links l
+        WHERE l.goal_id=g.id AND l.milestone_id=m.id AND l.tenant_id=g.tenant_id
+          AND l.superseded_by IS NULL
+          AND lower(trim(l.status)) = ANY($1::text[])) AS failed_links
+FROM goals g JOIN milestones m ON m.goal_id=g.id AND m.tenant_id=g.tenant_id
+JOIN chat_sessions s ON s.id=COALESCE(g.owner_session_id, m.owner_session_id)
+                    AND s.tenant_id=g.tenant_id
+WHERE g.status IN ('active', 'blocked') AND m.status='blocked'
+  AND g.paused_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM owner_pause p WHERE p.goal_id=g.id AND p.session_id=s.id)
+  AND NOT EXISTS (SELECT 1 FROM goal_task_links l
+                  WHERE l.milestone_id=m.id AND l.tenant_id=g.tenant_id
+                    AND l.created_at > NOW() - INTERVAL '24 hours')
+  AND NOT EXISTS (SELECT 1 FROM chat_deferred_reactions q
+                  WHERE q.session_id=s.id AND q.dedupe_key LIKE 'goal_blocked_triage:%'
+                    AND (q.created_at > NOW() - INTERVAL '24 hours'
+                         OR q.dedupe_key = 'goal_blocked_triage:' || s.id::text || ':' || $2))
+ORDER BY priority_rank, m.updated_at, m.id
+"""
+
+
+async def triage_blocked_milestones() -> dict[str, int]:
+    """Queue one actionable KST-daily digest per owner, within a global daily cap.
+
+    The durable queue is also the delivery ledger. Its unique-key lookup closes
+    a crash between queue commit and report-log insertion. Keep the daily lock
+    until delivery returns, including when another API slot runs this stage.
+    """
+    if os.getenv('GOAL_BLOCKED_TRIAGE_ENABLED', 'true').lower() not in ('1', 'true', 'yes'):
+        return {'sent': 0}
+    from app.core.db_pool import get_pool
+    from app.services.chat_service import enqueue_next_step_reaction
+    from app.services.goal_binding import FAILED_JOB_STATUSES
+
+    cap = max(0, int(os.getenv('GOAL_BLOCKED_TRIAGE_MAX_SESSIONS_PER_DAY', '10')))
+    day = datetime.now(_KST).date().isoformat()
+    sent = 0
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            # Nonblocking: other cycles/slots should not spend their timeout waiting.
+            locked = await conn.fetchval(
+                "SELECT pg_try_advisory_xact_lock(hashtext('goal_blocked_triage'))")
+            if not locked:
+                return {'sent': 0}
+            used = await conn.fetchval(
+                "SELECT count(DISTINCT session_id) FROM chat_deferred_reactions "
+                "WHERE dedupe_key LIKE 'goal_blocked_triage:%' "
+                "AND created_at >= ($1::text::date::timestamp AT TIME ZONE 'Asia/Seoul') "
+                "AND created_at < (($1::text::date + 1)::timestamp AT TIME ZONE 'Asia/Seoul')", day)
+            if used >= cap:
+                return {'sent': 0}
+            await conn.execute("""CREATE TABLE IF NOT EXISTS goal_report_log (
+                id bigserial PRIMARY KEY, goal_id uuid NOT NULL, subject_id uuid,
+                event text NOT NULL, created_at timestamptz NOT NULL DEFAULT NOW(),
+                UNIQUE (goal_id, subject_id, event))""")
+            rows = await conn.fetch(BLOCKED_TRIAGE_CANDIDATES_SQL, sorted(FAILED_JOB_STATUSES), day)
+            sessions: dict[str, list[Any]] = {}
+            for row in rows:
+                sessions.setdefault(row['session_id'], []).append(row)
+            for sid, milestones in sessions.items():
+                if used + sent >= cap:
+                    break
+                message = '막힌 마일스톤 일일 점검\n' + '\n'.join(
+                    f"· {m['title']} | id={m['milestone_id']} | 목표={m['goal_id']} | "
+                    f"미대체 실패 링크={m['failed_links']} | "
+                    f"마지막 변경={m['updated_at'].astimezone(_KST).isoformat()} (KST)"
+                    for m in milestones
+                ) + (
+                    '\n마일스톤마다 ① 승인 범위 안 재제출 ② 범위 축소 재설계 '
+                    '③ 실패 링크 정리(superseded_by 지정/분리) ④ 취소 의견 '
+                    '⑤ 대표님 상신 중 하나를 골라 실행하고 결과를 한 줄로 남겨라.'
+                )
+                # The same safe-reaction tool guard as retry_exhaust is applied here.
+                result = await enqueue_next_step_reaction(
+                    sid, message, dedupe_key=f'goal_blocked_triage:{sid}:{day}', reuse_seconds=0)
+                if result.get('queue_id'):
+                    sent += int(result.get('created', False))
+                    await conn.execute(
+                        "INSERT INTO goal_report_log (goal_id, subject_id, event) "
+                        "VALUES ($1::uuid, $2::uuid, $3) ON CONFLICT DO NOTHING",
+                        milestones[0]['goal_id'], sid, f'blocked_triage:{day}')
+                    logger.info('goal_blocked_triage_queued' , session_id=sid,
+                                queue_id=result['queue_id'], milestones=len(milestones))
+    return {'sent': sent}

@@ -776,6 +776,15 @@ async def lifespan(app: FastAPI):
                 except Exception as e_dl:
                     logger.warning("deadline_check_failed", error=str(e_dl)[:200])
 
+                try:
+                    from app.services.goal_report import triage_blocked_milestones
+
+                    await asyncio.wait_for(triage_blocked_milestones(), _GOAL_STAGE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("goal_blocked_triage_timeout", limit=_GOAL_STAGE_TIMEOUT)
+                except Exception as e_triage:
+                    logger.warning("goal_blocked_triage_failed", error=str(e_triage)[:200])
+
                 # 담당에게 일을 시켰으면 결과를 대표님께 알려야 한다.
                 # 이게 없으면 대표님이 화면을 직접 열어 확인해야 한다.
                 reported = {"reported": 0}
