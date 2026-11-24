@@ -6369,6 +6369,61 @@ claim_queued_job() (
     _claim_queued_job "$1"
 )
 
+# GO100 개발 작업은 허용목록 호스트(GO100_DEV_RUNNER_HOSTS, 기본 contabo92)의 러너만 claim 한다.
+# 목록 밖 러너는 GO100 중 DEPLOY_ONLY 헤더 작업만 가져간다. 빈 값은 제한 해제가 아니라 기본값이다.
+# 호스트 판정은 RUNNER_HOST_NAME 하나로 한다(본문 문자열·REWORK 로 호스트를 정하지 않는다).
+go100_dev_runner_hosts() {
+    local raw="${GO100_DEV_RUNNER_HOSTS:-contabo92}" item out="" sep=""
+    local -a items
+    IFS=',' read -r -a items <<< "$raw"
+    for item in "${items[@]}"; do
+        item="${item#"${item%%[![:space:]]*}"}"
+        item="${item%"${item##*[![:space:]]}"}"
+        [[ "$item" =~ ^[A-Za-z0-9_.-]+$ ]] || continue
+        out+="${sep}${item}"; sep=","
+    done
+    printf '%s' "${out:-contabo92}"
+}
+
+go100_dev_host_allowed() {
+    local item
+    local -a items
+    IFS=',' read -r -a items <<< "$(go100_dev_runner_hosts)"
+    for item in "${items[@]}"; do
+        [[ "$item" == "${RUNNER_HOST_NAME:-}" ]] && return 0
+    done
+    return 1
+}
+
+# 목록 밖 러너가 건너뛴 사실을 GO100_DEV_SKIP_LOG_SEC(기본 600)초에 1회만 log 로 남기고,
+# 허용 호스트가 GO100_DEV_WAIT_MARK_SEC(기본 900)초 넘게 가져가지 않은 queued 작업에
+# error_detail 사유만 남긴다(status 는 queued 그대로). 실패해도 claim 에는 영향이 없다.
+go100_dev_skip_note() {
+    local hosts stamp now last interval mark_sec count
+    hosts="$(go100_dev_runner_hosts)"
+    interval="${GO100_DEV_SKIP_LOG_SEC:-600}"; [[ "$interval" =~ ^[0-9]{1,6}$ ]] || interval=600
+    mark_sec="${GO100_DEV_WAIT_MARK_SEC:-900}"; [[ "$mark_sec" =~ ^[0-9]{1,6}$ ]] || mark_sec=900
+    stamp="${LOG_DIR:-/tmp}/.go100_dev_skip_${RUNNER_HOST_NAME//[^A-Za-z0-9_.-]/_}"
+    now=$(date +%s)
+    last=$(cat "$stamp" 2>/dev/null || echo 0); [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    (( now - last >= interval )) || return 0
+    printf '%s' "$now" > "$stamp" 2>/dev/null || true
+    count=$(db_exec "SELECT count(*) FROM pipeline_jobs p WHERE p.status='queued' AND p.project='GO100' AND NOT (${DEPLOY_ONLY_HEADER_SQL});" 2>/dev/null) || return 0
+    count="${count//[[:space:]]/}"
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || return 0
+    log "  GO100_DEV_CLAIM_SKIPPED host=${RUNNER_HOST_NAME} allowed=${hosts} queued=${count} reason=go100_dev_runner_host_allowlist — 허용 호스트 러너가 가져갈 때까지 대기" >&2
+    db_exec "UPDATE pipeline_jobs p SET error_detail='waiting_for_go100_dev_runner_host:${hosts}'
+             WHERE p.status='queued' AND p.project='GO100' AND NOT (${DEPLOY_ONLY_HEADER_SQL})
+               AND p.error_detail IS NULL AND p.created_at < NOW() - (${mark_sec} * INTERVAL '1 second');" >/dev/null 2>&1 || true
+}
+
+# claim SQL 에 더할 조건. 허용 호스트는 빈 문자열(SQL 바이트 불변).
+go100_dev_claim_sql() {
+    go100_dev_host_allowed && return 0
+    go100_dev_skip_note
+    printf ' AND NOT (p.project=%s AND NOT (%s))' "'GO100'" "$DEPLOY_ONLY_HEADER_SQL"
+}
+
 _claim_queued_job() {
     local filter="$1"
     local engine_predicate model_return_expr overflow_alias="" overflow_return=""
@@ -6413,10 +6468,11 @@ _claim_queued_job() {
     # 어느 서버가 집었는지 남긴다. runner_pid 는 숫자라 호스트를 구분하지 못한다.
     local claim_result
     if (( fallback_enabled )); then
-        claim_result=$(runner_overflow_db_claim "UPDATE pipeline_jobs${overflow_alias} SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
+        claim_result=$(runner_overflow_db_claim "UPDATE pipeline_jobs${overflow_alias} SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW(),
+             error_detail = CASE WHEN starts_with(error_detail, 'waiting_for_go100_dev_runner_host:') THEN NULL ELSE error_detail END
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)$(runner_overflow_claim_sql)
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)$(runner_overflow_claim_sql)$(go100_dev_claim_sql)
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
@@ -6451,10 +6507,11 @@ _claim_queued_job() {
             printf '%s\n' "$claim_result"
         fi
     else
-        runner_overflow_db_claim "UPDATE pipeline_jobs${overflow_alias} SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW()
+        runner_overflow_db_claim "UPDATE pipeline_jobs${overflow_alias} SET status='claimed', runner_host='${RUNNER_HOST_NAME}', updated_at=NOW(),
+             error_detail = CASE WHEN starts_with(error_detail, 'waiting_for_go100_dev_runner_host:') THEN NULL ELSE error_detail END
              WHERE job_id = (
                 SELECT p.job_id FROM pipeline_jobs p
-                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)$(runner_overflow_claim_sql)
+                WHERE p.status='queued' AND p.phase IN ('queued','coding') $filter ${RUNNER_MH_CLAIM_EXTRA:-} $(runner_pool_claim_extra_sql)$(runner_overflow_claim_sql)$(go100_dev_claim_sql)
                   AND (p.depends_on IS NULL OR EXISTS (
                        SELECT 1 FROM pipeline_jobs dep
                        WHERE dep.job_id = p.depends_on AND dep.status = 'done'))
