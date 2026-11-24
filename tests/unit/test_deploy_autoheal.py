@@ -190,6 +190,8 @@ def _disk_full_env(tmp_path, db_ok: bool, run_id: str = "4242") -> str:
         'COMPOSE_DIR="' + str(REPO_ROOT) + '"\n'
         'STATE_DIR="' + str(REPO_ROOT) + '"\n'
         'audit_control() { :; }\n'
+        'timeout() { shift; "$@"; }\n'
+        'docker() { deploy_db_exec "${@: -1}" >/dev/null; echo "$DEPLOY_RUN_ID"; }\n'
         'sql_escape() { echo "$1"; }\n'
         'prune_old_release_images() { :; }\n'
         'require_build_disk_free() { return 0; }\n'
@@ -448,8 +450,10 @@ def test_autoheal_record_outcome_noop_without_run_id():
 
 
 def _sql_capture_env(sql_log) -> str:
-    """deploy_db_exec 가 실행한 SQL 을 파일로 받아 두는 공통 스텁."""
+    """기존 DB 조회와 결과 기록의 psql 호출을 격리하는 공통 스텁."""
     return (
+        'timeout() { shift; "$@"; }\n'
+        'docker() { deploy_db_exec "${@: -1}"; }\n'
         'DEPLOY_RUN_ID="4242"\n'
         'audit_control() { :; }\n'
         'sql_escape() { echo "$1"; }\n'
@@ -457,6 +461,65 @@ def _sql_capture_env(sql_log) -> str:
         f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '
         'case "$1" in *"RETURNING id"*) echo 4242 ;; esac; }\n'
     )
+
+
+@pytest.mark.parametrize("outcome", ["retry_launched", "escalated"])
+@pytest.mark.parametrize("db_result", ["psql_failure", "zero_rows", "one_row", "wrong_row", "two_rows"])
+def test_outcome_write_checks_real_psql_contract(tmp_path, outcome, db_result):
+    """실제 deploy_db_exec 의 실패 은폐 계약을 유지한 채 쓰기만 엄격히 검증한다."""
+    sql_log = tmp_path / "sql.log"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    docker = bindir / "docker"
+    outputs = {"psql_failure": "4242\n", "zero_rows": "", "one_row": "4242\n",
+               "wrong_row": "4243\n", "two_rows": "4242\n4242\n"}
+    docker.write_text(
+        '#!/bin/bash\n'
+        f'printf "%s\\n" "${{@: -1}}" >> "{sql_log}"\n'
+        'if [[ "${@: -1}" == *"SET error_summary"* ]]; then\n'
+        '  [[ "$*" == *"-v ON_ERROR_STOP=1"* ]] || exit 9\n'
+        'fi\n'
+        f"printf '%s' '{outputs[db_result]}'\n"
+        f'exit {2 if db_result == "psql_failure" else 0}\n'
+    )
+    docker.chmod(0o755)
+    # Source the exact production helper, not a return-1 substitute.
+    helper = "deploy_db_exec() {" + DEPLOY_SH.read_text().split(
+        "deploy_db_exec() {", 1
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    env = (
+        f'export PATH="{bindir}:$PATH"\n'
+        'DEPLOY_RUN_ID=4242\nAADS_RELEASE_SHA=abc1234\n'
+        'sql_escape() { echo "$1"; }\n'
+        'deploy_db_available() { return 0; }\n'
+        + helper
+    )
+    out = _call(
+        'AUTOHEAL_SUCCESSOR_RUN_ID=4243; AUTOHEAL_LAST_REMEDIATION=route_clean_worktree; '
+        f'if autoheal_record_outcome {outcome} dirty_worktree; '
+        'then echo WRITE_OK; else echo WRITE_FAILED; fi', env_prefix=env,
+    )
+    sql = sql_log.read_text()
+    assert "RETURNING id" in sql
+    if db_result == "one_row":
+        assert "WRITE_OK" in out
+        assert "결과 기록: deploy_runs#4242" in out
+        assert ("SET status = 'superseded'" in sql) == (outcome == "retry_launched")
+    else:
+        assert "WRITE_FAILED" in out
+        assert "결과 기록 실패" in out
+        assert "결과 기록: deploy_runs" not in out
+        assert "원장 보정:" not in out
+        assert "SET status = 'superseded'" not in sql
+
+
+def test_outcome_db_unavailable_fails_closed():
+    out = _call(
+        'autoheal_record_outcome retry_launched dirty_worktree || echo WRITE_FAILED',
+        env_prefix='DEPLOY_RUN_ID=4242\ndeploy_db_available() { return 1; }\n',
+    )
+    assert "WRITE_FAILED" in out
+    assert "결과 기록 실패: DB 불가" in out
 
 
 def test_dirty_reroute_is_recorded_as_superseded_not_blocked(tmp_path):
@@ -762,6 +825,8 @@ def test_successor_failure_during_atomic_update_keeps_original(tmp_path):
     env = (
         'DEPLOY_RUN_ID=4242\nAADS_RELEASE_SHA=abc1234\n'
         'audit_control() { :; }\nsql_escape() { echo "$1"; }\n'
+        'timeout() { shift; "$@"; }\n'
+        'docker() { deploy_db_exec "${@: -1}" >/dev/null; echo "$DEPLOY_RUN_ID"; }\n'
         'deploy_db_available() { return 0; }\n'
         f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; }}\n'
     )
@@ -806,6 +871,8 @@ def test_drain_worker_failure_preserves_original_ledger(tmp_path):
         'DEPLOY_LAST_FAIL_ERROR="target slot active streams=1"\n'
         'COMPOSE_DIR=/no/such/dir\nSTATE_DIR=/no/such/dir\n'
         'audit_control() { :; }\n'
+        'timeout() { shift; "$@"; }\n'
+        'docker() { deploy_db_exec "${@: -1}" >/dev/null; echo "$DEPLOY_RUN_ID"; }\n'
         'sql_escape() { echo "$1"; }\n'
         'deploy_db_available() { return 0; }\n'
         f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; echo 4243; }}\n'
@@ -861,6 +928,8 @@ def test_queue_empty_worker_success_does_not_supersede_ledger(tmp_path):
         'export AADS_DEPLOY_AUTOHEAL_DRAIN_WAIT=0\n'
         f'COMPOSE_DIR="{tmp_path}"\nSTATE_DIR="{tmp_path}"\n'
         'audit_control() { :; }\n'
+        'timeout() { shift; "$@"; }\n'
+        'docker() { deploy_db_exec "${@: -1}" >/dev/null; echo "$DEPLOY_RUN_ID"; }\n'
         'sql_escape() { echo "$1"; }\n'
         'deploy_db_available() { return 0; }\n'
         f'deploy_db_exec() {{ printf "%s\\n" "$1" >> "{sql_log}"; '

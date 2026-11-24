@@ -727,17 +727,28 @@ autoheal_record_outcome() {
         return 0
     fi
     if ! deploy_db_available; then
-        autoheal_log "결과 기록 생략: DB 불가 (outcome=${outcome}, cause=${cause})"
-        return 0
+        autoheal_log "결과 기록 실패: DB 불가 (outcome=${outcome}, cause=${cause})"
+        return 1
     fi
     local note_sql
     note_sql="$(sql_escape "autoheal ${outcome}: cause=${cause}; remediation=${AUTOHEAL_LAST_REMEDIATION}; ${detail}")"
-    deploy_db_exec "
+    # deploy_db_exec 는 실패해도 0을 반환하는 best-effort 계약이다.
+    # 이 쓰기는 실제 psql 종료 상태와 갱신된 한 행을 모두 확인해야 한다.
+    local recorded_id
+    if ! recorded_id="$(timeout 10 docker exec aads-postgres psql -X -v ON_ERROR_STOP=1 -U aads -d aads -qAtc "
         UPDATE deploy_runs
            SET error_summary = CONCAT_WS(' | ', NULLIF(error_summary, ''), '${note_sql}'),
                updated_at = NOW()
-         WHERE id = ${DEPLOY_RUN_ID};
-    " >/dev/null 2>&1 || true
+         WHERE id = ${DEPLOY_RUN_ID}
+        RETURNING id;
+    " 2>/dev/null)"; then
+        autoheal_log "❌ 결과 기록 실패: deploy_runs#${DEPLOY_RUN_ID} (outcome=${outcome}, cause=${cause})"
+        return 1
+    fi
+    if [[ "$recorded_id" != "${DEPLOY_RUN_ID}" ]]; then
+        autoheal_log "❌ 결과 기록 실패: deploy_runs#${DEPLOY_RUN_ID} UPDATE 1행 확인 실패"
+        return 1
+    fi
     autoheal_log "결과 기록: deploy_runs#${DEPLOY_RUN_ID} ← ${outcome}/${cause}"
 
     # dirty 게이트/drain 대기에서 멈춘 배포는 "실패" 가 아니라 "경로 변경" 또는
