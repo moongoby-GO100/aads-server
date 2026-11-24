@@ -27,7 +27,7 @@ def function(name):
 
 def run(body):
     library = '\n'.join(function(n) for n in (
-        'go100_release_units_from_instruction', 'go100_remote_queue_release',
+        'go100_release_units_from_instruction', 'go100_release_scope_from_instruction', 'go100_remote_queue_release',
         'go100_deploy_is_remote', 'go100_deploy_call', 'pre_validate',
     ))
     return subprocess.run(['bash', '-c', library + '\n' + body],
@@ -131,5 +131,5 @@ def test_wiring_and_mirror():
     assert (ROOT / 'scripts/pipeline-runner.sh.local').read_text() == SOURCE
     assert 'go100_queue_backend_release "$current_sha" "$worktree_dir" "$_go100_release_units"' in SOURCE
     assert 'go100_queue_backend_release "$rollback_sha" "$worktree_dir" "$_go100_release_units"' in SOURCE
-    assert '"$_sha" "$_expected" "$_units" || _rc=$?' in SOURCE
-    assert 'GO100_DEPLOY_COMPONENT|GO100_RELEASE_TRADING_UNITS)$' in SOURCE
+    assert '"$_sha" "$_expected" "$_units" "$_scope" || _rc=$?' in SOURCE
+    assert 'GO100_DEPLOY_COMPONENT|GO100_RELEASE_SCOPE|GO100_RELEASE_TRADING_UNITS)$' in SOURCE
