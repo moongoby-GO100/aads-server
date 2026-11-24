@@ -1498,8 +1498,8 @@ def _normalize_turn_model_record(
             chain["raw_actual_model"] = raw_actual
 
     used_text = str(model_used or "").strip()
-    used_out = used_text
-    if used_text.lower() in _PROVIDER_ONLY_MODEL_LABELS and act_dim["model"]:
+    used_out = model_used if used_text else None
+    if (not used_text or used_text.lower() in _PROVIDER_ONLY_MODEL_LABELS) and act_dim["model"]:
         used_out = act_dim["model"]
 
     return {
@@ -1507,6 +1507,7 @@ def _normalize_turn_model_record(
         "raw_actual_model": raw_actual,
         "fallback_chain": chain,
         "model_used": used_out,
+        "model_record": {"reason": "actual_model_unconfirmed"} if not act_dim["model"] else None,
     }
 
 
@@ -12099,7 +12100,12 @@ async def _save_and_update_session(
     async with get_pool().acquire() as conn:
         async with conn.transaction():
             _exec_generation_id = None
-            _turn_model_record: Optional[Dict[str, Any]] = None
+            _turn_model_record = _normalize_turn_model_record(
+                requested_model=requested_model,
+                actual_model=actual_model or model_used,
+                fallback_info=fallback_info,
+                model_used=model_used,
+            )
             generated_image_urls = _generated_image_urls_from_tool_events(normalized_tools_called)
             if not generated_image_urls:
                 try:
@@ -12330,6 +12336,14 @@ async def _save_and_update_session(
                     thinking_summary=thinking_summary,
                 )
                 _assistant_msg_id = _saved_msg["id"] if _saved_msg else None
+            if _assistant_msg_id and _turn_model_record["model_record"]:
+                await conn.execute(
+                    """UPDATE chat_messages
+                       SET quality_details = COALESCE(quality_details, '{}'::jsonb) || $2::jsonb
+                       WHERE id = $1""",
+                    _assistant_msg_id,
+                    json.dumps({"model_record": _turn_model_record["model_record"]}),
+                )
             if _assistant_msg_id and response_duration_sec is not None:
                 try:
                     _response_duration_sec = max(0.0, round(float(response_duration_sec), 3))
