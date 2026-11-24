@@ -3109,6 +3109,7 @@ instruction_forbids_deploy() {
     # push_only 는 `push_only: true` 류 대입이거나 그 줄에 단어 하나만 있을 때만 선언이다.
     # 뒤에 한국어/영어 부정어가 붙은 줄("push_only 아님")은 선언이 아니다(runner.push_only_negation_misread).
     local re_rel_push_decl='^[[:space:]>*#-]*push[_[:space:]-]?only[[:space:]*`]*([:=][[:space:]*`]*(true|yes|1|on)([^[:alnum:]_]|$)|[[:space:][:punct:]]*$)'
+    local re_rel_push_true='push[_[:space:]-]?only[[:space:]]*[:=][[:space:]]*(true|yes|1|on)([^[:alnum:]_]|$)'
     local re_rel_push_off='push[_-]?only[[:space:]]*[:=][[:space:]]*(false|no|0|off)([^[:alnum:]_]|$)'
     local re_rel_policy_forbid='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(push[_[:space:]-]?only|commit[_[:space:]-]?only|no[_[:space:]-]?deploy|forbid(den)?|deny|denied|none|block(ed)?)([^[:alnum:]_]|$)'
     # 배포 허용 DEPLOY_POLICY 키워드 상수 (AADS-RUNNER-DEPLOY-POLICY-PUSH-UNTIL-GATE-20261111)
@@ -3116,7 +3117,7 @@ instruction_forbids_deploy() {
     local re_push_until='(커밋|commit|push|푸시)[^\n]{0,6}까지'
     local re_policy_decl='^[[:space:]>*#-]*(deploy(ment)?|release)[_[:space:]-]?policy[[:space:]]*[:=][[:space:]]*(.*)$'
     local re_policy_tok="^[[:space:]\`'\"\\*#>-]*([^[:space:]():;,\`'\"\\.]+)"
-    local re_policy_allowed='^(bluegreen|blue-green|blue_green|deploy|release|lane|standard|auto|reload(-api|_api)?|approval(_[[:alnum:]_]+)?|ceo(_[[:alnum:]_]+)?|장중|실매매)$'
+    local re_policy_allowed='^(bluegreen|blue-green|blue_green|deploy|release|lane|standard|auto|reload(-api|_api)?|approval(_[[:alnum:]_]+)?|ceo(_[[:alnum:]_]+)?|장중|실매매|표준)$'
     local re_push_input='^[[:space:]>*#-]*push[_[:space:]-]?only([^[:alnum:]_]|$)'
     while IFS= read -r rel_line || [[ -n "$rel_line" ]]; do
         rel_n=$((rel_n + 1))
@@ -3134,6 +3135,9 @@ instruction_forbids_deploy() {
                     pol_tok="${BASH_REMATCH[1],,}"
                 fi
                 if [[ -z "$pol_tok" ]] || ! [[ "$pol_tok" =~ $re_policy_allowed ]]; then
+                    rel_conflict=1
+                elif [[ "$rel_low" =~ $re_rel_push_true ]] && ! [[ "$rel_low" =~ $re_rel_push_off ]]; then
+                    # 허용 정책 줄 안의 `PUSH_ONLY: true` 도 선언 충돌이다(DEPLOY_ONLY 예외로 덮지 않는다).
                     rel_conflict=1
                 fi
             fi
@@ -3216,11 +3220,23 @@ instruction_forbids_deploy() {
     while [[ "$scrubbed" =~ $re_off_push ]]; do
         scrubbed="${scrubbed/"${BASH_REMATCH[0]}"/ }"
     done
-    # 줄 머리의 "push_only 아님/해제/not …" 은 선언이 아니므로 지운다(DEPLOY_POLICY 값 줄은 건드리지 않는다).
-    local re_push_neg_line='^[[:space:]>*#-]*push[_[:space:]-]?only[[:space:]]*[:=]?[[:space:]]*(아님|아니|아닙|없음|해제|(not|no|false|off)([^[:alnum:]_]|$))' neg_out=""
+    # "push_only 아님/해제/not …" 은 선언이 아니므로 줄 안 어디에 있든 지운다(runner.push_only_negation_midline).
+    # 부정어가 바로 뒤에 붙은 묶음만 지운다. DEPLOY_POLICY 제한값 줄(re_policy)은 건드리지 않는다.
+    # 줄 단위 짧은 입력 + 중첩 반복 없음(R-BG). 한 줄당 최대 8번만 지운다.
+    local re_push_neg_line='(^|[^[:alnum:]_])push[_[:space:]-]?only[[:space:]]*[:=]?[[:space:]]*(아님|아니|아닙|없음|해제|(not|no|false|off)([^[:alnum:]_]|$))' neg_out="" neg_n=0 neg_m=""
+    local re_push_neg_double='^[[:space:]]*(아님|아니|아닙|하지[[:space:]]*(않|못|마|말)|않|안[[:space:]]|못)'
     while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ $re_push_neg_line ]]; then
-            line="${line/"${BASH_REMATCH[0]}"/ }"
+        if ! [[ "$line" =~ $re_policy ]]; then
+            neg_n=0
+            while (( neg_n < 8 )) && [[ "$line" =~ $re_push_neg_line ]]; do
+                neg_m="${BASH_REMATCH[0]}"
+                # "해제 아님", "해제하지 않는다" 는 부정이 한 번 더 붙은 제한이므로 지우지 않는다.
+                if [[ "${BASH_REMATCH[2]}" == "해제" ]] && [[ "${line#*"$neg_m"}" =~ $re_push_neg_double ]]; then
+                    break
+                fi
+                line="${line/"$neg_m"/ }"
+                neg_n=$((neg_n + 1))
+            done
         fi
         neg_out+="${line}${nl}"
     done <<< "$scrubbed"

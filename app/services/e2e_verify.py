@@ -200,6 +200,7 @@ DEPLOY_POLICY_ALLOWED_KEYWORDS = (
     "approval_gated",
     "ceo",
     "장중",
+    "표준",
     "실매매",
 )
 
@@ -214,6 +215,31 @@ _PUSH_ASSIGN_TRUE_RE = re.compile(
     r"push[_-]?only\s*[:=]\s*(?:true|yes|1|on)(?![a-z0-9_])|^[ \t>*#-]*push[_ -]?only[ \t`*]*$",
     re.IGNORECASE,
 )
+
+
+# "push_only 아님/해제/not …" 은 선언이 아니다 — 줄 안 어디에 있든 지운다(runner.push_only_negation_midline).
+# 셸 instruction_forbids_deploy 의 re_push_neg_line 과 같은 규칙이다 — 한쪽만 고치지 마라.
+_PUSH_NEG_RE = re.compile(
+    r"(?<![a-z0-9_])push[_ -]?only[ \t]*[:=]?[ \t]*(아님|아니|아닙|없음|해제|(?:not|no|false|off)(?![a-z0-9_]))"
+)
+# "해제 아님", "해제하지 않는다" 처럼 부정이 한 번 더 붙으면 제한이 유지되므로 지우지 않는다.
+_PUSH_NEG_DOUBLE_RE = re.compile(r"^[ \t]*(?:아님|아니|아닙|하지[ \t]*(?:않|못|마|말)|않|안[ \t]|못)")
+_PUSH_NEG_MAX_PER_LINE = 8
+
+
+def _scrub_push_only_negation(lowered: str) -> str:
+    out: list[str] = []
+    for line in lowered.split("\n"):
+        if not _DEPLOY_POLICY_RE.match("\n" + line):
+            for _ in range(_PUSH_NEG_MAX_PER_LINE):
+                m = _PUSH_NEG_RE.search(line)
+                if not m:
+                    break
+                if m.group(1) == "해제" and _PUSH_NEG_DOUBLE_RE.match(line[m.end():]):
+                    break
+                line = line[: m.start()] + " " + line[m.end():]
+        out.append(line)
+    return "\n".join(out)
 
 
 def _is_allowed_policy_token(token: str) -> bool:
@@ -352,7 +378,10 @@ def instruction_is_push_only(instruction: str) -> bool:
         conflict = has_forbidden_policy
         if not conflict:
             for pline in policy_input_lines:
-                if _PUSH_DECL_RE.match(pline) and not _PUSH_ONLY_OFF_RE.search(pline):
+                if _PUSH_ONLY_OFF_RE.search(pline.lower()):
+                    continue
+                # DEPLOY_POLICY 줄 안의 `PUSH_ONLY: true` 도 선언 충돌이다(셸 rel_conflict 와 동일).
+                if _PUSH_DECL_RE.match(pline) or _POLICY_LINE_RE.match(pline):
                     if _PUSH_ASSIGN_TRUE_RE.search(pline):
                         conflict = True
                         break
@@ -365,6 +394,7 @@ def instruction_is_push_only(instruction: str) -> bool:
     text_to_check = "\n".join(policy_input_lines) if has_policy_line else raw
     lowered = text_to_check.lower()
     scrubbed = _PUSH_ONLY_OFF_RE.sub(" ", lowered)
+    scrubbed = _scrub_push_only_negation(scrubbed)
     if _check_wide_deploy_forbid(scrubbed):
         return True
     return any(

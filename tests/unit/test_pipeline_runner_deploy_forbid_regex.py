@@ -393,6 +393,41 @@ def test_push_only_negation_does_not_loosen_policy_lines(gate_fn, locale):
     assert _decide_in_locale(gate_fn, "PUSH_ONLY 아님.\n배포 금지", locale) == "FORBID"
 
 
+# ── 줄 중간 부정 표현 (runner.push_only_negation_midline, 2026-11-24) ──
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_POLICY: 표준 배포(deploy-go100.sh 백엔드 bluegreen + 프런트 blue-green). PUSH_ONLY 아님 — GO100 안정화 기간 정책.",
+        "DEPLOY_POLICY: bluegreen",
+        "TASK_ID: X\n본문 이번 잡은 PUSH_ONLY 해제 상태로 반영한다",
+        "이번 잡은 push-only 아님, 정상 반영한다 (PUSH_ONLY: false)",
+    ],
+)
+def test_push_only_negation_midline_is_allowed(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "ALLOW"
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DEPLOY_POLICY: 표준 배포. PUSH_ONLY: true",
+        "DEPLOY_POLICY: 표준 배포. PUSH_ONLY 아님 하지만 PUSH_ONLY: true",
+        "설명 문장 PUSH_ONLY 해제 아님\nPUSH_ONLY",
+        "설명 문장 PUSH_ONLY 해제 아님",
+        "이번 잡은 PUSH_ONLY 해제하지 않는다",
+        "DEPLOY_ONLY: true\nDEPLOY_POLICY: 표준 배포. PUSH_ONLY: true",
+        "DEPLOY_POLICY: push_only 아님",
+        "본문 PUSH_ONLY 아님.\n배포 금지",
+    ],
+)
+def test_push_only_midline_negation_keeps_forbids(gate_fn, text, locale):
+    assert _decide_in_locale(gate_fn, text, locale) == "FORBID"
+
+
 @pytest.mark.parametrize("locale", LOCALES)
 @pytest.mark.parametrize(
     "text",
@@ -445,3 +480,28 @@ def test_scripts_are_byte_identical():
     main_script = (ROOT / "scripts" / "pipeline-runner.sh").read_bytes()
     local_script = (ROOT / "scripts" / "pipeline-runner.sh.local").read_bytes()
     assert main_script == local_script
+
+
+# ── 셸 게이트와 Python instruction_is_push_only 의 판정 일치 (한쪽만 고치지 마라) ──
+
+_PARITY_CASES = [
+    "DEPLOY_POLICY: 표준 배포(deploy-go100.sh 백엔드 bluegreen + 프런트 blue-green). PUSH_ONLY 아님 — GO100 안정화 기간 정책.",
+    "DEPLOY_POLICY: bluegreen",
+    "TASK_ID: X\n본문 이번 잡은 PUSH_ONLY 해제 상태로 반영한다",
+    "이번 잡은 push-only 아님, 정상 반영한다 (PUSH_ONLY: false)",
+    "DEPLOY_POLICY: 표준 배포. PUSH_ONLY: true",
+    "DEPLOY_ONLY: true\nDEPLOY_POLICY: 표준 배포. PUSH_ONLY: true",
+    "DEPLOY_POLICY: 표준 배포. PUSH_ONLY 아님 하지만 PUSH_ONLY: true",
+    "설명 문장 PUSH_ONLY 해제 아님",
+    "이번 잡은 PUSH_ONLY 해제하지 않는다",
+    "DEPLOY_POLICY: push_only 아님",
+    "본문 PUSH_ONLY 아님.\n배포 금지",
+]
+
+
+@pytest.mark.parametrize("text", _PARITY_CASES)
+def test_python_gate_matches_shell_gate(gate_fn, text):
+    from app.services.e2e_verify import instruction_is_push_only
+
+    shell = _decide_in_locale(gate_fn, text, LOCALES[0])
+    assert ("FORBID" if instruction_is_push_only(text) else "ALLOW") == shell
