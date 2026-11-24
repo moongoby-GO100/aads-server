@@ -1,6 +1,6 @@
 """클로브 수집 1시간 자동 실행 — 연결된 회사마다 obys_collection_service.run_collection 을 부른다.
 
-원장 확정은 하지 않는다(수집은 검토함까지). 앱 lifespan 에는 붙지 않고 CLI(--once)로만 돈다:
+수집 성공 후 자동 확정은 OBYS_AUTO_CONFIRM_ENABLED=1일 때만 수행한다. 앱 lifespan 에는 붙지 않고 CLI(--once)로만 돈다:
     python -m app.services.obys_collection_scheduler --once
 호출은 카페24 systemd timer → 래퍼 → docker exec 이다(deploy/acct/).
 """
@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.services import clobe_mcp_client as clobe
+from app.services import obys_auto_confirm as auto_confirm
 from app.services import obys_backfill_approval as approval
 from app.services import obys_collection_core as core
 from app.services import obys_collection_service as svc
@@ -183,6 +184,22 @@ def _worst(statuses: list[str]) -> str:
     return "succeeded"
 
 
+async def _auto_confirm_after_collection(company_id: str, result: dict[str, Any], started_at: datetime) -> None:
+    """수집 성공 후만 실행. 자동 확정 예외는 다음 수집으로 전파하지 않는다."""
+    if not auto_confirm.enabled() or result.get("status") != "succeeded":
+        return
+    try:
+        conn = await svc._connect()
+        try:
+            link = await svc._get_link(conn, company_id)
+            svc._scoped_link_or_raise(link)
+        finally:
+            await conn.close()
+        await auto_confirm.auto_confirm_business(link["tenant_id"], link["business_id"], since=started_at)
+    except Exception:
+        logger.exception("obys_auto_confirm_failed company_id=%s", company_id)
+
+
 async def _run_company(
     company_id: str, kind_states: dict[str, dict[str, Any]], now: datetime, today: date, instance: str,
     deadline: float,
@@ -199,6 +216,7 @@ async def _run_company(
             statuses.append("error")
             out["detail"] = "budget_exhausted"
             break
+        started_at = datetime.now(timezone.utc)
         try:
             res = await asyncio.wait_for(
                 svc.run_collection(company_id, kinds=g["kinds"], period_start=g["start"], period_end=g["end"],
@@ -225,6 +243,7 @@ async def _run_company(
             statuses.append("error")
             out["detail"] = type(exc).__name__
             break
+        await _auto_confirm_after_collection(company_id, res, started_at)
         status = str(res.get("status") or "error")
         statuses.append(status)
         out["runs"].extend(
@@ -313,6 +332,7 @@ async def run_backfill(
             break
         if i:
             await asyncio.sleep(pause_seconds)
+        started_at = datetime.now(timezone.utc)
         try:
             res = await svc.run_collection(cid, kinds=kinds, period_start=start, period_end=end, mode="live", instance=instance)
         except svc.CollectionError as exc:
@@ -322,6 +342,7 @@ async def run_backfill(
         except Exception as exc:  # noqa: BLE001 - 한 회사의 예외가 다른 회사를 막지 않는다
             results.append({"company_id": cid, "status": "error", "detail": type(exc).__name__})
             continue
+        await _auto_confirm_after_collection(cid, res, started_at)
         results.append({"company_id": cid, "status": str(res.get("status") or "error"), "detail": res.get("error_code"),
                         "runs": [{"kind": r.get("data_kind"), "status": r.get("status"), "error_code": r.get("error_code"),
                                   "counts": r.get("counts")} for r in res.get("runs") or []]})
