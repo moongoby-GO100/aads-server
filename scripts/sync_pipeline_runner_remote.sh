@@ -302,7 +302,7 @@ if hashlib.sha256(Path(archive).read_bytes()).hexdigest() != expected:
 allowed = {str(runner), *(str(runner.parent / name) for name in (
     'runner_busy_lib.sh', 'claude_model_contract.py', 'runner_cli_usage.py',
     'reclaim_runner_worktrees.sh', 'aag-brief.py', 'runner_handover_write.py',
-    'runner_antigravity_exec.py')), '/etc/systemd/system/' + service}
+    'runner_antigravity_exec.py', 'runner_build_verify.py')), '/etc/systemd/system/' + service}
 with tempfile.TemporaryDirectory(prefix='aads-runner-apply-') as directory:
     staging = Path(directory)
     with tarfile.open(archive, 'r') as bundle:
@@ -416,7 +416,8 @@ rows = [(script_dir / 'runner_busy_lib.sh', directory / 'runner_busy_lib.sh', 0o
         (Path(repo) / 'tools/aag/brief.py', directory / 'aag-brief.py', 0o644, False),
         (script_dir / 'runner_cli_usage.py', directory / 'runner_cli_usage.py', 0o644, False),
         (script_dir / 'runner_handover_write.py', directory / 'runner_handover_write.py', 0o644, False),
-        (script_dir / 'runner_antigravity_exec.py', directory / 'runner_antigravity_exec.py', 0o644, False)]
+        (script_dir / 'runner_antigravity_exec.py', directory / 'runner_antigravity_exec.py', 0o644, False),
+        (script_dir / 'runner_build_verify.py', directory / 'runner_build_verify.py', 0o644, False)]
 reclaim = script_dir / 'reclaim_runner_worktrees.sh'
 if reclaim.is_file():
     rows.append((reclaim, directory / reclaim.name, 0o755, False))

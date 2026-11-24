@@ -133,6 +133,7 @@ def test_launcher_exports_every_file_the_sync_installs_or_sources():
         "scripts/runner_cli_usage.py",
         "scripts/runner_handover_write.py",
         "scripts/runner_antigravity_exec.py",
+        "scripts/runner_build_verify.py",
         "tools/aag/brief.py",
     ):
         assert needed in required
@@ -323,6 +324,7 @@ case "$cmd" in
             runner_cli_usage.py) f="$FAKE_REPO/scripts/runner_cli_usage.py" ;;
             runner_handover_write.py) f="$FAKE_REPO/scripts/runner_handover_write.py" ;;
             runner_antigravity_exec.py) f="$FAKE_REPO/scripts/runner_antigravity_exec.py" ;;
+            runner_build_verify.py) f="$FAKE_REPO/scripts/runner_build_verify.py" ;;
             runner_busy_lib.sh) f="$FAKE_REPO/scripts/runner_busy_lib.sh" ;;
             reclaim_runner_worktrees.sh) f="$FAKE_REPO/scripts/reclaim_runner_worktrees.sh" ;;
             *) exit 0 ;;
@@ -477,6 +479,23 @@ def test_sync_ships_runner_antigravity_exec_helper():
     required = launcher[launcher.index("REQUIRED_FILES=("):launcher.index(")", launcher.index("REQUIRED_FILES=("))]
     assert "scripts/runner_antigravity_exec.py" in required
     assert (ROOT / "scripts" / "runner_antigravity_exec.py").is_file()
+
+
+def test_sync_ships_runner_build_verify_helper():
+    """pipeline-runner.sh 의 pre_review_build_verify 는 설치 디렉터리의 runner_build_verify.py 를 쓴다.
+
+    export·번들·설치 허용 중 하나라도 빠지면 원격 러너에서 build_verify_unavailable 만 남고 빌드 증거가 사라진다.
+    """
+    script = (ROOT / "scripts" / "sync_pipeline_runner_remote.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "pipeline-runner.sh").read_text(encoding="utf-8")
+
+    assert "runner_build_verify.py" in runner
+    assert "(script_dir / 'runner_build_verify.py', directory / 'runner_build_verify.py', 0o644, False)" in script
+    assert "'runner_build_verify.py'" in script[script.index("allowed = {"):script.index("/etc/systemd/system/' + service}")]
+    launcher = _launcher()
+    required = launcher[launcher.index("REQUIRED_FILES=("):launcher.index(")", launcher.index("REQUIRED_FILES=("))]
+    assert "scripts/runner_build_verify.py" in required
+    assert (ROOT / "scripts" / "runner_build_verify.py").is_file()
 
 
 def test_same_host_bundle_survives_local_archive_cleanup(tmp_path):

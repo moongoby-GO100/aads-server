@@ -5883,6 +5883,76 @@ for path in paths:
     return 0
 }
 
+# RUNNER_BUILD_VERIFY: 지시서가 지정한 빌드·게이트 명령을 작업자 대신 러너가 리뷰 전에 실행한다(H7).
+# 줄이 없으면 아무 일도 하지 않는다. 파싱·판정은 scripts/runner_build_verify.py (명령은 argv 로만 전달).
+# 결과 머리 '[Runner build-verify] ...' 는 SELF_VERIFY_PREFIX 에 붙어 리뷰 입력으로 넘어간다.
+pre_review_build_verify() {
+    local jid="$1" sid="$2" dir="$3" inst="$4"
+    local helper="${RUNNER_BUILD_VERIFY_PY:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/runner_build_verify.py}"
+    [[ -f "$helper" ]] || helper="/root/aads/aads-server/scripts/runner_build_verify.py"
+    printf '%s\n' "$inst" | grep -Eq '^[[:space:]]*RUNNER_BUILD_VERIFY:' || return 0
+    if [[ ! -f "$helper" ]]; then
+        record_runner_event "$jid" "build_verify_unavailable" || true
+        SELF_VERIFY_PREFIX="${SELF_VERIFY_PREFIX:-}[Runner build-verify] runner_build_verify.py 없음 — 지시서의 RUNNER_BUILD_VERIFY 를 실행하지 못함(러너 동기화 누락)"$'\n'
+        return 0
+    fi
+    local secs lock_wait kind expect rel envs argv_json cmd rc verdict out feedback summary="" line
+    secs="${PIPELINE_BUILD_VERIFY_TIMEOUT_SEC:-1200}"
+    [[ "$secs" =~ ^[1-9][0-9]{0,5}$ ]] || secs=1200
+    lock_wait="${PIPELINE_SELF_VERIFY_LOCK_WAIT_SEC:-180}"
+    [[ "$lock_wait" =~ ^[0-9]{1,6}$ ]] || lock_wait=180
+    while IFS=$'\t' read -r kind expect rel envs argv_json; do
+        [[ -n "$kind" ]] || continue
+        [[ "$envs" == "-" ]] && envs=""
+        if [[ "$kind" != command ]]; then
+            record_runner_event "$jid" "build_verify_unavailable" || true
+            summary+="[Runner build-verify] $kind: $argv_json; 실행하지 않음"$'\n'
+            continue
+        fi
+        local -a argv=() run_argv=()
+        mapfile -d '' -t argv < <(python3 -c 'import json,sys; sys.stdout.buffer.write(b"".join(x.encode()+b"\0" for x in json.loads(sys.argv[1])))' "$argv_json")
+        cmd="${argv[*]}"
+        [[ -n "$envs" ]] && cmd="$envs $cmd"
+        run_argv=("${argv[@]}")
+        [[ -n "$envs" ]] && run_argv=(env "$envs" "${argv[@]}")
+        out=$(mktemp)
+        local acquired="${out}.acquired" dir_ready="${out}.dir-ready"
+        rc=0
+        (
+            cd "$dir/$rel" || exit 1
+            lane="${RUNNER_HEAVY_DIR:-/run/aads-runner-heavy}"
+            mkdir -p "$lane" || exit 125
+            : >"$dir_ready"
+            exec 200>>"$lane/slot-0" || exit 125
+            flock -w "$lock_wait" 200 || exit 125
+            : >"$acquired"
+            export AADS_HEAVY_HELD=slot-0
+            timeout "$secs" "${run_argv[@]}"
+        ) >"$out" 2>&1 || rc=$?
+        if [[ ! -f "$dir_ready" || ! -f "$acquired" ]]; then
+            record_runner_event "$jid" "build_verify_unavailable" || true
+            summary+="[Runner build-verify] $cmd skipped: directory/lock unavailable; AI 검수 진행"$'\n'
+            rm -f "$out" "$acquired" "$dir_ready"
+            continue
+        fi
+        rm -f "$acquired" "$dir_ready"
+        verdict=$(python3 "$helper" classify "$rc" "$expect")
+        line="[Runner build-verify] $cmd rc=$rc expect=$expect verdict=$verdict"
+        feedback="$line"$'\n'"$(tail -n 80 "$out")"
+        rm -f "$out"
+        summary+="$feedback"$'\n'
+        record_runner_event "$jid" "build_verify_${verdict}" || true
+        if [[ "$verdict" == fail ]]; then
+            SELF_VERIFY_PREFIX="${SELF_VERIFY_PREFIX:-}${summary}"
+            db_update "UPDATE pipeline_jobs SET review_feedback=COALESCE(review_feedback,'') || E'\n' || $(sql_escape "$feedback"), updated_at=NOW() WHERE job_id=$(sql_escape "$jid");"
+            _fail_job "$jid" "$sid" "self_verify_failed" "$cmd rc=$rc expect=$expect — $(printf '%s\n' "$feedback" | tail -n 20)"
+            return 1
+        fi
+    done < <(printf '%s\n' "$inst" | python3 "$helper" extract "$dir")
+    SELF_VERIFY_PREFIX="${SELF_VERIFY_PREFIX:-}${summary}"
+    return 0
+}
+
 # 빠른 실패 헬퍼 — 에러 상태 전환 + error_detail 기록
 _fail_job() {
     local job_id="$1" session_id="$2" error_type="$3" detail="$4"
@@ -7554,6 +7624,7 @@ run_job() {
 3. 지시서의 완료기준에 npm run build / next build / docker build 실행이 들어 있어도 직접 실행하지 마세요.
    그 항목은 승인 후 Runner가 수행합니다. RESULT에는 '승인 후 Runner 빌드 검증 대상'이라고 적으세요.
    실행하지 않은 것을 통과로 적지 마세요.
+   지시서에 RUNNER_BUILD_VERIFY 줄이 있으면 러너가 리뷰 전에 실행합니다. 작업자는 그 출력을 만들어 내거나 추정해 적지 않습니다.
 4. 사용자 지시서에 Commit/Push/Build/Deploy 항목이 있어도 실행하지 말고, 변경 파일과 검증 결과만 보고하세요.
 5. commit, push, 빌드와 배포는 CEO 승인 후 Runner가 자동으로 수행합니다.
 6. 작업 완료 시 '빌드 필요' 또는 '배포 필요' 등을 언급하지 마세요. Runner가 알아서 합니다.
@@ -8331,6 +8402,11 @@ $(printf '%s\n' "$_dirty_status" | head -20)
         if looks_like_git_diff "$git_diff"; then
             log "  AI_REVIEW job=$job_id"
             if ! pre_review_self_verify "$job_id" "$session_id" "$worktree_dir" "$instruction"; then
+                _release_work_lock "$project" "$job_id" "$parallel_group"
+                promote_next_queued "$project"
+                return 1
+            fi
+            if ! pre_review_build_verify "$job_id" "$session_id" "$worktree_dir" "$instruction"; then
                 _release_work_lock "$project" "$job_id" "$parallel_group"
                 promote_next_queued "$project"
                 return 1

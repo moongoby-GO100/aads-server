@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SRC = (ROOT / 'scripts/pipeline-runner.sh').read_text()
 NAMES = ('self_verify_extract', 'self_verify_classify', 'self_verify_project_python',
-         'self_verify_rewrite_argv', 'self_verify_expand_argv', 'pre_review_self_verify')
+         'self_verify_rewrite_argv', 'self_verify_expand_argv', 'pre_review_self_verify', 'pre_review_build_verify')
 
 
 def function(source, name):
