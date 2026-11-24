@@ -1874,6 +1874,108 @@ def _mask_tool_input_for_storage(tool_name: str, tool_input: Any) -> Any:
         return {}
 
 
+_LONG_TURN_NOTICE_DEFAULT_THRESHOLD = 15
+_LONG_TURN_NOTICE_SQL = (
+    "UPDATE chat_turn_executions SET interruption_diagnostics = "
+    "COALESCE(interruption_diagnostics,'{}'::jsonb) || "
+    "jsonb_build_object('background_notice', "
+    "jsonb_build_object('at', NOW(), 'tool_count', $2::int)) "
+    "WHERE id = $1"
+)
+
+
+def _long_turn_notice_threshold() -> int:
+    try:
+        value = int(os.getenv("CHAT_LONG_TURN_NOTICE_TOOL_THRESHOLD", ""))
+    except (TypeError, ValueError):
+        return _LONG_TURN_NOTICE_DEFAULT_THRESHOLD
+    return value if value > 0 else _LONG_TURN_NOTICE_DEFAULT_THRESHOLD
+
+
+async def _maybe_emit_long_turn_notice(state: Dict[str, Any], session_id: str) -> Optional[str]:
+    """도구 호출이 기준에 도달한 턴에 접수·백그라운드 진행 안내 SSE 1건을 만든다.
+
+    반환값은 progress SSE 문자열(없으면 None). 본문(content)·tool_events 에는 넣지 않는다.
+    DB 접근은 하지 않는다 — 진단 기록은 전송 뒤 _record_long_turn_notice_diagnostics 가 맡는다.
+    """
+    try:
+        count = int(state.get("tool_count") or 0)
+        if state.get("long_turn_notice_sent") or count < _long_turn_notice_threshold():
+            return None
+        state["long_turn_notice_sent"] = True
+        message = (
+            f"작업이 길어져 백그라운드에서 계속 진행합니다(도구 {count}회). "
+            "창을 닫아도 결과는 이 답변에 저장됩니다."
+        )
+        return f'data: {json.dumps({"type": "progress", "message": message}, ensure_ascii=False)}\n\n'
+    except Exception as exc:
+        logger.debug("long_turn_notice failed: %s", exc)
+        return None
+
+
+def _long_turn_notice_db_timeout() -> float:
+    try:
+        value = float(os.getenv("CHAT_LONG_TURN_NOTICE_DB_TIMEOUT_S", ""))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
+
+
+async def _record_long_turn_notice_diagnostics(state: Dict[str, Any], session_id: str) -> None:
+    """interruption_diagnostics.background_notice 만 병합한다. 연결 획득 포함 제한 시간 안에서만 실행."""
+    execution_id = state.get("execution_id")
+    if not execution_id:
+        return
+    count = int(state.get("tool_count") or 0)
+
+    async def _do() -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(_LONG_TURN_NOTICE_SQL, uuid.UUID(str(execution_id)), count)
+
+    try:
+        await _heartbeat_asyncio.wait_for(_do(), timeout=_long_turn_notice_db_timeout())
+    except _heartbeat_asyncio.TimeoutError:
+        logger.debug("long_turn_notice diagnostics timeout session=%s", str(session_id)[:8])
+    except Exception as exc:
+        logger.debug("long_turn_notice diagnostics update failed session=%s: %s", str(session_id)[:8], exc)
+
+
+async def _deliver_long_turn_notice(
+    state: Dict[str, Any], session_id: str, token_idx: int, queue_item: Any
+) -> int:
+    """안내를 Redis 발행·SSE 큐로 먼저 보내고, 그 뒤 제한 시간 안에서 진단을 기록한다.
+
+    새 token_idx 를 반환한다. 어떤 실패도 전파하지 않는다.
+    """
+    notice = await _maybe_emit_long_turn_notice(state, session_id)
+    if not notice:
+        return token_idx
+    nid = None
+    try:
+        nid = await _redis_stream.publish_token(
+            _stream_id_for_state(session_id, state),
+            notice,
+            token_idx,
+            owner_epoch=state.get("owner_epoch"),
+        )
+        if nid:
+            state["last_event_id"] = nid
+            _current_stream_event_id.set(str(nid))
+        token_idx += 1
+    except Exception as exc:
+        logger.debug("long_turn_notice publish failed: %s", exc)
+    try:
+        await queue_item((notice, nid))
+    except Exception as exc:
+        logger.debug("long_turn_notice queue failed: %s", exc)
+    try:
+        await _record_long_turn_notice_diagnostics(state, session_id)
+    except Exception as exc:
+        logger.debug("long_turn_notice record failed: %s", exc)
+    return token_idx
+
+
 def _tool_use_event_snapshot(event: Dict[str, Any]) -> Dict[str, Any]:
     """tool_use 이벤트를 저장/전달용으로 정규화. at 은 호출 시각(epoch)이다."""
     return {
@@ -7443,6 +7545,11 @@ async def with_background_completion(
         await _mr.ensure_loaded()  # 루프 비차단 선적재(동기 role_* 조회 전)
         nonlocal _client_gone, _client_gone_since, _token_idx
         _my_task = _heartbeat_asyncio.current_task()
+
+        async def _send_long_turn_notice() -> None:
+            nonlocal _token_idx
+            _token_idx = await _deliver_long_turn_notice(state, session_id, _token_idx, _queue_stream_item)
+
         try:
             async for chunk in gen:
                 _entry_id = None
@@ -7512,6 +7619,8 @@ async def with_background_completion(
                 _queued = await _queue_stream_item((chunk, _entry_id))
                 if not _queued and not _client_gone:
                     return
+                if _event_type == "tool_use":
+                    await _send_long_turn_notice()
 
                 # D-1 partial flush: 3초마다 또는 500자 증가 시 즉시 저장 (heartbeat은 25초)
                 if not _client_gone:
@@ -7621,6 +7730,7 @@ async def with_background_completion(
                                         state["tool_count"] += 1
                                         state["last_tool"] = _d.get("tool_name", "")
                                         state["tool_events"].append(_tool_use_event_snapshot(_d))
+                                        await _send_long_turn_notice()
                                     elif _t == "tool_result":
                                         state["last_tool"] = _d.get("tool_name", "")
                                         state["tool_events"].append(_tool_result_event_snapshot(_d))
