@@ -442,11 +442,54 @@ def test_autoheal_records_retry_launch_too():
     assert 'autoheal_record_outcome "retry_launched"' in src
 
 
-def test_autoheal_record_outcome_noop_without_run_id():
-    """DEPLOY_RUN_ID 가 없으면 DB 를 건드리지 않고 조용히 끝나야 한다."""
-    env_prefix = 'DEPLOY_RUN_ID=""\n'
-    out = _call('autoheal_record_outcome "escalated" "disk_full" "x" && echo "NOOP_OK"', env_prefix=env_prefix)
-    assert "NOOP_OK" in out
+@pytest.mark.parametrize("run_id", ['""', "unset"])
+def test_autoheal_record_outcome_fails_without_run_id(tmp_path, run_id):
+    """DEPLOY_RUN_ID 가 없으면 기록 불가 — 성공으로 돌려주면 안 되고 DB 도 건드리지 않는다."""
+    sql_log = tmp_path / "sql.log"
+    env_prefix = (
+        ('DEPLOY_RUN_ID=""\n' if run_id == '""' else 'unset DEPLOY_RUN_ID\n')
+        + 'deploy_db_available() { return 0; }\n'
+        + f'docker() {{ echo called >> "{sql_log}"; }}\n'
+    )
+    for outcome in ("escalated", "retry_launched"):
+        out = _call(
+            f'autoheal_record_outcome {outcome} disk_full x && echo WRITE_OK || echo WRITE_FAILED',
+            env_prefix=env_prefix,
+        )
+        assert "WRITE_FAILED" in out and "WRITE_OK" not in out
+        assert "DEPLOY_RUN_ID 없음" in out
+    assert not sql_log.exists()
+
+
+def test_escalate_continues_and_reports_when_record_fails():
+    """escalated 경로: 기록 실패는 명시하되 감사·알림은 그대로 진행한다."""
+    env = (
+        'DEPLOY_RUN_ID=""\n'
+        'audit_control() { echo "AUDIT:$3"; }\n'
+        'notify() { echo "NOTIFY"; }\n'
+    )
+    out = _call('autoheal_escalate disk_full "why"', env_prefix=env)
+    assert "AUDIT:escalated" in out
+    assert "NOTIFY" in out
+    assert "escalated 결과가 deploy_runs 에 기록되지 않았다" in out
+
+
+def test_retry_launched_caller_logs_success_only_after_record():
+    """호출자: 기록 성공 뒤에만 성공 로그/retry_launched 감사가 나온다."""
+    src = AUTOHEAL_LIB.read_text(encoding="utf-8")
+    i = src.index('if ! autoheal_record_outcome "retry_launched"')
+    j = src.index("자가치유 successor 인계 확인", i)
+    k = src.index('"retry_launched" \\', j)
+    assert i < j < k
+    assert "return 0" in src[i:j]
+
+
+def test_module_does_not_mutate_process_path():
+    """가짜 docker PATH 는 subprocess 스크립트 안에서만 설정한다(os.environ 영구 변경 금지)."""
+    src = Path(__file__).read_text(encoding="utf-8")
+    # 검사 문자열을 조합해 이 테스트 자신이 걸리지 않게 한다.
+    assert "os." + "environ[" not in src
+    assert "os." + "putenv" not in src
 
 
 def _sql_capture_env(sql_log) -> str:

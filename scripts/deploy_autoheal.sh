@@ -723,8 +723,10 @@ autoheal_record_outcome() {
     local cause="${2:-unknown}"
     local detail="${3:-}"
     if [[ -z "${DEPLOY_RUN_ID:-}" ]]; then
-        autoheal_log "결과 기록 생략: DEPLOY_RUN_ID 없음 (outcome=${outcome}, cause=${cause})"
-        return 0
+        # 기록할 행이 없으면 결과를 남기지 못한 것이다. 성공(0)으로 돌려주면
+        # 호출자가 retry_launched 성공 로그/감사를 근거 없이 찍는다.
+        autoheal_log "❌ 결과 기록 실패: DEPLOY_RUN_ID 없음 (outcome=${outcome}, cause=${cause})"
+        return 1
     fi
     if ! deploy_db_available; then
         autoheal_log "결과 기록 실패: DB 불가 (outcome=${outcome}, cause=${cause})"
@@ -812,7 +814,11 @@ autoheal_escalate() {
     local cause="${1:-unknown}"
     local reason="${2:-}"
     autoheal_log "🚨 자동 복구 불가 — CEO 에스컬레이션: cause=${cause}, reason=${reason}"
-    autoheal_record_outcome "escalated" "$cause" "reason=${reason}"
+    # 에스컬레이션 로그·감사·알림은 DB 기록 실패와 무관하게 계속한다.
+    # 다만 기록 실패는 명시적으로 남긴다.
+    if ! autoheal_record_outcome "escalated" "$cause" "reason=${reason}"; then
+        autoheal_log "⚠️ escalated 결과가 deploy_runs 에 기록되지 않았다 (cause=${cause}) — 로그/감사/알림으로만 남는다"
+    fi
     audit_control "autoheal" "deploy_runs:${DEPLOY_RUN_ID:-none}" "escalated" \
         "cause=${cause}; reason=${reason}; release=${AADS_RELEASE_SHA:-unknown}" || true
     # notify() 는 deploy.sh 뒷부분에서 정의된다. preflight 단계 실패 시점에는
