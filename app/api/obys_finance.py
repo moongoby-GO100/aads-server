@@ -19,6 +19,7 @@ from fastapi import (
     Form,
     HTTPException,
     Request,
+    Query,
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
@@ -1853,3 +1854,16 @@ async def get_bank_summary(
 @router.post("/onboarding/documents/{document_id}/identity-extract")
 async def reextract_identity_document(document_id: str, current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
     return {"document": await svc.reextract_identity_document(document_id, current_user)}
+
+
+@router.get("/account-master")
+async def list_account_master(
+    q: str = Query(default="", max_length=200),
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """현재 회사의 계정과목 기준정보 조회(쓰기 없음)."""
+    from app.services.obys_account_master import list_accounts
+
+    return await list_accounts(current_user, query=q, limit=limit, offset=offset)

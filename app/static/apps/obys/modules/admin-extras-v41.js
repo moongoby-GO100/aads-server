@@ -14,6 +14,10 @@
   "use strict";
 
   const ROUTES = {
+    "account-master": {
+      title: "계정과목",
+      desc: "현재 회사의 계정코드·계정과목·출처·활성 여부를 조회합니다."
+    },
     "store-assistant": {
       title: "매장비서",
       desc: "오늘 매출·처리 대기·재고·회계 요약을 한 화면에서 보고 발주·재고 실사·입고를 처리합니다."
@@ -150,6 +154,46 @@
   }
 
   const settled = promise => promise.then(data => ({ ok: true, data }), error => ({ ok: false, error }));
+
+  // ── 계정과목 조회 ──────────────────────────────────────────
+  function renderAccountMaster(body, ctx, env) {
+    let requestId = 0;
+    let offset = 0;
+    let query = "";
+    const limit = 100;
+    body.innerHTML = `<form class="toolbar" data-account-search>
+      <label>코드·이름 검색 <input class="field" name="q" type="search" maxlength="200" placeholder="계정코드 또는 계정과목"></label>
+      <button class="btn primary" type="submit">조회</button></form>
+      <div data-account-list aria-live="polite"></div>`;
+    const list = body.querySelector("[data-account-list]");
+    async function load() {
+      const seq = ++requestId;
+      list.textContent = "계정과목을 불러오고 있습니다.";
+      try {
+        const params = new URLSearchParams({q: query, limit: String(limit), offset: String(offset)});
+        const data = await api(ctx, `/api/v1/yeoljeong-finance/account-master?${params}`);
+        if (seq !== requestId || !body.isConnected) return;
+        const rows = data.accounts || [];
+        list.innerHTML = rows.length ? `<p>${offset + 1}~${offset + rows.length}번째 계정과목</p>
+          <div style="overflow-x:auto"><table><thead><tr><th>계정코드</th><th>계정과목</th><th>출처</th><th>기준 사업장</th><th>활성 여부</th></tr></thead>
+          <tbody>${rows.map(row => `<tr><td>${esc(row.account_code)}</td><td>${esc(row.account_name)}</td><td>${esc(row.source === "clobe" ? "클로브" : row.source)}</td><td>${esc(row.source_company_label)}</td><td>${row.is_active ? "활성" : "비활성"}</td></tr>`).join("")}</tbody></table></div>`
+          : `<div class="empty">${query ? "검색 결과가 없습니다." : "등록된 계정과목이 없습니다."}</div>`;
+        list.insertAdjacentHTML("beforeend", `<div class="toolbar"><button class="btn" type="button" data-account-prev ${offset ? "" : "disabled"}>이전</button><button class="btn" type="button" data-account-next ${data.has_more ? "" : "disabled"}>다음</button></div>`);
+        list.querySelector("[data-account-prev]").onclick = () => { offset = Math.max(0, offset - limit); load(); };
+        list.querySelector("[data-account-next]").onclick = () => { offset += limit; load(); };
+      } catch (error) {
+        if (seq !== requestId || !body.isConnected) return;
+        renderStateInto(list, viewStateConfig("account-master", {error, onRetry: load}, env));
+      }
+    }
+    body.querySelector("[data-account-search]").onsubmit = event => {
+      event.preventDefault();
+      query = String(event.currentTarget.elements.q.value || "").trim();
+      offset = 0;
+      load();
+    };
+    load();
+  }
 
   // ── 월마감 ──────────────────────────────────────────────────
   function kstMonth(now = new Date()) {
@@ -478,7 +522,8 @@
       body.innerHTML = `<div class="empty">사업자를 선택하면 이 화면을 볼 수 있습니다.</div>`;
       return true;
     }
-    if (route === "month-close") renderMonthClose(body, ctx, env);
+    if (route === "account-master") renderAccountMaster(body, ctx, env);
+    else if (route === "month-close") renderMonthClose(body, ctx, env);
     else if (route === "basic-settings") renderBasicSettings(body, ctx, env);
     else mountModule(body, route, tab, ctx, env);
     return true;

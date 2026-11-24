@@ -167,7 +167,8 @@ def _is_tenant_scoped_path(path: str, method: str = "GET") -> bool:
     if any(path.startswith(prefix) for prefix in _TENANT_SCOPED_PREFIXES):
         return True
     return (
-        _is_contract_signing_route(method, path)
+        (method.upper() == "GET" and path == "/api/v1/yeoljeong-finance/account-master")
+        or _is_contract_signing_route(method, path)
         or _matches_whitelist(_INVITE_ADMIN_WHITELIST, method, path)
         or _matches_whitelist(_OWNER_CONTRACT_WHITELIST, method, path)
         or _matches_whitelist(_PAYROLL_WHITELIST, method, path)
