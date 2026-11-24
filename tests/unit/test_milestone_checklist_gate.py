@@ -80,6 +80,9 @@ class Store:
                 "completion_checklist": self._checklist_raw()}
         if "SELECT goal_id FROM milestones" in query:
             return {"goal_id": GOAL}
+        if "earlier.sequence_order" in query:  # _recover_stale_milestone_block 조회
+            return {"goal_id": GOAL, "milestone_status": self.ms["status"],
+                    "goal_status": self.goal["status"], "is_next_open": True}
         raise AssertionError(query)
 
     async def fetch(self, query, *args):

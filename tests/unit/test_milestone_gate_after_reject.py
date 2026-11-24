@@ -45,6 +45,9 @@ class Store:
                     "auto_advance": self.auto_advance, "completion_criteria": self.criteria,
                     "completion_checklist": None, "has_reject_col": self.has_col,
                     "review_rejected_at": self.ms["rejected_at"] if self.has_col else None}
+        if "earlier.sequence_order" in query:  # _recover_stale_milestone_block 조회
+            return {"goal_id": GOAL, "milestone_status": self.ms["status"],
+                    "goal_status": "active", "is_next_open": True}
         raise AssertionError(query)
 
     async def fetchval(self, query, *args):

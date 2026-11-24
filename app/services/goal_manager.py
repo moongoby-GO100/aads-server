@@ -880,18 +880,26 @@ class GoalStateMachine:
                         "milestone_autocomplete_gated milestone=%s reason=%s",
                         milestone_id, outcome["reason"],
                     )
+                    recovered_status = await self._recover_stale_milestone_block(
+                        conn, milestone_id, has_failed_links=False,
+                    )
                     return {
                         "milestone_id": milestone_id,
                         "completed": False,
-                        "status": outcome["status"],
+                        "status": recovered_status or outcome["status"],
                         "reason": outcome["reason"],
+                        **({"block_recovered": True} if recovered_status else {}),
                     }
                 if outcome["result"] == "gated_after_reject":
+                    recovered_status = await self._recover_stale_milestone_block(
+                        conn, milestone_id, has_failed_links=False,
+                    )
                     return {
                         "milestone_id": milestone_id,
                         "completed": False,
-                        "status": outcome["status"],
+                        "status": recovered_status or outcome["status"],
                         "reason": "gated_after_reject",
+                        **({"block_recovered": True} if recovered_status else {}),
                     }
                 if outcome["result"] == "unmet":
                     gate = outcome["gate"]
@@ -899,11 +907,15 @@ class GoalStateMachine:
                         "goal_milestone_checklist_unmet milestone=%s unmet=%s",
                         milestone_id, [u["step"] for u in gate["unmet"]],
                     )
+                    recovered_status = await self._recover_stale_milestone_block(
+                        conn, milestone_id, has_failed_links=False,
+                    )
                     return {
                         "milestone_id": milestone_id,
                         "completed": False,
                         "reason": "checklist_unmet",
-                        "status": gate["status"],
+                        "status": recovered_status or gate["status"],
+                        **({"block_recovered": True} if recovered_status else {}),
                         "stale_completion": gate["status"] == "completed",
                         "checklist_unmet": gate["unmet"],
                     }
