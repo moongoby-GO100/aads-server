@@ -59,6 +59,14 @@ classify_deploy_failure() {
         # "dirty worktree" 등 다른 패턴보다 먼저 잡아야 재시도 대상으로 새지 않는다.
         *"deploy.release_sha_diverged_local_head"*|*"deploy.release_sha_head_mismatch"*)
             echo "release_origin_blocked" ;;
+        # DB 마이그레이션 데이터 안전 게이트(AUTOVERIFY 불통과 등). phase 이름으로 잡는다.
+        # 2026-11-24 실측: 최근 7일 escalated(other) 15건 중 14건이 schema_migrations /
+        # schema_migration_plan 이었다 — 의도된 안전 정지가 알 수 없는 장애("other")로
+        # 섞여 SLO 가 왜곡됐고, other 는 source_dir_missing 보정(retry)으로 새 나갈 수 있었다.
+        # 정책은 manual 고정: 데이터를 바꾸는 변경은 자동 재시도·우회하지 않는다.
+        # disk_full 등 재시도 대상 패턴보다 먼저 잡아야 마이그레이션이 재실행되지 않는다.
+        *"schema_migration"*)
+            echo "schema_migration_gate" ;;
         *"insufficient build disk"*|*"cannot read available disk"*|*"no space left on device"*)
             echo "disk_full" ;;
         *"dirty worktree"*)
@@ -163,6 +171,9 @@ autoheal_policy() {
         # origin/main 에 없는 로컬 커밋이거나 태그·트리가 어긋난 릴리스다. 큐 워커의
         # clean worktree 로 다시 태워도 같은 SHA 라 같은 가드에 걸린다 — 재시도 금지.
         release_origin_blocked)
+            echo "manual" ;;
+        # 데이터 안전 게이트 — 자동 재시도·우회 금지, 대표 승인 필요.
+        schema_migration_gate)
             echo "manual" ;;
         signal_interrupt)
             if [[ "${DEPLOY_UPSTREAM_SWITCHED:-false}" == "true" ]] || autoheal_phase_is_post_switch "$phase"; then

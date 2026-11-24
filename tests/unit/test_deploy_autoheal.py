@@ -73,6 +73,10 @@ def test_syntax_is_valid():
         ("build_candidate_image", "aads-server-green memory limit mismatch", "mem_limit_mismatch"),
         ("standby_same_digest_sync", "unexpected error exit=1 line=2211: echo ...", "unexpected_exit"),
         ("nginx_cutover", "something nobody has seen before", "other"),
+        # 2026-11-24: 마이그레이션 안전 게이트는 other 가 아니라 별도 원인이다.
+        ("schema_migrations", "migration runner exit=7: 자동 검증 불통과", "schema_migration_gate"),
+        ("schema_migration_plan", "plan failed", "schema_migration_gate"),
+        ("schema_migrations", "no space left on device", "schema_migration_gate"),
         ("", "", "unknown"),
     ],
 )
@@ -97,6 +101,7 @@ def test_classify_deploy_failure(phase: str, err: str, expected: str):
         # 같은 태그가 다른 revision 을 가리키는 무결성 위반 — 덮어쓰지 않는다.
         ("release_image_tag_mismatch", "manual"),
         ("mem_limit_mismatch", "manual"),
+        ("schema_migration_gate", "manual"),
         ("unexpected_exit", "manual"),
         ("other", "manual"),
         ("unknown", "manual"),
