@@ -4966,7 +4966,7 @@ GO100_DEPLOY_SSH_HOST="${GO100_DEPLOY_SSH_HOST:-}"
 GO100_DEPLOY_SSH_TIMEOUT="${GO100_DEPLOY_SSH_TIMEOUT:-2700}"
 GO100_DEPLOY_SSH_CONNECT_TIMEOUT="${GO100_DEPLOY_SSH_CONNECT_TIMEOUT:-15}"
 GO100_DEPLOY_SSH_BIN="${GO100_DEPLOY_SSH_BIN:-ssh}"
-GO100_DEPLOY_ENV_PASS_RE='^(GO100_INTRADAY_[A-Z0-9_]+|GO100_ALLOW_INTRADAY_DEPLOY|GO100_DEPLOY_COMPONENT)$'
+GO100_DEPLOY_ENV_PASS_RE='^(GO100_INTRADAY_[A-Z0-9_]+|GO100_ALLOW_INTRADAY_DEPLOY|GO100_DEPLOY_COMPONENT|GO100_RELEASE_TRADING_UNITS)$'
 GO100_DEPLOY_REMOTE_FUNCS=(
     _go100_path_in_use _go100_remove_release_worktree go100_prune_release_worktrees
     go100_create_frontend_release_worktree go100_active_frontend_color verify_go100_bundle_fresh
@@ -5002,6 +5002,14 @@ go100_deploy_remote_script() {
 
 # 사용: [GO100_DEPLOY_CALL_TIMEOUT=초] go100_deploy_call <함수|명령> [인자...]
 go100_deploy_call() {
+    (
+    # 동적 범위의 job 지역값만 사용하고 상속된 데몬 값은 전달하지 않는다.
+    unset GO100_RELEASE_TRADING_UNITS
+    case "${_go100_release_units:-}" in
+        all|card119|none) export GO100_RELEASE_TRADING_UNITS="$_go100_release_units" ;;
+        "") ;;
+        *) return 3 ;;
+    esac
     if ! go100_deploy_is_remote; then
         "$@"
         return
@@ -5023,6 +5031,7 @@ go100_deploy_call() {
         [[ -n "${LOG_DIR:-}" ]] && { echo "$_msg" >> "$LOG_DIR/runner.log"; } 2>/dev/null || true
     fi
     return "$_rc"
+    )
 }
 
 # ── 원격 모드 통신 실패 구분과 운영 호스트 코드 반영 검증 (AADS-RUNNER-GO100-HOST-CONTABO92-PHASE1-20261104-R2) ──
@@ -5187,21 +5196,42 @@ go100_remote_api_restart() {
     return 0
 }
 
+# GO100 지시서는 실행하지 않고 줄 첫머리의 범위 선언만 읽는다.
+go100_release_units_from_instruction() {
+    local _line _value _units=""
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        if [[ "$_line" =~ ^GO100_RELEASE_TRADING_UNITS[=:][[:space:]]*(.*)$ ]]; then
+            _value="${BASH_REMATCH[1]}"
+            _value="${_value%"${_value##*[![:space:]]}"}"
+            case "$_value" in all|card119|none) ;; *) return 1 ;; esac
+            [[ -z "$_units" || "$_units" == "$_value" ]] || return 1
+            _units="$_value"
+        fi
+    done <<< "${1:-}"
+    printf '%s' "$_units"
+}
+
 # 운영 작업트리는 읽기만 한다. 기대 blob 은 작업 호스트의 릴리스 SHA 객체에서 구한다.
 # queue-release 이외 모드 실행이나 스크립트 교체는 허용하지 않는다.
 go100_remote_queue_release() {
-    local _repo="$1" _sha="$2" _expected="$3" _actual="" _script="$1/deploy-go100.sh"
+    local _repo="$1" _sha="$2" _expected="$3" _units="${4:-}" _actual="" _script="$1/deploy-go100.sh"
+    case "$_units" in ""|all|card119|none) ;; *) return 3 ;; esac
     [[ "$_sha" =~ ^[0-9a-f]{40}$ && "$_expected" =~ ^[0-9a-f]{40}$ ]] || return 3
     [[ -f "$_script" && ! -L "$_script" && -x "$_script" ]] || return 4
     _actual=$(git -C "$_repo" hash-object --no-filters -- "$_script") || return 4
     [[ "$_actual" == "$_expected" ]] || return 5
     grep -Eq '^[[:space:]]*queue-release[[:space:]]*\)' "$_script" || return 6
-    (cd "$_repo" && GO100_RELEASE_SHA="$_sha" "$_script" queue-release)
+    (
+        unset GO100_RELEASE_TRADING_UNITS
+        [[ -z "$_units" ]] || export GO100_RELEASE_TRADING_UNITS="$_units"
+        cd "$_repo" && GO100_RELEASE_SHA="$_sha" "$_script" queue-release
+    )
 }
 
 # 결과는 항상 deferred 이다. 등록 성공도 실제 슬롯 반영/재기동 성공을 뜻하지 않는다.
 go100_queue_backend_release() {
-    local _sha="$1" _source_repo="$2" _expected="" _rc=0 _reason=""
+    local _sha="$1" _source_repo="$2" _units="${3:-}" _expected="" _rc=0 _reason=""
+    case "$_units" in ""|all|card119|none) ;; *) return 3 ;; esac
     GO100_RELEASE_QUEUE_LABEL="go100-api:release_queue_unavailable"
     if [[ "$_sha" =~ ^[0-9a-f]{40}$ ]]; then
         _expected=$(git -C "$_source_repo" rev-parse "${_sha}:deploy-go100.sh" 2>/dev/null) || _rc=$?
@@ -5209,7 +5239,7 @@ go100_queue_backend_release() {
         _rc=3
     fi
     if (( _rc == 0 )) && [[ "$_expected" =~ ^[0-9a-f]{40}$ ]]; then
-        GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call go100_remote_queue_release "$GO100_REPO_DIR" "$_sha" "$_expected" || _rc=$?
+        GO100_DEPLOY_CALL_TIMEOUT=60 go100_deploy_call go100_remote_queue_release "$GO100_REPO_DIR" "$_sha" "$_expected" "$_units" || _rc=$?
     else
         _rc=4
     fi
@@ -5219,8 +5249,8 @@ go100_queue_backend_release() {
     else
         _reason="release_queue_unavailable rc=${_rc} (스크립트 blob/모드 확인 또는 통신/등록 실패)"
     fi
-    log "  GO100_BACKEND_RELEASE_DEFERRED sha=${_sha} label=${GO100_RELEASE_QUEUE_LABEL} reason=${_reason}"
-    post_to_chat "$session_id" "[Pipeline Runner] GO100 백엔드는 릴리스 대기열/수동 blue-green 으로 반영 필요(sha=${_sha}, 사유=${_reason}): $job_id"
+    log "  GO100_BACKEND_RELEASE_DEFERRED units=${_units:-unspecified} sha=${_sha} label=${GO100_RELEASE_QUEUE_LABEL} reason=${_reason}"
+    post_to_chat "$session_id" "[Pipeline Runner] GO100 백엔드는 릴리스 대기열/수동 blue-green 으로 반영 필요(sha=${_sha}, units=${_units:-unspecified}, 사유=${_reason}): $job_id"
     return 0
 }
 
@@ -5374,6 +5404,10 @@ mark_codex_account_revoked() {
 pre_validate() {
     local job_id="$1" project="$2" session_id="$3"
     local instruction="${4:-}"
+    if [[ "$project" == "GO100" ]] && ! go100_release_units_from_instruction "$instruction" >/dev/null; then
+        _fail_job "$job_id" "$session_id" "invalid_go100_release_units" "GO100 릴리스 범위가 잘못되었거나 충돌합니다"
+        return 1
+    fi
     local workdir
     if ! workdir=$(resolve_project_workdir "$project" "$instruction"); then
         fail_invalid_aads_target "$job_id" "$session_id"
@@ -9658,6 +9692,13 @@ deploy_job() {
     local job_id="$1" project="$2" session_id="$3"
     local _job_instruction=""
     _job_instruction=$(get_job_instruction "$job_id")
+    local _go100_release_units=""
+    if [[ "$project" == "GO100" ]]; then
+        if ! _go100_release_units=$(go100_release_units_from_instruction "$_job_instruction"); then
+            _fail_job "$job_id" "$session_id" "invalid_go100_release_units" "GO100 릴리스 범위가 잘못되었거나 충돌합니다"
+            return 1
+        fi
+    fi
     local workdir
     if ! workdir=$(resolve_project_workdir "$project" "$_job_instruction"); then
         fail_invalid_aads_target "$job_id" "$session_id"
@@ -10221,7 +10262,7 @@ deploy_job() {
             if [[ "$_go100_be_changed" != "true" ]]; then
                 log "  SKIP go100 api restart (no backend/ changes ${_pre_sha:0:9}..${current_sha:0:9})"
             elif go100_deploy_is_remote; then
-                go100_queue_backend_release "$current_sha" "$worktree_dir"
+                go100_queue_backend_release "$current_sha" "$worktree_dir" "$_go100_release_units"
                 _deploy_deferred="${_deploy_deferred:+${_deploy_deferred};}${GO100_RELEASE_QUEUE_LABEL}"
             elif _go100_freeze=$(go100_restart_freeze_window); then
                 log "  DEPLOY_DEFER go100 api restart — 재기동 금지 구간 ${_go100_freeze} KST (강제 재기동 안 함, sha=${current_sha})"
@@ -10570,7 +10611,7 @@ deploy_job() {
                     ;;
                 GO100)
                     if go100_deploy_is_remote; then
-                        go100_queue_backend_release "$rollback_sha" "$worktree_dir"
+                        go100_queue_backend_release "$rollback_sha" "$worktree_dir" "$_go100_release_units"
                         _rollback_remote_note="${GO100_RELEASE_QUEUE_LABEL}"
                         log "  ROLLBACK_REMOTE_RESTART_NOT_DONE job=$job_id sha=${rollback_sha} label=${_rollback_remote_note} — 실제 슬롯 미반영, 수동 blue/green 승인 필요"
                     else

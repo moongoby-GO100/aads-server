@@ -40,6 +40,8 @@ Request Body: `JobSubmitRequest`
 | `parallel_group` | string | — | `""` | 동일 그룹 병렬 실행 |
 | `depends_on` | string | — | `""` | 선행 `job_id` |
 
+GO100 릴리스 범위는 줄 첫머리 `GO100_RELEASE_TRADING_UNITS=none` 형식으로 표기한다(허용값: `all|card119|none`, `:` 구분도 허용).
+
 모델 선택 규칙:
 
 1. `worker_model`이 있으면 그대로 사용
