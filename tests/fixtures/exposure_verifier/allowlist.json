@@ -1,0 +1,7 @@
+{
+  "_note": "문서용 대역(RFC 5737)만 사용한 가짜 허용 목록. 실제 값 금지.",
+  "allow": [
+    {"port": 443, "proto": "tcp", "sources": ["any"]},
+    {"port": 51820, "proto": "udp", "sources": ["192.0.2.0/24"]}
+  ]
+}
