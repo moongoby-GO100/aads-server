@@ -19,7 +19,7 @@
 ## 이미 승인받은 범위는 묻지 않는다
 
 제안에 `tool` 이 적혀 있고 그 도구를 덮는 미션·골 승인이 살아 있으면
-카드를 만들지 않고 `auto` 로 돌려준다. 같은 것을 두 번 묻지 않는 것이
+운영·승인 게이트 변경을 제외하고 `auto` 로 돌려준다. 같은 것을 두 번 묻지 않는 것이
 "끊김없이" 의 핵심이다.
 
 **여기서 승인 여부를 판정하지 않는다.** 실제 실행 시점의 판정은
@@ -59,6 +59,40 @@ ACTION_TYPE = "next_step"
 MAX_STEPS = 5
 
 _RISK_LEVELS = ("low", "medium", "high")
+
+
+def is_operational_change(title: str, detail: str = "", tool: str = "") -> bool:
+    """제안 텍스트만으로 운영 변경 여부를 보수적으로 판별한다(순수 함수).
+
+    원격 명령의 자연어 설명은 읽기 전용 실행을 보장하지 못하므로 카드로 보낸다.
+    주문 건수 조회처럼 query_database를 쓰는 읽기 제안은 그대로 허용한다.
+    """
+    text = "\n".join((title, detail, tool)).lower()
+    markers = (
+        "재기동", "restart", "systemctl", "drop-in", "daemon-reload",
+        "배포", "deploy", "릴리스 교체", "실매매", "card310", "card119", "live_engine",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    if "주문" in text and tool.strip().lower() != "query_database":
+        return True
+    return tool.strip().lower() in {
+        "run_remote_command", "write_remote_file", "patch_remote_file",
+        "db_safe_write", "deploy_safe",
+    }
+
+
+def _requires_explicit_card(step: Dict[str, str]) -> bool:
+    text = "\n".join((step["title"], step["detail"], step["tool"]))
+    return (
+        step.get("explicit_card") == "1"
+        or is_operational_change(step["title"], step["detail"], step["tool"])
+        or live_trading_guard.is_approval_protected_path(text)
+        or any(marker in text.lower() for marker in (
+            "승인 게이트", "승인게이트", "approval gate", "approval_gate",
+            "live_trading_guard", "next_step_proposals",
+        ))
+    )
 
 
 def _work_key(session_id: str, title: str) -> str:
@@ -287,6 +321,12 @@ def _normalize(step: Any, index: int) -> Optional[Dict[str, str]]:
     risk = str(step.get("risk") or "low").lower()
     if risk not in _RISK_LEVELS:
         risk = "low"
+    explicit_card = _requires_explicit_card({
+        "title": title, "detail": str(step.get("detail") or ""),
+        "tool": str(step.get("tool") or ""),
+    })
+    if explicit_card:
+        risk = "high"
     return {
         "title": title[:200],
         "detail": str(step.get("detail") or "").strip()[:800],
@@ -294,6 +334,7 @@ def _normalize(step: Any, index: int) -> Optional[Dict[str, str]]:
         "rollback": str(step.get("rollback") or "").strip()[:300],
         "risk": risk,
         "index": str(index + 1),
+        "explicit_card": "1" if explicit_card else "0",
     }
 
 
@@ -304,7 +345,9 @@ def _summary_of(step: Dict[str, str], context: str) -> str:
         lines.append(step["detail"])
     if step["tool"]:
         lines.append(f"· 실행 도구: {step['tool']}")
-    lines.append(f"· 되돌리는 법: {step['rollback'] or '되돌릴 필요 없음(읽기/조사)'}")
+    fallback = ("되돌리는 법 미기재 — 실행 전 확인 필요"
+                if _requires_explicit_card(step) else "되돌릴 필요 없음(읽기/조사)")
+    lines.append(f"· 되돌리는 법: {step['rollback'] or fallback}")
     if context:
         lines.append(f"· 배경: {context[:200]}")
     return "\n".join(lines)[:1000]
@@ -366,11 +409,9 @@ async def propose(
         goal_cache: Dict[str, Optional[str]] = {}
 
         for step in normalized:
-            approval_code_change = live_trading_guard.is_approval_protected_path(
-                "\n".join((step["title"], step["detail"], step["tool"]))
-            )
-            # 승인 게이트 구현 변경은 기존 grant나 목표 설정으로 자동통과하지 않는다.
-            skip_policy = approval_code_change or require_card
+            protected_change = _requires_explicit_card(step)
+            # 운영·승인 게이트 변경은 기존 grant나 목표 설정으로 자동통과하지 않는다.
+            skip_policy = protected_change or require_card
             grant_id = None if skip_policy else await _covered_by_existing_grant(
                 conn, session_id, step["tool"], project,
             )
