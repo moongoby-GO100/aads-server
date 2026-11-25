@@ -242,6 +242,52 @@ async def _call_tool(name: str, params: dict) -> str:
         plan_mode_guard.reset_response_mode(plan_token)
 
 
+# 게이트 검사 불능 시에도 통과시키는 읽기 도구(허용 목록). 목록 밖은 쓰기로 취급해 차단한다.
+_LEGACY_READ_TOOLS = frozenset({
+    "read_remote_file", "list_remote_dir", "query_database", "query_project_database",
+})
+
+
+async def _legacy_fallback_live_guard(
+    dispatch_name: str, name: str, params: dict, session_id: str
+) -> "str | None":
+    """레거시 폴백 실행 전 실매매 게이트. 막을 것이면 응답 JSON, 통과면 None.
+
+    ToolExecutor 기본 경로(tool_executor.py)와 같이 check() 를 쓰고,
+    게이트가 고장 나면(check 예외) 읽기 허용 목록 밖 도구는 fail-closed 로 막는다.
+    """
+    tool_input = dict(params or {})
+    if session_id and not str(tool_input.get("session_id") or "").strip():
+        tool_input["session_id"] = session_id
+    # 실제 실행될 정규 이름(dispatch) 하나만 기준으로 한 번 판정한다.
+    tool_name = dispatch_name or name
+    try:
+        from app.services.live_trading_guard import check as _lt_check
+
+        blocked = await _lt_check(tool_name, tool_input)
+        if blocked:
+            return blocked
+    except Exception as err:
+        # 게이트 검사 불능: 허용 목록(읽기 도구)만 통과, 나머지는 쓰기로 보고 차단.
+        if tool_name in _LEGACY_READ_TOOLS:
+            logger.warning(
+                "live_trading_guard 검사 불능 — legacy_fallback tool=%s error=%s result=allowed_read",
+                tool_name, type(err).__name__,
+            )
+            return None
+        # 예외 메시지·인자·SQL·명령 문자열은 로그에 남기지 않는다(비식별화).
+        logger.warning(
+            "live_trading_guard 검사 불능 — legacy_fallback tool=%s error=%s result=blocked",
+            tool_name, type(err).__name__,
+        )
+        return json.dumps({
+            "error": "live_trading_gate_unavailable",
+            "blocked": True,
+            "message": "live_trading_guard 검사 불능 — 안전을 위해 차단",
+        }, ensure_ascii=False)
+    return None
+
+
 async def _call_tool_unguarded(name: str, params: dict) -> str:
     """도구 실행 래퍼 — ToolExecutor 우선, execute_tool 폴백.
 
@@ -280,6 +326,11 @@ async def _call_tool_unguarded(name: str, params: dict) -> str:
                 pass
 
     # 2순위: execute_tool (레거시 폴백 — 원래 MCP 이름으로 실행)
+    # 레거시 경로는 live_trading_guard 참조가 없으므로 폴백 직전에 같은 게이트를 건다.
+    # (ceo_chat_tools.execute_tool 은 다른 호출처도 있어, 브리지 폴백 한 곳만 좁게 막는다.)
+    gate_blocked = await _legacy_fallback_live_guard(dispatch_name, name, bound_params, session_id)
+    if gate_blocked is not None:
+        return gate_blocked
     try:
         from app.api.ceo_chat_tools import execute_tool
         dsn = os.getenv("DATABASE_URL", "")
