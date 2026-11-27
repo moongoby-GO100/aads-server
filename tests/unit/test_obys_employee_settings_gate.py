@@ -86,7 +86,7 @@ class TestStaticWiring:
     def test_callers_and_function_names_preserved(self):
         for name in ("loadServerSettings", "persistSettingsToServer", "hasMeaningfulSettings", "reloadDataAfterTenantSwitch"):
             assert re.search(rf"function {name}\(", HTML), name
-        assert HTML.count("기초설정 불러오기 실패") == 4
+        assert HTML.count("기초설정 불러오기 실패") == 6  # 1b39a590·121e33d2 가 호출부 2곳 추가
 
 
 NODE_HARNESS = r"""
@@ -99,6 +99,7 @@ const cases = JSON.parse(process.env.CASES);
     const calls = [];
     const ctx = {
       Number, Array, Boolean, Error,
+      authSession: c.legacy === false ? { legacy_access: false } : { legacy_access: true },
       state: { settings: { businesses: [{ id: 'local' }] } },
       hasServerAuth: () => c.auth !== false,
       isEmployeeAccount: () => Boolean(c.employee),
@@ -133,6 +134,7 @@ def test_loadServerSettings_behaviour_in_node(tmp_path):
         {"name": "member_500", "status": 500},
         {"name": "manager_ok", "manager": True, "payload": {"businesses": [{"id": "x"}]}},
         {"name": "signed_out", "auth": False},
+        {"name": "nonlegacy", "legacy": False},  # cac992bf: 레거시 접근 없는 세션은 호출하지 않는다
     ]
     script = tmp_path / "harness.js"
     script.write_text(NODE_HARNESS, encoding="utf-8")
@@ -149,6 +151,7 @@ def test_loadServerSettings_behaviour_in_node(tmp_path):
     assert got["member_500"] == (["/settings"], 500, True, False)
     assert got["manager_ok"][0] == ["/settings", "save"] and got["manager_ok"][3] is True
     assert got["signed_out"] == ([], None, True, False)
+    assert got["nonlegacy"] == ([], None, True, False)
 
 
 def _load_verifier():

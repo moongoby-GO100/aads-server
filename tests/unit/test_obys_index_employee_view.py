@@ -110,8 +110,13 @@ class TestD1NoOtherCompanyStores:
         assert '|| "중화점"' not in code
 
     def test_seed_ids_only_appear_in_the_legacy_purge_list(self):
+        # 배달식당 운영관리 기본안 분류 목록(21e46e30)은 modules/contract-core.js 와 같은 값을 쓰는 업종 판정용이며
+        # 점포 seed 데이터가 아니다. 그 const 블록만 제외하고, 그 밖의 어디에도 seed id 가 나오면 안 된다.
+        block = re.search(r"const DELIVERY_RESTAURANT_BUSINESS_IDS = Object\.freeze\(\[.*?\]\);", INDEX, re.S)
+        assert block, "DELIVERY_RESTAURANT_BUSINESS_IDS 블록 없음"
+        scanned = INDEX.replace(block.group(0), "")
         for token in ["biz-junghwa", "biz-sungshin", "biz-mia"]:
-            lines = [line for line in INDEX.splitlines() if token in line]
+            lines = [line for line in scanned.splitlines() if token in line]
             assert len(lines) == 1, (token, lines)
             assert "LEGACY_SEED_BUSINESS_IDS" in lines[0]
 
