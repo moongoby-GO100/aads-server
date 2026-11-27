@@ -13226,7 +13226,7 @@
       document.querySelectorAll('select[name="branch"]').forEach(select => {
         if (joinForms.includes(select.form)) return;
         // 직원 화면의 서류 업로드 지점은 승인된 근무 점포로만 고른다(prefillOnboardingForm).
-        if (select.form === els.onboardingUploadForm && currentEmployeeBranches().length) return;
+        if (select.form === els.onboardingUploadForm && isEmployeeExperience()) return;
         const current = select.value;
         const hasOfficeBusiness = select.form === els.contractForm && settings().businesses.some(item => effectiveWorkplaceMode(item) === "office");
         const options = hasOfficeBusiness ? [...branchNames, OFFICE_WORKPLACE] : branchNames;
@@ -15564,6 +15564,27 @@
       return [...new Set(rows.map(item => clean(item.branch)).filter(Boolean))];
     }
 
+    // 입사서류 업로드 지점 전용. 승인(approved) 행이 있으면 지금처럼 그것만 쓰고, 없을 때만 본인
+    // pending 가입요청 → 가입 직후 저장값 순으로 쓴다. 사업자/점포 범위 판정(isCurrentEmployeeRecord 등)은
+    // 이 함수를 쓰지 않으며 approved 전용을 유지한다.
+    function currentEmployeeUploadBranches() {
+      if (!isEmployeeExperience()) return [];
+      const approvedBranches = currentEmployeeBranches();
+      if (approvedBranches.length) return approvedBranches;
+      const clean = value => String(value || "").trim();
+      const email = currentEmployeeEmail();
+      const requestId = employeePreview ? clean(employeePreview.requestId) : clean(authPermissions().employee_request_id);
+      const pending = (typeof employeeJoinRequests === "undefined" ? [] : employeeJoinRequests)
+        .filter(item => String(item.status).toLowerCase() === "pending");
+      const byRequest = requestId ? pending.filter(item => clean(item.id) === requestId) : [];
+      const rows = byRequest.length ? byRequest
+        : pending.filter(item => email && clean(item.email || item.employee_email).toLowerCase() === email);
+      const fromRequests = [...new Set(rows.map(item => clean(item.branch)).filter(Boolean))];
+      if (fromRequests.length) return fromRequests;
+      const selfBranch = email ? clean((loadEmployeeSelfSignupMap()[email] || {}).branch) : "";
+      return selfBranch ? [selfBranch] : [];
+    }
+
     // 직원 화면에서는 로그인 계정이 아니라 화면 대상 직원으로 채운다. 관리자 미리보기에서
     // 관리자 이메일과 첫 지점(중화점)이 직원 칸에 들어가던 결함(2026-11-05, 김기훈 미아점).
     function prefillOnboardingForm() {
@@ -15577,11 +15598,21 @@
         form.employeeName.value = name === "직원" ? form.employeeName.value : name;
         form.employeeEmail.readOnly = Boolean(form.employeeEmail.value);
         form.employeeName.readOnly = Boolean(form.employeeName.value);
-        const branches = currentEmployeeBranches();
+        const branches = currentEmployeeUploadBranches();
         if (branches.length) {
           const current = form.branch.value;
           form.branch.innerHTML = branches.map(item => `<option>${escapeHtml(item)}</option>`).join("");
           form.branch.value = branches.includes(current) ? current : branches[0];
+        } else {
+          // 막다른 빈 칸을 남기지 않는다: 안내 option 을 두고, 열 때 가입요청을 다시 불러온다.
+          form.branch.innerHTML = '<option value="">가입요청 확인 중 — 잠시 후 다시 열어 주십시오</option>';
+          form.branch.value = "";
+          if (!form.branch.dataset.refreshBound) {
+            form.branch.dataset.refreshBound = "1";
+            form.branch.addEventListener("mousedown", () => {
+              if (form.branch.value === "" && hasServerAuth()) loadEmployeeJoinRequests().catch(() => {});
+            });
+          }
         }
         form.dataset.employeePrefill = "1";
         return;
